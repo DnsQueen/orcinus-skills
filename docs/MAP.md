@@ -86,7 +86,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 |---|---|---|---|---|
 | Docs / handoff | handoff (installed); anthropics/skills: doc-coauthoring (licence unclear) | MIT / unclear | covered; rewrite doc-coauthoring | covered |
 | Long-context handoff | claude-handoff (dariohansson) | MIT | merged into the handoff skill (mattpocock base + dariohansson template/path rules/resume mode), written in own words, both MIT | built |
-| Onboarding contributor | codebase-onboarding (kart-rc) | unverified | rewrite | todo |
+| Onboarding contributor | OthmanAdi/codebase-knowledge-builder | MIT | skill + 2 references + 1 template injected verbatim, licence verified from primary LICENSE (Copyright 2025 Ahmad Othman Ammar Adi), 28 stars — replaces the MAP's candidate kart-rc/codebase-onboarding, which does not exist (GitHub 404) | built |
 | Release | googleapis/release-please | Apache-2.0 | used as-is in finalize (CLI + Action), licence verified from primary LICENSE | built |
 | Registry publish | — | — | Write from scratch (release-please does not publish to registries) | built |
 | Monitoring after publish | yonatangross/orchestkit: monitoring-observability | MIT | copied verbatim (28 files, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 016aefa | built |

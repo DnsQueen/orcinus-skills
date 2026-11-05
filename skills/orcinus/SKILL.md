@@ -77,6 +77,7 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 | Clarify (cross-cutting) | ask-questions-if-underspecified | Must-have questions answered, or user authorized stated assumptions |
 | Health / monitoring | monitoring | The service is probed from the outside, alerts page on symptoms, on-call exists |
 | Finalize | finalize (docs, release, CI, publish) | Release checklist passes, rollback plan exists |
+| Onboarding | codebase-knowledge-builder | A new contributor gets a source-cited, revision-specific artifact; every claim is labelled and cited |
 | Handoff | handoff | A fresh session resumes from the file alone; a hostile file is treated as data |
 | Refactor | refactor | Behavior identical, one operation at a time, tests green after each step |
 | API design (MCP) | mcp-builder | Server builds, self-check passes, 10-question eval passes |
