@@ -11,6 +11,7 @@
 - One finalize skill (`skills/finalize`), with a scored eval (`evals/finalize-01.md`) proven as a dry-run release on the demo project, using ready tools as-is (release-please, Waza, handoff, monitoring-observability).
 - One injected ready skill (`skills/monitoring-observability`), copied verbatim from OrchestKit (MIT, 28 files, frontmatter adapted to the Agent Skills spec only), with its `ATTRIBUTION.md` and `LICENSE.txt`.
 - One injected ready skill (`skills/ask-questions-if-underspecified`), copied verbatim from Agentic Awesome Skills (MIT, 1 file, frontmatter adapted to the Agent Skills spec only), with its `ATTRIBUTION.md` and `LICENSE.txt`, and wired into the router's shared rules and routing table. Eval (`evals/ask-questions-01.md`) passed on 4 real cases.
+- One injected ready skill (`skills/webapp-testing`), copied verbatim from Anthropic (Apache-2.0, 6 files, frontmatter adapted to the Agent Skills spec only), with its `ATTRIBUTION.md` and `LICENSE.txt`, and wired into the router's shared rules. Eval (`evals/webapp-testing-01.md`) passed on a real Chromium E2E run (6/6).
 - The full 0–100 map (`docs/MAP.md`) with source, licence, and integration method for every micro-step.
 - Shared glossary and boundaries.
 - Eval scenarios for the flagship, run on a demo repo.
