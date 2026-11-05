@@ -55,7 +55,7 @@ Return the report in this form:
 
 ## Scope
 
-JavaScript/TypeScript only. Mutation testing beyond JS/TS is a known gap — this skill does not cover it and never claims to. The Trail of Bits mutation-testing skill (CC-BY-SA-4.0) is a separate licensed module, not copied here; it is referenced, not used, for non-JS/TS work.
+Python is covered by the companion skill `mutation-testing-python` (mutmut as-is, BSD-3-Clause). Other languages are still a gap — each needs its own verified CLI. The Trail of Bits mutation-testing skill (CC-BY-SA-4.0) is a separate licensed module, not copied here; it is referenced, not used, for non-JS/TS work.
 
 ## Sources
 

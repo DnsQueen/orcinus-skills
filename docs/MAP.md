@@ -52,7 +52,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Unit / integration | tdd (installed) | MIT | covered | covered |
 | E2E | anthropics/skills: webapp-testing | Apache-2.0 | copied verbatim (6 files, frontmatter adapted to spec only), licence verified from the skill's own LICENSE.txt, commit ca45fc4 | built |
 | Mutation (JS/TS) | Stryker | Apache-2.0 | own-words skill, Stryker used as-is (command runner for node:test), licence verified from primary LICENSE | built |
-| Mutation beyond JS/TS | — | — | Write from scratch / per-language CLI unverified | todo |
+| Mutation beyond JS/TS | mutmut (boxed/mutmut) | BSD-3-Clause | own-words skill, mutmut used as-is (Python proof), licence verified from primary LICENSE, 3.8.1 | built |
 | Independent review | anthropics/claude-plugins-official: pr-review-toolkit | MIT vs Apache-2.0 — verify per-plugin LICENSE.txt | copy after check | todo |
 | Evidence / eval | microsoft/waza | MIT | bundle (CLI) | todo |
 | Benchmark | SWE-bench | MIT | benchmark, not a skill | todo |
@@ -97,11 +97,9 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 ## Must write from scratch (v1 or v2)
 
 - Fleeting raw-idea capture store.
-- Resilient API client consumption and contract-test execution.
-- Dedicated incomplete-refactor detector.
-- Mutation testing beyond JS/TS.
-- Package-registry publish.
 - Dedicated performance/health skill (candidate found in second round; still needs a proven eval).
+
+Built already (kept here for the record, not as remaining work): dedicated incomplete-refactor detector, package-registry publish, resilient API client consumption and contract-test execution (answered by frontend-data-contracts, injected verbatim), mutation testing beyond JS/TS (answered by mutation-testing-python, mutmut as-is).
 
 ## Do not use
 
