@@ -37,7 +37,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Task breakdown / slices | addyosmani/agent-skills: planning-and-task-breakdown; obra/superpowers: executing-plans | MIT | own-words in build step 1 | built |
 | Step-by-step implementation | ponytail, tdd (installed) | MIT | covered, routed via build | covered |
 | API design (MCP) | anthropics/skills: mcp-builder | Apache-2.0 | copy, keep LICENSE.txt | todo |
-| API design (REST/GraphQL) | addyosmani/agent-skills: api-and-interface-design | MIT | copy | todo |
+| API design (REST/GraphQL) | addyosmani/agent-skills: api-and-interface-design | MIT | copy | built |
 | API consumption / contract tests | — | — | Write from scratch | todo |
 | Breaking-change detection | oasdiff | Apache-2.0 | bundle (CLI), own-words wrapper | todo |
 | State | frontend-architecture (stareezy-1) | MIT, 10 stars | copy, with caution | todo |
