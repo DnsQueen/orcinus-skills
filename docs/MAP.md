@@ -38,7 +38,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Step-by-step implementation | ponytail, tdd (installed) | MIT | covered, routed via build | covered |
 | API design (MCP) | anthropics/skills: mcp-builder | Apache-2.0 | copy, keep LICENSE.txt | todo |
 | API design (REST/GraphQL) | addyosmani/agent-skills: api-and-interface-design | MIT | copy | built |
-| API consumption / contract tests | — | — | Write from scratch | todo |
+| API consumption / contract tests | stareezy-1/frontend-architecture-skill: skills/frontend-data-contracts | MIT | copied verbatim (1 file, frontmatter licence normalized to MIT), licence verified from primary LICENSE, commit d7f0c53; the map's "write from scratch" plan was superseded — the skill was found after the first round | built |
 | Breaking-change detection | oasdiff | Apache-2.0 | bundle (CLI), own-words wrapper, licence verified from primary LICENSE | built |
 | State | stareezy-1/frontend-architecture-skill: skills/frontend-architecture + skills/frontend-optimistic-mutations | MIT | copied verbatim (1 file each, frontmatter licence normalized to MIT), licence verified from primary LICENSE, commit d7f0c53, 10 stars | built |
 | Database / schema / migration | alirezarezvani/claude-skills: engineering/skills/database-designer | MIT | copied verbatim (15 files, frontmatter adapted to spec only) + one minimal fix to migration_generator.py (upstream bug: failed on any schema change), licence verified from primary LICENSE, commit 8f08254; scripts audited (stdlib only, no network/DB/exec) | built |
