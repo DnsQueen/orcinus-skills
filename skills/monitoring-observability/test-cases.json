@@ -1,0 +1,71 @@
+{
+  "skill": "monitoring-observability",
+  "version": "3.0.0",
+  "testCases": [
+    {
+      "id": "monitoring-grafana",
+      "rule": "monitoring-grafana",
+      "query": "Create a Grafana dashboard for my service",
+      "expectedBehavior": [
+        "Includes Golden Signals panels (latency, traffic, errors, saturation)",
+        "Defines SLO/SLI targets with error budgets",
+        "Adds health check endpoints (liveness, readiness, startup)",
+        "Shows RED method metrics in dashboard layout"
+      ]
+    },
+    {
+      "id": "llm-langfuse-traces",
+      "rule": "llm-langfuse-traces",
+      "query": "Set up Langfuse tracing for my LLM application",
+      "expectedBehavior": [
+        "Uses @observe decorator with get_client() API",
+        "Sets user_id and session_id via update_current_trace",
+        "Configures OpenTelemetry SpanProcessor for distributed trace export",
+        "Uses observation types for Agent Graph rendering"
+      ]
+    },
+    {
+      "id": "silent-alerting",
+      "rule": "silent-alerting",
+      "query": "Our agents sometimes return wrong results without any errors. How do I detect these silent failures?",
+      "expectedBehavior": [
+        "Implements statistical baseline anomaly detection using z-score or similar statistical methods",
+        "Detects failures that produce no errors but deliver incorrect or degraded results",
+        "Uses historical baselines to identify when output metrics deviate from normal distribution",
+        "Goes beyond exception-based alerting to catch silent degradation that error handlers miss"
+      ]
+    },
+    {
+      "id": "silent-degraded-quality",
+      "rule": "silent-degraded-quality",
+      "query": "How do I detect when my LLM agent starts producing gibberish or repetitive output that passes basic checks?",
+      "expectedBehavior": [
+        "Uses heuristic pre-filters for cheap fast detection of obviously degraded output quality",
+        "Applies LLM-as-judge evaluation for nuanced quality scoring beyond simple length checks",
+        "Integrates with Langfuse observe decorator for quality check trace logging and monitoring",
+        "Catches outputs that pass basic emptiness checks but contain gibberish or repetitive content"
+      ]
+    },
+    {
+      "id": "silent-tool-skipping",
+      "rule": "silent-tool-skipping",
+      "query": "Our agent sometimes fabricates answers from training data instead of using the search tool. How do I catch this?",
+      "expectedBehavior": [
+        "Validates tool usage against expected tool call patterns for each query type",
+        "Detects when agents skip expected tool calls and produce plausible but wrong results",
+        "Uses Langfuse trace analysis to compare actual tool invocations against expected patterns",
+        "Flags results produced without required tool calls as potentially fabricated from training data"
+      ]
+    },
+    {
+      "id": "upstream-delegation",
+      "query": "Add Prometheus metrics and PSI drift detection to my LLM service",
+      "expectedBehavior": [
+        "Points at first-party Prometheus and drift-detection documentation instead of restating it",
+        "Does not invent a local copy of PSI, KS test, or Prometheus metric-type tutorials",
+        "Surfaces the OrchestKit delta that upstream does not carry (TRACEPARENT propagation, OTEL_* subprocess stripping, JSONL hook telemetry)",
+        "Keeps bounded label cardinality guidance when instrumenting"
+      ]
+    }
+  ]
+}
