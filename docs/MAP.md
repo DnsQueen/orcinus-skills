@@ -63,10 +63,10 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 
 | Need | Best source | Licence | Integration | Status |
 |---|---|---|---|---|
-| Secrets scan | gitleaks/gitleaks | MIT | bundle, own thin wrapper | todo |
-| Prompt-injection defence | getsentry/skills: skill-scanner | Apache-2.0 | copy | todo |
-| Supply-chain | google/osv-scanner | Apache-2.0 | bundle + wrapper | todo |
-| Static analysis | trailofbits/skills: static-analysis | CC-BY-SA-4.0 | rewrite, or separate CC-BY-SA module | todo |
+| Secrets scan | gitleaks/gitleaks | MIT | own-words in security-review (thin scan + gitleaks when installed) | built |
+| Prompt-injection defence | getsentry/skills: skill-scanner | Apache-2.0 | own-words in security-review step 3 | built |
+| Supply-chain | google/osv-scanner | Apache-2.0 | own-words in security-review step 4 (npm audit + osv-scanner when installed) | built |
+| Static analysis | trailofbits/skills: static-analysis | CC-BY-SA-4.0 | own-words in security-review step 5, never copied | built (manual + Semgrep/CodeQL when available) |
 | Performance budgets | addyosmani/agent-skills: performance-optimization | MIT | copy | todo |
 | Health / monitoring | ericrisco/rsc-harness: monitoring | MIT per secondary, verify LICENSE | copy after verify | todo |
 

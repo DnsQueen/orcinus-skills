@@ -33,6 +33,7 @@ Then invoke `/orcinus` in your agent and keep working. ORCINUS detects the stage
 - `skills/idea-calibrate` — turn a raw idea into a calibrated, testable v1 plan before any code, with an eval scenario in `evals/idea-calibrate-01.md`.
 - `skills/scaffold` — set up a project so build, lint, typecheck, and test all pass from day one, with an eval scenario in `evals/scaffold-01.md` (proven on a real demo project).
 - `skills/build` — build one slice at a time, test first, with the four checks and independent verification before commit, with an eval scenario in `evals/build-01.md` (proven on the demo project).
+- `skills/security-review` — review a change for secrets, injection, supply-chain, and unsafe patterns before merge, with an eval scenario in `evals/security-review-01.md` (proven on the demo project and on a planted fake secret).
 - `docs/MAP.md` — the full 0–100 map: every micro-step, its best proven source, its licence, and its integration method (copy / rewrite / bundle / write from scratch).
 - `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v1 does and does not do.
 
@@ -65,4 +66,4 @@ Sources that shaped v1 include Anthropic (Effective Harnesses, Agent Skills, cod
 
 ## Status
 
-v1 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + map. The rest is built in order, with eval scenarios, not by dumping skills.
+v1 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + security-review + map. The rest is built in order, with eval scenarios, not by dumping skills.
