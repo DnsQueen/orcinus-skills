@@ -25,6 +25,8 @@ Read `GLOSSARY.md` for the exact meaning of: gate, done, evidence bundle, implem
 - Before merging any API change, run breaking-change (oasdiff as-is, Apache-2.0) against the previous spec with `--fail-on ERR` — without that flag the command prints the break and still exits 0, so a gate that cannot fail is not a gate.
 - After every rename, move, or API migration, run incomplete-refactor (written from scratch) before calling the refactor done: the checker must be clean and the four commands green. A green suite does not prove the old thing is gone.
 - A package is published only through registry-publish (written from scratch), after the human gate — release-please writes release notes and tags, it does not publish to a registry. Read the dry-run file list before publishing, and verify the published artifact installs and runs afterwards.
+- When a project needs to support another language, locale, or writing direction, load i18n (injected verbatim, MIT): audit first, externalize user-facing strings into a catalog, and verify every locale in scope renders without fallback. A missing key falls back to the default language — never an empty string, never a raw key.
+- Before shipping any web UI change, audit it with accessibility (own-words wrapper, ultra11y engine as-is, MIT): a blocking or major finding is a FAIL, and the gate is `--fail-on major`. The engine checks the markup it can see; keyboard, focus, and dynamic behaviour need a real browser and a human judgment — never declare conforming what was not verified.
 - After a slice passes its tests, check the tests themselves with mutation-testing (Stryker as-is, Apache-2.0) before calling it done — a green suite that catches nothing is not proof. JavaScript/TypeScript only.
 - When a request is underspecified — multiple plausible interpretations, or objective / done / scope / constraints / environment / safety unclear — load ask-questions-if-underspecified (injected verbatim, MIT) before acting. Ask 1–5 must-have questions; do not run commands, edit files, or produce a plan that depends on unknowns until they are answered or the user authorizes proceeding with stated assumptions. Do not ask questions a quick, low-risk discovery read can answer.
 
@@ -52,6 +54,8 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 | Build | build (one slice at a time, test first) | Slice passes its own tests, no unrelated files changed |
 | Verify | orcinus-verify | Evidence bundle passes, verifier is independent |
 | Security | security-review | Secrets, injection, supply-chain, and static checks pass |
+| Language | i18n (languages, locales, RTL) | Every locale in scope renders without fallback |
+| Accessibility | accessibility (audit, fix, re-audit) | No blocking or major findings; manual criteria judged |
 | Clarify (cross-cutting) | ask-questions-if-underspecified | Must-have questions answered, or user authorized stated assumptions |
 | Finalize | finalize (docs, release, CI, publish) | Release checklist passes, rollback plan exists |
 

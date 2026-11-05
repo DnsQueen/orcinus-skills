@@ -42,8 +42,8 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Breaking-change detection | oasdiff | Apache-2.0 | bundle (CLI), own-words wrapper, licence verified from primary LICENSE | built |
 | State | frontend-architecture (stareezy-1) | MIT, 10 stars | copy, with caution | todo |
 | Database / schema / migration | database-designer (alirezarezvani) | MIT | copy, audit scripts first | todo |
-| i18n | Marvellbrazil/my-agentic-skills: i18n | MIT | copy single skill only | todo |
-| Accessibility | maxgfr/ultra11y | MIT | copy | todo |
+| i18n | Marvellbrazil/my-agentic-skills: i18n | MIT | copied verbatim (10 files, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 42203fd | built |
+| Accessibility | maxgfr/ultra11y | MIT | own-words wrapper + engine bundled as-is (upstream SKILL.md is 522 lines, over the spec's 500-line guidance, so not copied verbatim), licence verified from primary LICENSE, commit b245094 | built |
 
 ## D — Testing / Verification (40–59)
 
