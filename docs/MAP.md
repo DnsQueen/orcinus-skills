@@ -8,13 +8,13 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 
 | Need | Best source | Licence | Integration | Status |
 |---|---|---|---|---|
-| Fleeting capture | — | — | Write from scratch | todo |
+| Fleeting capture | — | — | Write from scratch (persistent store); in-session capture is in idea-calibrate step 1 | built (in-session), todo (store) |
 | Sharpen / brainstorm | egm-brainstorm, egm-draft (installed) | Apache-2.0 | covered | covered |
 | Process / grill | grill-me / grilling (installed) | MIT | covered | covered |
-| Nurture / manage | phuryn/pm-skills: opportunity-solution-tree, hypothesis | MIT | copy | todo |
-| Validate feasibility | phuryn/pm-skills: lean-validation, identify-assumptions | MIT | copy | todo |
-| Launch decision | phuryn/pm-skills: pre-mortem, prioritization | MIT | copy | todo |
-| Scope v1 / non-goals | improve (installed, advisor-only) | MIT | covered, thin | covered |
+| Nurture / manage | phuryn/pm-skills: opportunity-solution-tree, hypothesis | MIT | own-words in idea-calibrate step 3 | built |
+| Validate feasibility | phuryn/pm-skills: lean-validation, identify-assumptions | MIT | own-words in idea-calibrate step 4 | built |
+| Launch decision | phuryn/pm-skills: pre-mortem, prioritization | MIT | own-words in idea-calibrate step 5 | built |
+| Scope v1 / non-goals | improve (installed, advisor-only) | MIT | own-words in idea-calibrate step 6 | built |
 
 ## B — Architecture / Setup (10–19)
 
