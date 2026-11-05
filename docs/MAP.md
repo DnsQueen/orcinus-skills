@@ -77,7 +77,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Debugging loop | diagnosing-bugs (installed) | MIT | covered | covered |
 | Tech-debt cleanup | ponytail-debt (installed) | MIT | covered | covered |
 | Simplification | pr-review-toolkit: code-simplifier; getsentry: code-simplifier | Apache-2.0 | rewrite as SKILL.md | todo |
-| Incomplete refactoring | — | — | Write from scratch (detector for orphaned consumers) | todo |
+| Incomplete refactoring | — | — | Write from scratch (detector for orphaned consumers) | built |
 | Generic refactoring | MuhiminOsim/code-refactoring-skill | MIT, 12 stars | copy, with caution | todo |
 
 ## G — Finalize / Post-publish (80–100)

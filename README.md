@@ -43,6 +43,7 @@ Then invoke `/orcinus` in your agent and keep working. ORCINUS detects the stage
 - `skills/performance-optimization` — measure before optimizing, fix only the measured bottleneck, re-measure, and revert if the result is within noise or worse. Copied verbatim from addyosmani/agent-skills (MIT).
 - `skills/api-and-interface-design` — stable API and interface design: contract first, one error format, validation at the boundary, additive changes, pagination, idempotency. Copied verbatim from addyosmani/agent-skills (MIT).
 - `skills/breaking-change` — detect breaking changes between two OpenAPI specs before shipping, using oasdiff as-is (Apache-2.0). A gate that cannot fail is not a gate: always run with `--fail-on ERR`.
+- `skills/incomplete-refactor` — detect an incomplete refactor (old names still referenced, removed files still present, stale tests) with a checker script, written from scratch. A green suite does not prove the old thing is gone.
 - `docs/MAP.md` — the full 0–100 map: every micro-step, its best proven source, its licence, and its integration method (copy / rewrite / bundle / write from scratch).
 - `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v1 does and does not do.
 
@@ -75,4 +76,4 @@ Sources that shaped v1 include Anthropic (Effective Harnesses, Agent Skills, cod
 
 ## Status
 
-v1 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + security-review + finalize + monitoring-observability (injected verbatim) + ask-questions-if-underspecified (injected verbatim) + webapp-testing (injected verbatim) + mutation-testing + visual-regression + performance-optimization (injected verbatim) + api-and-interface-design (injected verbatim) + breaking-change + map. The rest is built in order, with eval scenarios, not by dumping skills. Where a ready skill answers a need, it is used as-is — never rewritten.
+v1 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + security-review + finalize + monitoring-observability (injected verbatim) + ask-questions-if-underspecified (injected verbatim) + webapp-testing (injected verbatim) + mutation-testing + visual-regression + performance-optimization (injected verbatim) + api-and-interface-design (injected verbatim) + breaking-change + incomplete-refactor + map. The rest is built in order, with eval scenarios, not by dumping skills. Where a ready skill answers a need, it is used as-is — never rewritten.
