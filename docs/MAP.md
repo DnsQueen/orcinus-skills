@@ -92,7 +92,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Monitoring after publish | yonatangross/orchestkit: monitoring-observability | MIT | copied verbatim (28 files, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 016aefa | built |
 | Bug triage / feedback | florianbruniaux: issue-triage | CC-BY-SA-4.0 | separate module, not verbatim into MIT | todo |
 | Clarification / escalation | sickn33/antigravity-awesome-skills: ask-questions-if-underspecified | MIT | copied verbatim (1 file, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 739c841 | built |
-| Visual regression | microsoft/playwright | Apache-2.0 | own-words wrapper, do not copy code | todo |
+| Visual regression | microsoft/playwright | Apache-2.0 | own-words wrapper, Playwright used as-is, licence verified from primary LICENSE | built |
 
 ## Must write from scratch (v1 or v2)
 
