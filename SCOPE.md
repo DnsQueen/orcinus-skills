@@ -14,6 +14,7 @@
 - One injected ready skill (`skills/webapp-testing`), copied verbatim from Anthropic (Apache-2.0, 6 files, frontmatter adapted to the Agent Skills spec only), with its `ATTRIBUTION.md` and `LICENSE.txt`, and wired into the router's shared rules. Eval (`evals/webapp-testing-01.md`) passed on a real Chromium E2E run (6/6).
 - One mutation-testing skill (`skills/mutation-testing`), written in our own words, using Stryker as-is (Apache-2.0). Eval (`evals/mutation-testing-01.md`) passed on a real Stryker run on the demo (score 100.00, 26 killed, 0 survived, 0 timeout).
 - One visual-regression skill (`skills/visual-regression`), written in our own words, using Playwright as-is (Apache-2.0). Eval (`evals/visual-regression-01.md`) passed on a real screenshot comparison on the demo page (0.00% unchanged, 2.70% on a visual change, 0.00% after a confirmed baseline update).
+- One performance-optimization skill (`skills/performance-optimization`), copied verbatim from addyosmani/agent-skills (MIT). Eval (`evals/performance-optimization-01.md`) passed on real timings on the demo (page load mean 0.108s vs a 2.5s budget, `npm test` mean ~4768ms vs a 10s budget; a deliberate 3s delay measured 3.040s and was flagged as a regression; after revert the load was 0.122s again).
 - The full 0–100 map (`docs/MAP.md`) with source, licence, and integration method for every micro-step.
 - Shared glossary and boundaries.
 - Eval scenarios for the flagship, run on a demo repo.

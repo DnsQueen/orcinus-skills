@@ -67,7 +67,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Prompt-injection defence | getsentry/skills: skill-scanner | Apache-2.0 | own-words in security-review step 3 | built |
 | Supply-chain | google/osv-scanner | Apache-2.0 | own-words in security-review step 4 (npm audit + osv-scanner when installed) | built |
 | Static analysis | trailofbits/skills: static-analysis | CC-BY-SA-4.0 | own-words in security-review step 5, never copied | built (manual + Semgrep/CodeQL when available) |
-| Performance budgets | addyosmani/agent-skills: performance-optimization | MIT | copy | todo |
+| Performance budgets | addyosmani/agent-skills: performance-optimization | MIT | copy | built |
 | Health / monitoring | ericrisco/rsc-harness: monitoring | MIT per secondary, verify LICENSE | copy after verify | todo |
 
 ## F — Debugging / Refactor (50–79)
