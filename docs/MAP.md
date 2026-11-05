@@ -85,7 +85,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Need | Best source | Licence | Integration | Status |
 |---|---|---|---|---|
 | Docs / handoff | handoff (installed); anthropics/skills: doc-coauthoring (licence unclear) | MIT / unclear | covered; rewrite doc-coauthoring | covered |
-| Long-context handoff | claude-handoff (dariohansson) | MIT | merge into installed handoff | todo |
+| Long-context handoff | claude-handoff (dariohansson) | MIT | merged into the handoff skill (mattpocock base + dariohansson template/path rules/resume mode), written in own words, both MIT | built |
 | Onboarding contributor | codebase-onboarding (kart-rc) | unverified | rewrite | todo |
 | Release | googleapis/release-please | Apache-2.0 | used as-is in finalize (CLI + Action), licence verified from primary LICENSE | built |
 | Registry publish | — | — | Write from scratch (release-please does not publish to registries) | built |
