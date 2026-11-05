@@ -39,7 +39,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | API design (MCP) | anthropics/skills: mcp-builder | Apache-2.0 | copy, keep LICENSE.txt | todo |
 | API design (REST/GraphQL) | addyosmani/agent-skills: api-and-interface-design | MIT | copy | built |
 | API consumption / contract tests | — | — | Write from scratch | todo |
-| Breaking-change detection | oasdiff | Apache-2.0 | bundle (CLI), own-words wrapper | todo |
+| Breaking-change detection | oasdiff | Apache-2.0 | bundle (CLI), own-words wrapper, licence verified from primary LICENSE | built |
 | State | frontend-architecture (stareezy-1) | MIT, 10 stars | copy, with caution | todo |
 | Database / schema / migration | database-designer (alirezarezvani) | MIT | copy, audit scripts first | todo |
 | i18n | Marvellbrazil/my-agentic-skills: i18n | MIT | copy single skill only | todo |
