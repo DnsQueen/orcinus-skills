@@ -54,7 +54,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Mutation (JS/TS) | Stryker | Apache-2.0 | own-words skill, Stryker used as-is (command runner for node:test), licence verified from primary LICENSE | built |
 | Mutation beyond JS/TS | mutmut (boxed/mutmut) | BSD-3-Clause | own-words skill, mutmut used as-is (Python proof), licence verified from primary LICENSE, 3.8.1 | built |
 | Independent review | anthropics/claude-plugins-official: pr-review-toolkit | Apache-2.0 | own-words skill, 6 reviewer agents + review-pr command bundled as-is, licence verified from the plugin's own LICENSE file (the README's "MIT" line is an error in the README) | built |
-| Evidence / eval | microsoft/waza | MIT | bundle (CLI) | todo |
+| Evidence / eval | microsoft/waza | MIT | skill injected verbatim + official v0.40.0 CLI as-is (binary not in repo), runnable suite evals/waza-orcinus-verify/ | built |
 | Benchmark | SWE-bench | MIT | benchmark, not a skill | todo |
 | Sandbox runtime | SWE-agent/swe-rex | MIT | bundle, container isolation only | todo |
 | Skill eval | openai/plugins: plugin-eval | per-plugin, repo licence not declared | do not copy verbatim | todo |

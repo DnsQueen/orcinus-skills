@@ -1,0 +1,28 @@
+id: verify-fail
+name: "A failing slice verifies FAIL"
+description: |
+  A slice whose test fails must get verdict FAIL, never PASS. A check that
+  did not run is never reported as passed.
+tags:
+  - verify
+  - fail
+inputs:
+  prompt: "Verify a slice whose test fails: the verdict must be FAIL, never PASS."
+  context:
+    skill: orcinus-verify
+    slice: broken-slice
+  files:
+    - path: summary.ts
+expected:
+  output_contains:
+    - "FAIL"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 5
+graders:
+  - name: verdict_present
+    type: code
+    config:
+      assertions:
+        - "len(output) > 0"

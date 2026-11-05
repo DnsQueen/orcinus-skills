@@ -30,7 +30,7 @@ Use release-please (googleapis/release-please, Apache-2.0, CLI + GitHub Action) 
 
 ### 4. CI gates
 
-Re-run the four commands (build, lint, typecheck, test) and record their outputs. Use Waza (microsoft/waza, MIT, CLI) as-is for graded eval scenarios when the project has them. Record each result with its tool and version, or "not run" with the reason.
+Re-run the four commands (build, lint, typecheck, test) and record their outputs. Use Waza (`skills/waza`, microsoft/waza, MIT, CLI) as-is for graded eval scenarios when the project has them — the runnable example is `evals/waza-orcinus-verify/`. Record each result with its tool and version, or "not run" with the reason.
 
 ### 5. Release checklist
 

@@ -1,0 +1,28 @@
+id: verify-pass
+name: "A passing slice verifies PASS"
+description: |
+  The weekly-summary slice in the demo passes build, lint, typecheck, and
+  all 7 tests. orcinus-verify must return verdict PASS with the evidence.
+tags:
+  - verify
+  - pass
+inputs:
+  prompt: "Verify the weekly-summary slice in the demo: build, lint, typecheck, and tests all pass."
+  context:
+    skill: orcinus-verify
+    slice: weekly-summary
+  files:
+    - path: summary.ts
+expected:
+  output_contains:
+    - "PASS"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 5
+graders:
+  - name: verdict_present
+    type: code
+    config:
+      assertions:
+        - "len(output) > 0"
