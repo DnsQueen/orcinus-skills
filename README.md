@@ -36,6 +36,7 @@ Then invoke `/orcinus` in your agent and keep working. ORCINUS detects the stage
 - `skills/security-review` — review a change for secrets, injection, supply-chain, and unsafe patterns before merge, with an eval scenario in `evals/security-review-01.md` (proven on the demo project and on a planted fake secret).
 - `skills/finalize` — prepare a release, cut it, and hand it over — docs, release notes, CI gates, rollback plan, and monitoring — without publishing anything the user has not approved, with an eval scenario in `evals/finalize-01.md` (proven as a dry-run release on the demo project). It uses ready tools as-is: release-please, Waza, handoff, and `monitoring-observability`.
 - `skills/monitoring-observability` — monitoring and observability patterns for Prometheus, Grafana, Langfuse LLM tracing, and drift detection, copied verbatim from a ready-made skill (OrchestKit, MIT, see its `ATTRIBUTION.md`), not rewritten. It is a reference skill, loaded by `finalize` when a project uses those stacks.
+- `skills/ask-questions-if-underspecified` — clarify requirements before implementing, copied verbatim from a ready-made skill (Agentic Awesome Skills, MIT, see its `ATTRIBUTION.md`), not rewritten. The router loads it whenever a request is underspecified, before any implementation.
 - `docs/MAP.md` — the full 0–100 map: every micro-step, its best proven source, its licence, and its integration method (copy / rewrite / bundle / write from scratch).
 - `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v1 does and does not do.
 
@@ -68,4 +69,4 @@ Sources that shaped v1 include Anthropic (Effective Harnesses, Agent Skills, cod
 
 ## Status
 
-v1 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + security-review + finalize + monitoring-observability (injected verbatim) + map. The rest is built in order, with eval scenarios, not by dumping skills. Where a ready skill answers a need, it is used as-is — never rewritten.
+v1 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + security-review + finalize + monitoring-observability (injected verbatim) + ask-questions-if-underspecified (injected verbatim) + map. The rest is built in order, with eval scenarios, not by dumping skills. Where a ready skill answers a need, it is used as-is — never rewritten.
