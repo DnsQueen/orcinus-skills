@@ -40,7 +40,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | API design (REST/GraphQL) | addyosmani/agent-skills: api-and-interface-design | MIT | copy | built |
 | API consumption / contract tests | — | — | Write from scratch | todo |
 | Breaking-change detection | oasdiff | Apache-2.0 | bundle (CLI), own-words wrapper, licence verified from primary LICENSE | built |
-| State | frontend-architecture (stareezy-1) | MIT, 10 stars | copy, with caution | todo |
+| State | stareezy-1/frontend-architecture-skill: skills/frontend-architecture + skills/frontend-optimistic-mutations | MIT | copied verbatim (1 file each, frontmatter licence normalized to MIT), licence verified from primary LICENSE, commit d7f0c53, 10 stars | built |
 | Database / schema / migration | alirezarezvani/claude-skills: engineering/skills/database-designer | MIT | copied verbatim (15 files, frontmatter adapted to spec only) + one minimal fix to migration_generator.py (upstream bug: failed on any schema change), licence verified from primary LICENSE, commit 8f08254; scripts audited (stdlib only, no network/DB/exec) | built |
 | i18n | Marvellbrazil/my-agentic-skills: i18n | MIT | copied verbatim (10 files, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 42203fd | built |
 | Accessibility | maxgfr/ultra11y | MIT | own-words wrapper + engine bundled as-is (upstream SKILL.md is 522 lines, over the spec's 500-line guidance, so not copied verbatim), licence verified from primary LICENSE, commit b245094 | built |

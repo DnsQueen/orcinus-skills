@@ -1,0 +1,13 @@
+# ATTRIBUTION — frontend-optimistic-mutations
+
+This skill was copied verbatim from a ready-made, community-tested skill, as agreed: when a skill already answers the need, ORCINUS uses it as-is instead of rewriting it.
+
+- **Source:** https://github.com/stareezy-1/frontend-architecture-skill — `skills/frontend-optimistic-mutations/`
+- **Author:** stareezy-1
+- **Licence:** MIT — see `LICENSE.txt` in this folder (upstream MIT License, Copyright (c) 2026 stareezy-1, copied from the upstream repo root).
+- **Upstream commit:** `d7f0c53dcd0c2c43f455bd5ce88aa6797c585fe0` (2026-06-14, "Merge pull request #7 from stareezy-1/feat/skill/observability-firebase")
+- **Correction to the plan:** the skill does not live in a repo `stareezy/frontend-architecture` — that repository does not exist (404). It lives in the collection repo `stareezy-1/frontend-architecture-skill`, at `skills/frontend-optimistic-mutations/`. The map's repo path was wrong; the skill itself is real and was verified live (the repo has 10 stars).
+- **Files copied:** 1 file (`SKILL.md`, 264 lines upstream), verified identical to upstream with `diff` before the copy. A secret-pattern scan found nothing.
+- **What changed:** only the frontmatter was adapted to the Agent Skills spec. The upstream frontmatter already carried its own licence line (`license: MIT — use, copy, and adapt freely.`); it was normalized to the clean value `license: MIT` so the file has exactly one licence field. The name, description, `compatibility`, and `keywords` fields are kept verbatim, and the entire body is byte-for-byte identical to upstream (verified programmatically).
+- **Scope, stated plainly:** the skill is the write path for a React or React Native app that uses a query/cache layer (TanStack Query, RTK Query, SWR in the examples). Its rules — the fixed five-beat lifecycle (cancel → snapshot → patch → roll back verbatim → invalidate on settle), the idempotency key generated once at form init, multi-cache coherence, and "server state is never mirrored into a client store" — are the discipline this repo uses for the State row's write path. A project with no query/cache layer and no optimistic UI has nothing for this skill to check.
+- **Wiring:** the ORCINUS router loads this skill whenever a create/update/delete mutation is written — see the router's shared rules. Its companion for the split is `frontend-architecture`.
