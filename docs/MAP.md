@@ -90,7 +90,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Release | googleapis/release-please | Apache-2.0 | used as-is in finalize (CLI + Action), licence verified from primary LICENSE | built |
 | Registry publish | — | — | Write from scratch (release-please does not publish to registries) | built |
 | Monitoring after publish | yonatangross/orchestkit: monitoring-observability | MIT | copied verbatim (28 files, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 016aefa | built |
-| Bug triage / feedback | florianbruniaux: issue-triage | CC-BY-SA-4.0 | separate module, not verbatim into MIT | todo |
+| Bug triage / feedback | florianbruniaux/claude-code-plugins: plugins/pr-workflow/skills/issue-triage | MIT | skill + 1 template injected verbatim, licence verified from primary LICENSE (Copyright 2026 Florian Bruniaux) and the API's spdx_id — the MAP's CC-BY-SA-4.0 was wrong, and the standalone repo florianbruniaux/issue-triage does not exist (GitHub 404) | built |
 | Clarification / escalation | sickn33/antigravity-awesome-skills: ask-questions-if-underspecified | MIT | copied verbatim (1 file, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 739c841 | built |
 | Visual regression | microsoft/playwright | Apache-2.0 | own-words wrapper, Playwright used as-is, licence verified from primary LICENSE | built |
 
