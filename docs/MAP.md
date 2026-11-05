@@ -21,11 +21,11 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Need | Best source | Licence | Integration | Status |
 |---|---|---|---|---|
 | Stack choice | stack-selector (lysandre001/skills-registry) | unverified | rewrite | todo |
-| Project tree / invariants | github/spec-kit (specify init, constitution) | MIT | copy | todo |
+| Project tree / invariants | github/spec-kit (specify init, constitution) | MIT | own-words in scaffold step 2-3 | built |
 | Codebase map | repomix | MIT | bundle (CLI) | todo |
-| Scaffolding | create-mercato-app | MIT | bundle (CLI) | todo |
-| Repo / git / PR | git-workflow-agent-skill (qubernetic) | MIT claimed, LICENSE unverified | rewrite | todo |
-| Env / secrets setup | devops-secret-management (hexatonic-lab) | unverified | rewrite | todo |
+| Scaffolding | create-mercato-app | MIT | own-words in scaffold | built |
+| Repo / git / PR | git-workflow-agent-skill (qubernetic) | MIT claimed, LICENSE unverified | own-words in scaffold step 5 | built (basic: init + first commit) |
+| Env / secrets setup | devops-secret-management (hexatonic-lab) | unverified | own-words in scaffold step 4 | built (basic: .env.example + .gitignore) |
 | Dependency licence | audit-license-compliance (sir-chawakorn/sanook-cli) | unverified | rewrite | todo |
 | Authoring new skills | anthropics/skills: skill-creator | Apache-2.0 | copy, keep LICENSE.txt | todo |
 

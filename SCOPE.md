@@ -5,6 +5,7 @@
 - One entry and router (`skills/orcinus`).
 - One flagship verification skill (`skills/orcinus-verify`).
 - One idea-calibration skill (`skills/idea-calibrate`), with a scored eval (`evals/idea-calibrate-01.md`).
+- One scaffold skill (`skills/scaffold`), with a scored eval (`evals/scaffold-01.md`) proven on a real demo project.
 - The full 0–100 map (`docs/MAP.md`) with source, licence, and integration method for every micro-step.
 - Shared glossary and boundaries.
 - Eval scenarios for the flagship, run on a demo repo.
