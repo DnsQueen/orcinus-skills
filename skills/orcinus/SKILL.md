@@ -26,6 +26,7 @@ Read `GLOSSARY.md` for the exact meaning of: gate, done, evidence bundle, implem
 - A visual change is verified by a screenshot comparison with visual-regression (Playwright as-is, Apache-2.0) — a green unit suite does not prove the look. Never update a baseline to make a diff disappear without the user confirming the new look is intended.
 - When a performance requirement exists or a change is suspected of introducing a regression, load performance-optimization (injected verbatim, MIT) and follow its workflow: measure the baseline, fix only the identified bottleneck, re-measure the same way, and revert if the result is within noise or worse. A number is never reported without measuring it, and the budget is never changed after measuring to make a result pass.
 - When designing or changing an API, a module boundary, or any public interface, load api-and-interface-design (injected verbatim, MIT) first: define the contract before implementing it, keep one error format everywhere, validate at the boundary, and never break an existing field under the same version — add, or ship a new version.
+- When an agent needs to use a service through tools, build it as an MCP server with mcp-builder (injected verbatim, Apache-2.0): TypeScript SDK v2 for new servers, Zod input schemas with constraints, `outputSchema` + `structuredContent`, the four annotations, and a self-check script after every change. MCP is the tool protocol for agents — it does not replace the API contract (api-and-interface-design) or the client (frontend-data-contracts).
 - Before merging any API change, run breaking-change (oasdiff as-is, Apache-2.0) against the previous spec with `--fail-on ERR` — without that flag the command prints the break and still exits 0, so a gate that cannot fail is not a gate.
 - After every rename, move, or API migration, run incomplete-refactor (written from scratch) before calling the refactor done: the checker must be clean and the four commands green. A green suite does not prove the old thing is gone.
 - When code needs restructuring without changing what it does, run refactor (injected verbatim, MIT): smell → plan → one operation at a time, tests after each step, revert on failure, never fix forward. A change that alters behavior is not a refactoring. Renaming an exported symbol is a red line — it needs the user's explicit confirmation first.
@@ -77,6 +78,7 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 | Health / monitoring | monitoring | The service is probed from the outside, alerts page on symptoms, on-call exists |
 | Finalize | finalize (docs, release, CI, publish) | Release checklist passes, rollback plan exists |
 | Refactor | refactor | Behavior identical, one operation at a time, tests green after each step |
+| API design (MCP) | mcp-builder | Server builds, self-check passes, 10-question eval passes |
 
 If a sub-skill is not yet built, say so plainly, do the closest covered step, and record the gap. Do not invent a sub-skill.
 

@@ -36,7 +36,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Clean code | wondelai/skills: clean-code | MIT | own-words in build (ponytail: smallest complete change) | built |
 | Task breakdown / slices | addyosmani/agent-skills: planning-and-task-breakdown; obra/superpowers: executing-plans | MIT | own-words in build step 1 | built |
 | Step-by-step implementation | ponytail, tdd (installed) | MIT | covered, routed via build | covered |
-| API design (MCP) | anthropics/skills: mcp-builder | Apache-2.0 | copy, keep LICENSE.txt | todo |
+| API design (MCP) | anthropics/skills: mcp-builder | Apache-2.0 | skill + 5 references + 4 scripts injected verbatim, licence verified from the skill's own LICENSE.txt (repo licence is split) | built |
 | API design (REST/GraphQL) | addyosmani/agent-skills: api-and-interface-design | MIT | copy | built |
 | API consumption / contract tests | stareezy-1/frontend-architecture-skill: skills/frontend-data-contracts | MIT | copied verbatim (1 file, frontmatter licence normalized to MIT), licence verified from primary LICENSE, commit d7f0c53; the map's "write from scratch" plan was superseded — the skill was found after the first round | built |
 | Breaking-change detection | oasdiff | Apache-2.0 | bundle (CLI), own-words wrapper, licence verified from primary LICENSE | built |
