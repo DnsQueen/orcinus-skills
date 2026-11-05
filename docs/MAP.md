@@ -27,7 +27,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Repo / git / PR | git-workflow-agent-skill (qubernetic) | MIT claimed, LICENSE unverified | own-words in scaffold step 5 | built (basic: init + first commit) |
 | Env / secrets setup | devops-secret-management (hexatonic-lab) | unverified | own-words in scaffold step 4 | built (basic: .env.example + .gitignore) |
 | Dependency licence | audit-license-compliance (sir-chawakorn/sanook-cli) | unverified | rewrite (own-words licence check in architecture step 5 + checker) | built |
-| Authoring new skills | anthropics/skills: skill-creator | Apache-2.0 | copy, keep LICENSE.txt | todo |
+| Authoring new skills | anthropics/skills: skill-creator | Apache-2.0 | copied verbatim (19 files, frontmatter adapted to spec only), licence verified from the skill's own LICENSE.txt, commit ca45fc4 | built |
 
 ## C — Coding (20–39)
 

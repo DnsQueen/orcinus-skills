@@ -1,0 +1,13 @@
+# ATTRIBUTION — skill-creator
+
+This skill was copied verbatim from a ready-made, community-tested skill, as agreed: when a skill already answers the need, ORCINUS uses it as-is instead of rewriting it.
+
+- **Source:** https://github.com/anthropics/skills — `skills/skill-creator/`
+- **Author:** Anthropic
+- **Licence:** Apache License 2.0 — see `LICENSE.txt` in this folder (the skill's own `LICENSE.txt`, copied from upstream). The upstream repo has a licence split: the example skills (including skill-creator) are Apache-2.0, while the document skills (pdf/docx/pptx/xlsx) are proprietary/source-available and were NOT copied.
+- **Upstream commit:** `ca45fc496a3436251f191354091d557da31c15b5` (2026-10-28, "Update mcp-builder skill: teach v2 of the MCP TypeScript SDK (#2087)")
+- **Files copied:** 19 files (`SKILL.md` 485 lines, `LICENSE.txt`, 3 files under `agents/`, 1 under `assets/`, 2 under `eval-viewer/`, 1 under `references/`, 9 under `scripts/`), verified identical to upstream with `diff -r` before the copy. A secret-pattern scan of the copied files found nothing.
+- **What changed:** only the frontmatter of `SKILL.md` was adapted to the Agent Skills spec (added `license: Apache-2.0`). The description text and the entire body are byte-for-byte identical to upstream (verified programmatically).
+- **Script audit (done before bundling):** the scripts use only the Python standard library, except `quick_validate.py`, which imports PyYAML (installed in this environment, version 6.0.1). No network calls, no credential handling, no destructive operations. Each script reads the files it is given and writes only to the output path the user names.
+- **What does not run in this environment (recorded, not hidden):** `run_eval.py`, `run_loop.py`, and `improve_description.py` invoke the Claude Code CLI (`claude -p`) as a subprocess to run evals and to improve descriptions. That CLI does not exist in this environment, so the scripted eval loop and the description improver do not run here. `quick_validate.py` and `package_skill.py` are pure Python and work here (verified: `quick_validate.py` prints "Skill is valid!" on the skill itself). The skill itself is written for Claude Code (it says "Claude", "claude-with-access-to-the-skill", and describes spawning subagents with and without the skill). Its method transfers to ORCINUS — draft, write test prompts, evaluate, iterate — but the Claude-specific tooling does not; ORCINUS's own eval pattern (real runs with scored evals, as used for every skill in this repo) is the equivalent of its with-skill/baseline loop.
+- **Wiring:** the ORCINUS router loads this skill whenever a new skill is needed, before any `SKILL.md` is written — see the router's shared rules.

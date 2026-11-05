@@ -24,6 +24,7 @@ Read `GLOSSARY.md` for the exact meaning of: gate, done, evidence bundle, implem
 - When designing or changing an API, a module boundary, or any public interface, load api-and-interface-design (injected verbatim, MIT) first: define the contract before implementing it, keep one error format everywhere, validate at the boundary, and never break an existing field under the same version — add, or ship a new version.
 - Before merging any API change, run breaking-change (oasdiff as-is, Apache-2.0) against the previous spec with `--fail-on ERR` — without that flag the command prints the break and still exits 0, so a gate that cannot fail is not a gate.
 - After every rename, move, or API migration, run incomplete-refactor (written from scratch) before calling the refactor done: the checker must be clean and the four commands green. A green suite does not prove the old thing is gone.
+- When a new skill is needed, load skill-creator (injected verbatim, Apache-2.0) before writing any SKILL.md: capture the intent, draft, write test prompts, evaluate on a real task, iterate. A skill is not done until it is tested on a real task — and its Claude-Code-only eval scripts do not run here, so use the repo's own eval pattern (a real run with scored cases) instead.
 - When a project stores data in a database or changes its schema, load database-designer (injected verbatim, MIT; one script carries a minimal ORCINUS fix for an upstream bug — see its ATTRIBUTION.md): analyze first, optimize indexes against real query patterns, generate the migration, and verify it on a copy with real data before applying it. A migration is never applied without reading it, and a destructive change needs a backup and a recorded decision.
 - Before any code is written, load architecture: the stack ADR, the tree, the contract, and the layer rules exist first. A layer violation is a FAIL even if the suite is green — run the checker after every structural change.
 - A package is published only through registry-publish (written from scratch), after the human gate — release-please writes release notes and tags, it does not publish to a registry. Read the dry-run file list before publishing, and verify the published artifact installs and runs afterwards.
@@ -57,6 +58,7 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 | Verify | orcinus-verify | Evidence bundle passes, verifier is independent |
 | Security | security-review | Secrets, injection, supply-chain, and static checks pass |
 | Database | database-designer (schema, indexes, migrations) | Schema analyzed, migration verified on a copy, no destructive change without a backup |
+| Author skill (cross-cutting) | skill-creator | The new skill passes quick_validate and a real test |
 | Language | i18n (languages, locales, RTL) | Every locale in scope renders without fallback |
 | Accessibility | accessibility (audit, fix, re-audit) | No blocking or major findings; manual criteria judged |
 | Clarify (cross-cutting) | ask-questions-if-underspecified | Must-have questions answered, or user authorized stated assumptions |
