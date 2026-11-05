@@ -28,6 +28,7 @@ Read `GLOSSARY.md` for the exact meaning of: gate, done, evidence bundle, implem
 - When designing or changing an API, a module boundary, or any public interface, load api-and-interface-design (injected verbatim, MIT) first: define the contract before implementing it, keep one error format everywhere, validate at the boundary, and never break an existing field under the same version — add, or ship a new version.
 - Before merging any API change, run breaking-change (oasdiff as-is, Apache-2.0) against the previous spec with `--fail-on ERR` — without that flag the command prints the break and still exits 0, so a gate that cannot fail is not a gate.
 - After every rename, move, or API migration, run incomplete-refactor (written from scratch) before calling the refactor done: the checker must be clean and the four commands green. A green suite does not prove the old thing is gone.
+- When code needs restructuring without changing what it does, run refactor (injected verbatim, MIT): smell → plan → one operation at a time, tests after each step, revert on failure, never fix forward. A change that alters behavior is not a refactoring. Renaming an exported symbol is a red line — it needs the user's explicit confirmation first.
 - When a new skill is needed, load skill-creator (injected verbatim, Apache-2.0) before writing any SKILL.md: capture the intent, draft, write test prompts, evaluate on a real task, iterate. A skill is not done until it is tested on a real task — and its Claude-Code-only eval scripts do not run here, so use the repo's own eval pattern (a real run with scored cases) instead.
 - When a frontend feature is added or a piece of state needs a home, load frontend-architecture (injected verbatim, MIT): server state lives in the query/cache layer, UI state lives in a store, they never overlap; a component never calls the network client directly. When a create/update/delete mutation is written, load frontend-optimistic-mutations (injected verbatim, MIT): cancel → snapshot → patch → roll back verbatim → invalidate on settle, and the idempotency key is created once at form init.
 - Whenever code consumes an API, load frontend-data-contracts (injected verbatim, MIT): one typed client is the only fetch boundary, parse-don't-validate at the boundary, one envelope, one ApiError for every failure mode, branded IDs. Raw API shapes never leak past the client.
@@ -75,6 +76,7 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 | Clarify (cross-cutting) | ask-questions-if-underspecified | Must-have questions answered, or user authorized stated assumptions |
 | Health / monitoring | monitoring | The service is probed from the outside, alerts page on symptoms, on-call exists |
 | Finalize | finalize (docs, release, CI, publish) | Release checklist passes, rollback plan exists |
+| Refactor | refactor | Behavior identical, one operation at a time, tests green after each step |
 
 If a sub-skill is not yet built, say so plainly, do the closest covered step, and record the gap. Do not invent a sub-skill.
 
