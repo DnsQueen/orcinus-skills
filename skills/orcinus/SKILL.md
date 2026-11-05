@@ -20,6 +20,7 @@ Read `GLOSSARY.md` for the exact meaning of: gate, done, evidence bundle, implem
 - If you do not know, ask. Guessing a requirement, an API, or a secret is a failure, not a shortcut.
 - When a raw idea arrives — mid-work, in passing, or between sessions — capture it first with idea-capture (written from scratch): one Markdown file per idea in the project's `ideas/` store, verbatim, never edited, never deleted. Calibrate it later with idea-calibrate.
 - After a service ships, load monitoring (injected verbatim, MIT) for the outside view: uptime probes on the critical journey, `/livez` split from `/readyz`, SLO burn-rate alerts with two windows, on-call escalation with a runbook per alert. It is the complement of monitoring-observability (injected verbatim, MIT), which is the telemetry side — Prometheus/Grafana/Langfuse instrumentation and drift detection. A project with no runtime needs neither.
+- Before a change merges, run independent-review (own-words method, six reviewer agents bundled as-is from pr-review-toolkit, Apache-2.0): the reviewers read the diff, never the author's summary, and only report issues with confidence ≥ 80. The implementer is never the final judge.
 - When the project has a web UI, verify it in a real browser with webapp-testing (injected verbatim, Apache-2.0) — do not claim a UI works from unit tests alone. A screenshot and console logs are evidence; a green unit suite is not.
 - A visual change is verified by a screenshot comparison with visual-regression (Playwright as-is, Apache-2.0) — a green unit suite does not prove the look. Never update a baseline to make a diff disappear without the user confirming the new look is intended.
 - When a performance requirement exists or a change is suspected of introducing a regression, load performance-optimization (injected verbatim, MIT) and follow its workflow: measure the baseline, fix only the identified bottleneck, re-measure the same way, and revert if the result is within noise or worse. A number is never reported without measuring it, and the budget is never changed after measuring to make a result pass.
@@ -61,6 +62,7 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 | Scaffold | scaffold (init, lint, typecheck, test harness) | `build`, `lint`, `typecheck`, `test` all run |
 | Build | build (one slice at a time, test first) | Slice passes its own tests, no unrelated files changed |
 | Verify | orcinus-verify | Evidence bundle passes, verifier is independent |
+| Independent review | independent-review | Six reviewers read the diff; no critical issue unlisted |
 | Security | security-review | Secrets, injection, supply-chain, and static checks pass |
 | Database | database-designer (schema, indexes, migrations) | Schema analyzed, migration verified on a copy, no destructive change without a backup |
 | Author skill (cross-cutting) | skill-creator | The new skill passes quick_validate and a real test |

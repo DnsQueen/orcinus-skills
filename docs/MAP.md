@@ -53,7 +53,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | E2E | anthropics/skills: webapp-testing | Apache-2.0 | copied verbatim (6 files, frontmatter adapted to spec only), licence verified from the skill's own LICENSE.txt, commit ca45fc4 | built |
 | Mutation (JS/TS) | Stryker | Apache-2.0 | own-words skill, Stryker used as-is (command runner for node:test), licence verified from primary LICENSE | built |
 | Mutation beyond JS/TS | mutmut (boxed/mutmut) | BSD-3-Clause | own-words skill, mutmut used as-is (Python proof), licence verified from primary LICENSE, 3.8.1 | built |
-| Independent review | anthropics/claude-plugins-official: pr-review-toolkit | MIT vs Apache-2.0 — verify per-plugin LICENSE.txt | copy after check | todo |
+| Independent review | anthropics/claude-plugins-official: pr-review-toolkit | Apache-2.0 | own-words skill, 6 reviewer agents + review-pr command bundled as-is, licence verified from the plugin's own LICENSE file (the README's "MIT" line is an error in the README) | built |
 | Evidence / eval | microsoft/waza | MIT | bundle (CLI) | todo |
 | Benchmark | SWE-bench | MIT | benchmark, not a skill | todo |
 | Sandbox runtime | SWE-agent/swe-rex | MIT | bundle, container isolation only | todo |
@@ -76,7 +76,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 |---|---|---|---|---|
 | Debugging loop | diagnosing-bugs (installed) | MIT | covered | covered |
 | Tech-debt cleanup | ponytail-debt (installed) | MIT | covered | covered |
-| Simplification | pr-review-toolkit: code-simplifier; getsentry: code-simplifier | Apache-2.0 | rewrite as SKILL.md | todo |
+| Simplification | pr-review-toolkit: code-simplifier | Apache-2.0 | code-simplifier agent bundled as-is in independent-review (runs after a review passes); no separate SKILL.md written | built |
 | Incomplete refactoring | — | — | Write from scratch (detector for orphaned consumers) | built |
 | Generic refactoring | MuhiminOsim/code-refactoring-skill | MIT, 12 stars | copy, with caution | todo |
 
@@ -104,7 +104,7 @@ Built already (kept here for the record, not as remaining work): dedicated incom
 
 - `openai/skills` — deprecated, points to `openai/plugins`.
 - Anthropic document skills (`docx`/`pdf`/`pptx`/`xlsx`) — proprietary / source-available, not open source.
-- `anthropics/claude-code` code-review — proprietary ("All rights reserved"); rewrite its parallel-review + confidence pattern if used.
+- `anthropics/claude-plugins-official` code-review plugin — Apache-2.0 (its own LICENSE file, verified 2026-11-06; the old note calling it proprietary was wrong — that claim was about a different repo, `anthropics/claude-code`, not this plugin). Not bundled: pr-review-toolkit already provides the independent-review capability, and bundling both would duplicate it. Its parallel-review + confidence-filter pattern is a future alternative, not a current gap.
 - Any candidate whose LICENSE was not read directly — rewrite until verified.
 
 ## Sources that shaped this map
