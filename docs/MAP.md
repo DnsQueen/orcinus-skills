@@ -8,7 +8,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 
 | Need | Best source | Licence | Integration | Status |
 |---|---|---|---|---|
-| Fleeting capture | — | — | Write from scratch (persistent store); in-session capture is in idea-calibrate step 1 | built (in-session), todo (store) |
+| Fleeting capture | — | — | Write from scratch: skills/idea-capture + scripts/capture.py (Python, stdlib only), one Markdown file per idea in the project's ideas/ store | built |
 | Sharpen / brainstorm | egm-brainstorm, egm-draft (installed) | Apache-2.0 | covered | covered |
 | Process / grill | grill-me / grilling (installed) | MIT | covered | covered |
 | Nurture / manage | phuryn/pm-skills: opportunity-solution-tree, hypothesis | MIT | own-words in idea-calibrate step 3 | built |
@@ -96,10 +96,9 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 
 ## Must write from scratch (v1 or v2)
 
-- Fleeting raw-idea capture store.
 - Dedicated performance/health skill (candidate found in second round; still needs a proven eval).
 
-Built already (kept here for the record, not as remaining work): dedicated incomplete-refactor detector, package-registry publish, resilient API client consumption and contract-test execution (answered by frontend-data-contracts, injected verbatim), mutation testing beyond JS/TS (answered by mutation-testing-python, mutmut as-is).
+Built already (kept here for the record, not as remaining work): dedicated incomplete-refactor detector, package-registry publish, resilient API client consumption and contract-test execution (answered by frontend-data-contracts, injected verbatim), mutation testing beyond JS/TS (answered by mutation-testing-python, mutmut as-is), fleeting raw-idea capture store (answered by idea-capture, with a script).
 
 ## Do not use
 

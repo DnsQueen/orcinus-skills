@@ -1,0 +1,69 @@
+---
+name: idea-capture
+description: Capture a raw idea the moment it arrives and keep it in a durable store, so it survives between sessions. Use whenever an idea comes up mid-work, in passing, or outside a calibration session — before it is lost — and when you need to find, promote, or drop a stored idea.
+license: MIT
+---
+
+# IDEA-CAPTURE — a fleeting idea that is not captured is lost
+
+An idea that arrives mid-work and is not written down is gone by the next session. This skill is the store for raw ideas: one Markdown file per idea, in the project's `ideas/` directory, written verbatim and never edited. Calibration is a separate step (`idea-calibrate`); this skill only makes sure the idea is still there when you are ready for it.
+
+## Rules
+
+- Capture first, calibrate later. When a raw idea arrives, write it down before doing anything else with it — before answering, before coding, before the next message.
+- Verbatim, always. The raw text is the idea as spoken, with the date and who said it. Never edit, improve, or interpret it after capture.
+- The store lives in the project (`ideas/`), committed with it. A store in `/tmp` is lost on the next restart; a store in the project survives.
+- A dropped idea is never deleted. Dropping only changes the status and records the reason. The file, the raw text, and the reason stay.
+- Statuses move one way: `raw` → `calibrated` → `scoped`, or any → `dropped`. A dropped idea never comes back as raw; if it returns, capture it again as a new idea.
+
+## Steps, in order
+
+### 1. Capture
+
+Run the script (`scripts/capture.py`, Python, standard library only):
+
+```
+capture.py capture --store <project>/ideas --text "<the idea, verbatim>" --source "<who said it>"
+```
+
+It prints the idea id (`YYYYMMDD-HHMMSS-slug`). An empty idea is refused (exit 1, no file created). If two ideas arrive in the same second, the second gets a `-2` suffix — the id is always unique.
+
+### 2. Find it later
+
+- `capture.py list --store <project>/ideas` — every idea, with status and date.
+- `capture.py list --store <project>/ideas --status raw` — only the unprocessed ones.
+- `capture.py search --store <project>/ideas <keyword>` — ideas whose text contains the keyword (case-insensitive; works in Persian and English).
+- `capture.py show --store <project>/ideas <id>` — the whole file.
+
+### 3. Move it forward
+
+When the idea is calibrated with `idea-calibrate`, record it:
+
+```
+capture.py promote --store <project>/ideas <id> calibrated --note "<what it became>"
+```
+
+When the calibrated brief is scoped into v1, promote it to `scoped`. When the idea is not going ahead, drop it — with a reason, always:
+
+```
+capture.py drop --store <project>/ideas <id> --reason "<why not>"
+```
+
+Every move appends one line to the file's History. The raw text is never touched.
+
+## Report
+
+Return the report in this form:
+
+- Captured (id, date, source).
+- Store (path, number of ideas by status).
+- Moved (every status change, with the reason).
+- Verdict: PASS (the idea is on disk verbatim, findable by search, and every move is recorded) or FAIL (an idea was lost, edited, or deleted, or a move was not recorded).
+
+## Scope
+
+This skill is the store only. It does not sharpen, validate, or scope an idea — that is `idea-calibrate`. It does not decide what to build — that is the user, at the Idea → Code gate. The store is plain Markdown files; there is no database, no server, and no sync — the project's own git history is the backup.
+
+## Sources
+
+Written from scratch. No ready skill answers this need: the research found capture-in-session (idea-calibrate, step 1) but no persistent store for fleeting ideas between sessions.

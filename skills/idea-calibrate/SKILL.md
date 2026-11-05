@@ -19,7 +19,7 @@ Turn a vague idea into a brief that is sharp enough to code from, and no sharper
 
 ### 1. Capture the raw idea
 
-Write it down verbatim, with the date and who said it. Do not edit, improve, or interpret it yet. A fleeting idea that is not captured is lost.
+Write it down verbatim, with the date and who said it. Do not edit, improve, or interpret it yet. A fleeting idea that is not captured is lost. If the idea arrived outside this session, it should already be in the store — pull it from there with `idea-capture` instead of re-typing it.
 
 ### 2. Clarify the problem
 
