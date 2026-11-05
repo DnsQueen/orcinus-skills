@@ -38,6 +38,7 @@ Then invoke `/orcinus` in your agent and keep working. ORCINUS detects the stage
 - `skills/monitoring-observability` — monitoring and observability patterns for Prometheus, Grafana, Langfuse LLM tracing, and drift detection, copied verbatim from a ready-made skill (OrchestKit, MIT, see its `ATTRIBUTION.md`), not rewritten. It is a reference skill, loaded by `finalize` when a project uses those stacks.
 - `skills/ask-questions-if-underspecified` — clarify requirements before implementing, copied verbatim from a ready-made skill (Agentic Awesome Skills, MIT, see its `ATTRIBUTION.md`), not rewritten. The router loads it whenever a request is underspecified, before any implementation.
 - `skills/webapp-testing` — test local web applications in a real browser with Playwright, copied verbatim from a ready-made skill (Anthropic, Apache-2.0, see its `ATTRIBUTION.md`), not rewritten. The router loads it whenever the project has a web UI.
+- `skills/mutation-testing` — check whether the tests actually catch bugs by mutating the code and seeing if the tests fail, using Stryker as-is (Apache-2.0). JavaScript/TypeScript only.
 - `docs/MAP.md` — the full 0–100 map: every micro-step, its best proven source, its licence, and its integration method (copy / rewrite / bundle / write from scratch).
 - `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v1 does and does not do.
 
@@ -70,4 +71,4 @@ Sources that shaped v1 include Anthropic (Effective Harnesses, Agent Skills, cod
 
 ## Status
 
-v1 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + security-review + finalize + monitoring-observability (injected verbatim) + ask-questions-if-underspecified (injected verbatim) + webapp-testing (injected verbatim) + map. The rest is built in order, with eval scenarios, not by dumping skills. Where a ready skill answers a need, it is used as-is — never rewritten.
+v1 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + security-review + finalize + monitoring-observability (injected verbatim) + ask-questions-if-underspecified (injected verbatim) + webapp-testing (injected verbatim) + mutation-testing + map. The rest is built in order, with eval scenarios, not by dumping skills. Where a ready skill answers a need, it is used as-is — never rewritten.

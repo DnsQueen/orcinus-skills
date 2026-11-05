@@ -51,7 +51,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 |---|---|---|---|---|
 | Unit / integration | tdd (installed) | MIT | covered | covered |
 | E2E | anthropics/skills: webapp-testing | Apache-2.0 | copied verbatim (6 files, frontmatter adapted to spec only), licence verified from the skill's own LICENSE.txt, commit ca45fc4 | built |
-| Mutation (JS/TS) | Stryker | Apache-2.0 | bundle (CLI) | todo |
+| Mutation (JS/TS) | Stryker | Apache-2.0 | own-words skill, Stryker used as-is (command runner for node:test), licence verified from primary LICENSE | built |
 | Mutation beyond JS/TS | — | — | Write from scratch / per-language CLI unverified | todo |
 | Independent review | anthropics/claude-plugins-official: pr-review-toolkit | MIT vs Apache-2.0 — verify per-plugin LICENSE.txt | copy after check | todo |
 | Evidence / eval | microsoft/waza | MIT | bundle (CLI) | todo |
