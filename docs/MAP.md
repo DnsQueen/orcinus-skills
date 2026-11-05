@@ -88,7 +88,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Long-context handoff | claude-handoff (dariohansson) | MIT | merge into installed handoff | todo |
 | Onboarding contributor | codebase-onboarding (kart-rc) | unverified | rewrite | todo |
 | Release | googleapis/release-please | Apache-2.0 | used as-is in finalize (CLI + Action), licence verified from primary LICENSE | built |
-| Registry publish | — | — | Write from scratch (release-please does not publish to registries) | todo |
+| Registry publish | — | — | Write from scratch (release-please does not publish to registries) | built |
 | Monitoring after publish | yonatangross/orchestkit: monitoring-observability | MIT | copied verbatim (28 files, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 016aefa | built |
 | Bug triage / feedback | florianbruniaux: issue-triage | CC-BY-SA-4.0 | separate module, not verbatim into MIT | todo |
 | Clarification / escalation | sickn33/antigravity-awesome-skills: ask-questions-if-underspecified | MIT | copied verbatim (1 file, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 739c841 | built |
