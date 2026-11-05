@@ -68,7 +68,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Supply-chain | google/osv-scanner | Apache-2.0 | own-words in security-review step 4 (npm audit + osv-scanner when installed) | built |
 | Static analysis | trailofbits/skills: static-analysis | CC-BY-SA-4.0 | own-words in security-review step 5, never copied | built (manual + Semgrep/CodeQL when available) |
 | Performance budgets | addyosmani/agent-skills: performance-optimization | MIT | copy | built |
-| Health / monitoring | ericrisco/rsc-harness: monitoring | MIT per secondary, verify LICENSE | copy after verify | todo |
+| Health / monitoring | ericrisco/rsc-harness: monitoring | MIT | copied verbatim (6 files, frontmatter adapted to spec), licence verified from primary LICENSE, commit 111532c; the outside view (probes, SLO burn, on-call) — complements monitoring-observability (the telemetry side) | built |
 
 ## F — Debugging / Refactor (50–79)
 
@@ -96,9 +96,9 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 
 ## Must write from scratch (v1 or v2)
 
-- Dedicated performance/health skill (candidate found in second round; still needs a proven eval).
+(none remaining — every item on this list now has a proven answer.)
 
-Built already (kept here for the record, not as remaining work): dedicated incomplete-refactor detector, package-registry publish, resilient API client consumption and contract-test execution (answered by frontend-data-contracts, injected verbatim), mutation testing beyond JS/TS (answered by mutation-testing-python, mutmut as-is), fleeting raw-idea capture store (answered by idea-capture, with a script).
+Built already (kept here for the record, not as remaining work): dedicated incomplete-refactor detector, package-registry publish, resilient API client consumption and contract-test execution (answered by frontend-data-contracts, injected verbatim), mutation testing beyond JS/TS (answered by mutation-testing-python, mutmut as-is), fleeting raw-idea capture store (answered by idea-capture, with a script), dedicated performance/health skill (answered by monitoring, injected verbatim from rsc-harness, with a proven eval).
 
 ## Do not use
 
