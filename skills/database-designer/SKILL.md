@@ -62,6 +62,8 @@ Write the user's hot queries into a query-patterns JSON first (copy `assets/samp
 python3 migration_generator.py --current current_schema.json --target target_schema.json --zero-downtime --format sql -o migration.sql
 ```
 
+The generator emits PostgreSQL-dialect SQL (`information_schema` validation, named constraints, `ADD CONSTRAINT`). SQLite executes only the overlapping subset — the SQLite integration tests prove the subset, and the PostgreSQL CI job (`postgres-migration` in `.github/workflows/ci.yml`, running `test_postgres_migration.py`) proves the full forward SQL, including FK enforcement and the FK-order case SQLite cannot see.
+
 `--zero-downtime` emits an expand-contract plan. That plan is a DRAFT, not a verified zero-downtime migration: it has no write-synchronisation and no cutover. The backfill check IS in the plan now — the COPY step carries a validation query that must return 0 before the contract phase runs. It still needs application coordination (dual-write to both columns during EXPAND, a cutover). Do not run it automatically on real data. The plan's summary marks data-loss steps (`backup_required`, `data_loss_steps`): a dropped column or table comes back empty from its rollback — the structure is restored, the data is not. `--validate-only` checks feasibility without generating SQL.
 
 ### 4. Verification loop

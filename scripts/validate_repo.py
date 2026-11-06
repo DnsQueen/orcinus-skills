@@ -59,6 +59,7 @@ failure, never silently skipped — except where the check itself says
 otherwise. Dates in this repo are Asia/Tehran local time unless a
 file says UTC.
 """
+
 import json
 import re
 import sys
@@ -66,8 +67,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 KNOWN_LICENSES = {
-    "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC",
-    "CC-BY-4.0", "CC-BY-SA-4.0", "Unlicense",
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "CC-BY-4.0",
+    "CC-BY-SA-4.0",
+    "Unlicense",
 }
 MAX_SKILL_LINES = 500
 # Agent Skills spec (agentskills.io/specification): name is 1-64
@@ -81,9 +88,16 @@ MAX_SKILL_LINES = 500
 # hosts ignore; anything else in frontmatter is rejected.
 NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 ALLOWED_FRONTMATTER = {
-    "name", "description", "license", "compatibility", "metadata",
-    "allowed-tools", "user-invocable", "disable-model-invocation",
-    "when_to_use", "argument-hint",
+    "name",
+    "description",
+    "license",
+    "compatibility",
+    "metadata",
+    "allowed-tools",
+    "user-invocable",
+    "disable-model-invocation",
+    "when_to_use",
+    "argument-hint",
 }
 
 
@@ -96,6 +110,7 @@ def _license_is_known(expr):
         return False
     parts = re.split(r"\s+(?:AND|OR)\s+", expr.strip())
     return all(p in KNOWN_LICENSES for p in parts)
+
 
 failures = []
 warnings = []
@@ -137,12 +152,12 @@ def _value_before_comment(value):
                 if i + 1 < len(value) and value[i + 1] == "'":
                     i += 2
                     continue
-                return value[:i + 1]
+                return value[: i + 1]
             if quote == '"' and ch == "\\":
                 i += 2
                 continue
             if quote == '"' and ch == '"':
-                return value[:i + 1]
+                return value[: i + 1]
             i += 1
         raise ValueError(f"unterminated quoted scalar: {value!r}")
     if value[0] in "[{":
@@ -162,11 +177,10 @@ def _value_before_comment(value):
             elif ch == close_ch:
                 depth -= 1
                 if depth == 0:
-                    rest = value[i + 1:].strip()
+                    rest = value[i + 1 :].strip()
                     if rest and not rest.startswith("#"):
-                        raise ValueError(
-                            f"unexpected text after value: {value!r}")
-                    return value[:i + 1]
+                        raise ValueError(f"unexpected text after value: {value!r}")
+                    return value[: i + 1]
             i += 1
         raise ValueError(f"unterminated flow collection: {value!r}")
     return _strip_comment(value).strip()
@@ -187,8 +201,7 @@ def _parse_plain_scalar(text):
             return int(text)
         except ValueError:
             pass
-    if re.fullmatch(r"[-+]?(\.[0-9]+|[0-9]+\.[0-9]*)([eE][-+]?[0-9]+)?",
-                    text):
+    if re.fullmatch(r"[-+]?(\.[0-9]+|[0-9]+\.[0-9]*)([eE][-+]?[0-9]+)?", text):
         try:
             return float(text)
         except ValueError:
@@ -379,8 +392,7 @@ def _parse_block(lines, start, indent):
                     if line == "":
                         text += "\n"
                     else:
-                        text += (" " if text and not text.endswith("\n")
-                                 else "") + line
+                        text += (" " if text and not text.endswith("\n") else "") + line
             else:
                 text = "\n".join(content)
             mapping[key] = _apply_chomping(text, chomp)
@@ -478,51 +490,62 @@ def check_skill_frontmatter():
             continue
         lines = skill.read_text(encoding="utf-8").splitlines()
         if len(lines) >= MAX_SKILL_LINES:
-            fail(f"{skill_dir.name}/SKILL.md: {len(lines)} lines, "
-                 f"over the {MAX_SKILL_LINES}-line cap")
+            fail(
+                f"{skill_dir.name}/SKILL.md: {len(lines)} lines, "
+                f"over the {MAX_SKILL_LINES}-line cap"
+            )
         fields, err = parse_frontmatter(skill)
         if err:
             fail(f"{skill_dir.name}/SKILL.md: {err}")
             continue
         for key in sorted(fields):
             if key not in ALLOWED_FRONTMATTER:
-                fail(f"{skill_dir.name}/SKILL.md: frontmatter field "
-                     f"{key!r} is not a spec field or a Claude Code "
-                     f"extension field")
+                fail(
+                    f"{skill_dir.name}/SKILL.md: frontmatter field "
+                    f"{key!r} is not a spec field or a Claude Code "
+                    f"extension field"
+                )
         name = fields.get("name")
-        if not isinstance(name, str) or not NAME_RE.match(name) \
-                or len(name) > 64:
-            fail(f"{skill_dir.name}/SKILL.md: frontmatter name {name!r} "
-                 f"must be 1-64 lowercase letters, digits, and hyphens, "
-                 f"with no leading, trailing, or double hyphen")
+        if not isinstance(name, str) or not NAME_RE.match(name) or len(name) > 64:
+            fail(
+                f"{skill_dir.name}/SKILL.md: frontmatter name {name!r} "
+                f"must be 1-64 lowercase letters, digits, and hyphens, "
+                f"with no leading, trailing, or double hyphen"
+            )
         elif name != skill_dir.name:
-            fail(f"{skill_dir.name}/SKILL.md: frontmatter name is "
-                 f"{name!r}, expected {skill_dir.name!r}")
+            fail(
+                f"{skill_dir.name}/SKILL.md: frontmatter name is "
+                f"{name!r}, expected {skill_dir.name!r}"
+            )
         desc = fields.get("description")
         if not isinstance(desc, str) or not 1 <= len(desc) <= 1024:
-            fail(f"{skill_dir.name}/SKILL.md: frontmatter description "
-                 f"must be a string of 1-1024 characters")
+            fail(
+                f"{skill_dir.name}/SKILL.md: frontmatter description "
+                f"must be a string of 1-1024 characters"
+            )
         lic = fields.get("license")
         if not lic:
             fail(f"{skill_dir.name}/SKILL.md: frontmatter license is missing")
         elif not _license_is_known(lic):
             fail(f"{skill_dir.name}/SKILL.md: unknown license {lic!r}")
         compat = fields.get("compatibility")
-        if compat is not None and (
-                not isinstance(compat, str) or len(compat) > 500):
-            fail(f"{skill_dir.name}/SKILL.md: compatibility must be a "
-                 f"string of at most 500 characters")
+        if compat is not None and (not isinstance(compat, str) or len(compat) > 500):
+            fail(
+                f"{skill_dir.name}/SKILL.md: compatibility must be a "
+                f"string of at most 500 characters"
+            )
         metadata = fields.get("metadata")
         if metadata is not None and (
-                not isinstance(metadata, dict)
-                or not all(isinstance(k, str) and isinstance(v, str)
-                           for k, v in metadata.items())):
-            fail(f"{skill_dir.name}/SKILL.md: metadata must be a map "
-                 f"from string keys to string values (Agent Skills spec)")
+            not isinstance(metadata, dict)
+            or not all(isinstance(k, str) and isinstance(v, str) for k, v in metadata.items())
+        ):
+            fail(
+                f"{skill_dir.name}/SKILL.md: metadata must be a map "
+                f"from string keys to string values (Agent Skills spec)"
+            )
         for flag in ("user-invocable", "disable-model-invocation"):
             if flag in fields and not isinstance(fields[flag], bool):
-                fail(f"{skill_dir.name}/SKILL.md: {flag} must be a "
-                     f"boolean")
+                fail(f"{skill_dir.name}/SKILL.md: {flag} must be a boolean")
         # One install, one entry point: the user invokes only the
         # router. Every sub-skill hides from the / menu
         # (user-invocable: false — a real boolean, not the string
@@ -530,15 +553,21 @@ def check_skill_frontmatter():
         # router invokes sub-skills itself.
         if skill_dir.name == "orcinus":
             if fields.get("user-invocable") is False:
-                fail("orcinus/SKILL.md: the router must stay "
-                     "user-invocable — it is the one entry point")
+                fail(
+                    "orcinus/SKILL.md: the router must stay "
+                    "user-invocable — it is the one entry point"
+                )
         elif fields.get("user-invocable") is not False:
-            fail(f"{skill_dir.name}/SKILL.md: user-invocable must be "
-                 f"false — only the router is a user entry point")
+            fail(
+                f"{skill_dir.name}/SKILL.md: user-invocable must be "
+                f"false — only the router is a user entry point"
+            )
         if fields.get("disable-model-invocation") is True:
-            fail(f"{skill_dir.name}/SKILL.md: disable-model-invocation "
-                 f"must not be true — the router invokes sub-skills "
-                 f"itself")
+            fail(
+                f"{skill_dir.name}/SKILL.md: disable-model-invocation "
+                f"must not be true — the router invokes sub-skills "
+                f"itself"
+            )
 
 
 def license_from_file(path):
@@ -548,7 +577,11 @@ def license_from_file(path):
         return "Apache-2.0"
     if text.startswith("MIT License"):
         return "MIT"
-    if "BSD 3-Clause" in text or "Redistribution and use in source and binary forms" in text and "Neither the name" in text:
+    if (
+        "BSD 3-Clause" in text
+        or "Redistribution and use in source and binary forms" in text
+        and "Neither the name" in text
+    ):
         return "BSD-3-Clause"
     if "BSD 2-Clause" in text:
         return "BSD-2-Clause"
@@ -568,8 +601,10 @@ def check_attribution_pairs():
         # nothing was copied verbatim (own-words merge), but not when the
         # content was copied or bundled as-is.
         if lic.is_file() and not attr.is_file():
-            fail(f"{skill_dir.name}: LICENSE.txt exists but ATTRIBUTION.md "
-                 f"is missing — explain the upstream source")
+            fail(
+                f"{skill_dir.name}: LICENSE.txt exists but ATTRIBUTION.md "
+                f"is missing — explain the upstream source"
+            )
             continue
         if not attr.is_file():
             continue
@@ -580,12 +615,14 @@ def check_attribution_pairs():
         # A negative mention ("neither SKILL.md verbatim", "no code was
         # copied") does not count, and an own-words method that merely
         # uses a tool as-is does not put the tool's files in the folder.
-        copied = bool(re.search(
-            r"byte-identical|bundled|copied verbatim|is verbatim|are verbatim",
-            lower))
+        copied = bool(
+            re.search(r"byte-identical|bundled|copied verbatim|is verbatim|are verbatim", lower)
+        )
         if copied and not lic.is_file():
-            fail(f"{skill_dir.name}: ATTRIBUTION.md says upstream content "
-                 f"was copied or bundled, but LICENSE.txt is missing")
+            fail(
+                f"{skill_dir.name}: ATTRIBUTION.md says upstream content "
+                f"was copied or bundled, but LICENSE.txt is missing"
+            )
             continue
         # Frontmatter license must agree with ATTRIBUTION.md and LICENSE.txt.
         fields, err = parse_frontmatter(skill_dir / "SKILL.md")
@@ -619,8 +656,10 @@ def check_attribution_pairs():
             # words — which it does, so the split is documented.
             lower = attr_text.lower()
             if "own words" not in lower and "own-words" not in lower:
-                fail(f"{skill_dir.name}: ATTRIBUTION.md says license "
-                     f"{attr_lic!r} but the frontmatter says {front!r}")
+                fail(
+                    f"{skill_dir.name}: ATTRIBUTION.md says license "
+                    f"{attr_lic!r} but the frontmatter says {front!r}"
+                )
         file_lic = license_from_file(lic) if lic.is_file() else None
         if file_lic and file_lic != front:
             # The frontmatter license is the skill's own text; the
@@ -628,10 +667,16 @@ def check_attribution_pairs():
             # differ legitimately (e.g. independent-review: MIT text,
             # Apache-2.0 bundled agents) — but then ATTRIBUTION.md
             # must say so explicitly.
-            if "bundled" not in attr_text.lower() and "own-words" not in attr_text.lower() and "own words" not in attr_text.lower():
-                fail(f"{skill_dir.name}: LICENSE.txt is {file_lic} but the "
-                     f"frontmatter says {front!r}, and ATTRIBUTION.md does "
-                     f"not explain the split")
+            if (
+                "bundled" not in attr_text.lower()
+                and "own-words" not in attr_text.lower()
+                and "own words" not in attr_text.lower()
+            ):
+                fail(
+                    f"{skill_dir.name}: LICENSE.txt is {file_lic} but the "
+                    f"frontmatter says {front!r}, and ATTRIBUTION.md does "
+                    f"not explain the split"
+                )
 
 
 def _resolve_inside(relative):
@@ -680,8 +725,10 @@ def check_third_party_notices():
             continue
         if (skill_dir / "ATTRIBUTION.md").is_file():
             if skill_dir.name not in listed:
-                fail(f"THIRD_PARTY_NOTICES.md does not list "
-                     f"{skill_dir.name} (it has an ATTRIBUTION.md)")
+                fail(
+                    f"THIRD_PARTY_NOTICES.md does not list "
+                    f"{skill_dir.name} (it has an ATTRIBUTION.md)"
+                )
     # Every skill listed must exist and its license must agree with the
     # upstream license recorded in its ATTRIBUTION.md (the manifest
     # records the third-party content's license, which for an own-words
@@ -712,8 +759,10 @@ def check_third_party_notices():
                 attr_lic = "ISC"
         row = re.search(rf"\|\s*{re.escape(name)}\s*\|[^|]*\|\s*([A-Za-z0-9.+-]+)\s*\|", text)
         if row and attr_lic and row.group(1) != attr_lic:
-            fail(f"THIRD_PARTY_NOTICES.md says {name} is {row.group(1)} "
-                 f"but its ATTRIBUTION.md says {attr_lic!r}")
+            fail(
+                f"THIRD_PARTY_NOTICES.md says {name} is {row.group(1)} "
+                f"but its ATTRIBUTION.md says {attr_lic!r}"
+            )
 
 
 def check_glossary_copy():
@@ -723,12 +772,16 @@ def check_glossary_copy():
         fail("GLOSSARY.md is missing at the repo root")
         return
     if not bundled.is_file():
-        fail("skills/orcinus/references/GLOSSARY.md is missing — the "
-             "router's glossary must travel with the skill")
+        fail(
+            "skills/orcinus/references/GLOSSARY.md is missing — the "
+            "router's glossary must travel with the skill"
+        )
         return
     if root_glossary.read_bytes() != bundled.read_bytes():
-        fail("skills/orcinus/references/GLOSSARY.md differs from the "
-             "canonical GLOSSARY.md — copy the root file over it")
+        fail(
+            "skills/orcinus/references/GLOSSARY.md differs from the "
+            "canonical GLOSSARY.md — copy the root file over it"
+        )
 
 
 def _stage_ranges(text):
@@ -773,12 +826,16 @@ def check_stage_ranges():
         elif m is None:
             fail(f"docs/MAP.md does not define a range for {map_name}")
         elif relation == "equal" and r != m:
-            fail(f"stage range mismatch: router {router_name} is "
-                 f"{r[0]}–{r[1]} but MAP {map_name} is {m[0]}–{m[1]}")
+            fail(
+                f"stage range mismatch: router {router_name} is "
+                f"{r[0]}–{r[1]} but MAP {map_name} is {m[0]}–{m[1]}"
+            )
         elif relation == "inside" and not (m[0] <= r[0] and r[1] <= m[1]):
-            fail(f"stage range mismatch: router {router_name} is "
-                 f"{r[0]}–{r[1]}, which is not inside MAP {map_name} "
-                 f"{m[0]}–{m[1]}")
+            fail(
+                f"stage range mismatch: router {router_name} is "
+                f"{r[0]}–{r[1]}, which is not inside MAP {map_name} "
+                f"{m[0]}–{m[1]}"
+            )
     # The linear stages must not overlap: a stage detected from
     # evidence must name one stage, not two.
     linear = ["Idea", "Architecture", "Scaffold", "Build", "Verify", "Finalize"]
@@ -788,8 +845,10 @@ def check_stage_ranges():
         if r is None:
             continue
         if prev is not None and r[0] <= prev[1]:
-            fail(f"linear stage ranges overlap: {name} starts at "
-                 f"{r[0]} but the previous stage ends at {prev[1]}")
+            fail(
+                f"linear stage ranges overlap: {name} starts at "
+                f"{r[0]} but the previous stage ends at {prev[1]}"
+            )
         prev = r
 
 
@@ -820,8 +879,10 @@ def check_plugin_manifests():
         for skill_path in data.get("skills", []):
             target = _resolve_inside(skill_path)
             if target is None or not target.is_dir():
-                fail(f"plugin.json lists skills path {skill_path!r}, which does not exist"
-                     + (" (it escapes the repo)" if target is None else ""))
+                fail(
+                    f"plugin.json lists skills path {skill_path!r}, which does not exist"
+                    + (" (it escapes the repo)" if target is None else "")
+                )
     if marketplace.is_file():
         try:
             data = json.loads(marketplace.read_text(encoding="utf-8"))
@@ -832,19 +893,25 @@ def check_plugin_manifests():
             if source.startswith("./"):
                 target = _resolve_inside(source)
                 if target is None or not target.is_dir():
-                    fail(f"marketplace.json plugin {entry.get('name')!r} has "
-                         f"source {source!r}, which does not exist"
-                         + (" (it escapes the repo)" if target is None else ""))
+                    fail(
+                        f"marketplace.json plugin {entry.get('name')!r} has "
+                        f"source {source!r}, which does not exist"
+                        + (" (it escapes the repo)" if target is None else "")
+                    )
         description = data.get("description")
         if not isinstance(description, str) or not description.strip():
-            fail("marketplace.json is missing a non-empty description — "
-                 "`claude plugin validate --strict` warns without one")
+            fail(
+                "marketplace.json is missing a non-empty description — "
+                "`claude plugin validate --strict` warns without one"
+            )
     # `claude plugin validate --strict` fails without a plugin icon
     # (ICON_MISSING). The CLI is the real check; this guard keeps the
     # repo green even on a machine without the CLI.
     if not (plugin_dir / "icon.png").is_file():
-        fail(".claude-plugin/icon.png is missing — `claude plugin "
-             "validate --strict` fails without it (ICON_MISSING)")
+        fail(
+            ".claude-plugin/icon.png is missing — `claude plugin "
+            "validate --strict` fails without it (ICON_MISSING)"
+        )
 
 
 def check_skill_counts():
@@ -859,15 +926,18 @@ def check_skill_counts():
             data = json.loads(plugin.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             data = {}
-        m = re.search(r"Router \+ (\d+) focused sub-skills",
-                      data.get("description", ""))
+        m = re.search(r"Router \+ (\d+) focused sub-skills", data.get("description", ""))
         if m is None:
-            fail("plugin.json description does not state the sub-skill "
-                 "count as 'Router + N focused sub-skills'")
+            fail(
+                "plugin.json description does not state the sub-skill "
+                "count as 'Router + N focused sub-skills'"
+            )
         elif int(m.group(1)) != count - 1:
-            fail(f"plugin.json says 'Router + {m.group(1)} focused "
-                 f"sub-skills' but there are {count} skill folders "
-                 f"(router + {count - 1})")
+            fail(
+                f"plugin.json says 'Router + {m.group(1)} focused "
+                f"sub-skills' but there are {count} skill folders "
+                f"(router + {count - 1})"
+            )
     readme = ROOT / "README.md"
     if readme.is_file():
         text = readme.read_text(encoding="utf-8")
@@ -875,16 +945,24 @@ def check_skill_counts():
         if m is None:
             fail("README.md does not state the skill count as 'all N skills'")
         elif int(m.group(1)) != count:
-            fail(f"README.md says 'all {m.group(1)} skills' but there "
-                 f"are {count} skill folders")
+            fail(f"README.md says 'all {m.group(1)} skills' but there are {count} skill folders")
 
 
 def check_manifest():
     """skills/manifest.json is the single source of truth for the skill
-    inventory: name, licence, stages, source, and status per skill.
-    It must agree with the actual skill folders and with each skill's
-    frontmatter, so a skill added, removed, or re-licensed without
-    updating the manifest fails the build."""
+    inventory: name, licence, stages, source, integration, and status
+    per skill. It must agree with the actual skill folders and with
+    each skill's frontmatter, so a skill added, removed, or
+    re-licensed without updating the manifest fails the build.
+    `integration` says how the skill's content relates to its
+    upstream: verbatim (copied from upstream; frontmatter adapted
+    only, plus fixes recorded in ATTRIBUTION.md), wrapper (own-words
+    method around a bundled as-is upstream component), merged
+    (own-words combination of two or more upstreams), or from-scratch
+    (no upstream). A non-from-scratch integration needs a full
+    github.com source URL and a 40-hex upstream commit; a
+    from-scratch skill has neither — a tool it drives is recorded in
+    ATTRIBUTION.md, not as a source."""
     path = ROOT / "skills" / "manifest.json"
     if not path.is_file():
         fail("skills/manifest.json is missing")
@@ -902,10 +980,8 @@ def check_manifest():
     for name in sorted(dirs - set(entries)):
         fail(f"skill folder skills/{name} is not in skills/manifest.json")
     for name in sorted(set(entries) - dirs):
-        fail(f"skills/manifest.json lists {name}, but there is no "
-             f"skills/{name} folder")
-    valid_stages = {"0-9", "10-19", "20-39", "40-59", "50-79",
-                    "80-100", "0-100"}
+        fail(f"skills/manifest.json lists {name}, but there is no skills/{name} folder")
+    valid_stages = {"0-9", "10-19", "20-39", "40-59", "50-79", "80-100", "0-100"}
     stages_path = ROOT / "skills" / "stages.json"
     if not stages_path.is_file():
         fail("skills/stages.json is missing")
@@ -922,11 +998,8 @@ def check_manifest():
     for name in sorted(dirs - set(registry)):
         fail(f"skill folder skills/{name} is not in skills/stages.json")
     for name in sorted(set(registry) - dirs):
-        fail(f"skills/stages.json lists {name}, but there is no "
-             f"skills/{name} folder")
-    source_re = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-    url_re = re.compile(
-        r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/?$")
+        fail(f"skills/stages.json lists {name}, but there is no skills/{name} folder")
+    url_re = re.compile(r"^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/?$")
     sha_re = re.compile(r"^[0-9a-f]{40}$")
     for name in sorted(set(entries) & dirs):
         entry = entries[name]
@@ -934,67 +1007,119 @@ def check_manifest():
             fail(f"skills/manifest.json entry for {name} is not an object")
             continue
         if entry.get("name") != name:
-            fail(f"skills/manifest.json entry for {name} has name "
-                 f"{entry.get('name')!r}, expected {name!r}")
+            fail(
+                f"skills/manifest.json entry for {name} has name "
+                f"{entry.get('name')!r}, expected {name!r}"
+            )
         fm, _err = parse_frontmatter(ROOT / "skills" / name / "SKILL.md")
         fm_desc = fm.get("description") if fm else None
         if isinstance(fm_desc, str):
             fm_desc = fm_desc.strip()
         if entry.get("description") != fm_desc:
-            fail(f"skills/manifest.json says {name} has description "
-                 f"{str(entry.get('description'))[:60]!r}, but its "
-                 f"SKILL.md frontmatter says "
-                 f"{str(fm_desc)[:60]!r} — run "
-                 f"scripts/generate_manifest.py")
+            fail(
+                f"skills/manifest.json says {name} has description "
+                f"{str(entry.get('description'))[:60]!r}, but its "
+                f"SKILL.md frontmatter says "
+                f"{str(fm_desc)[:60]!r} — run "
+                f"scripts/generate_manifest.py"
+            )
         lic = fm.get("license") if fm else None
         if entry.get("license") != lic:
-            fail(f"skills/manifest.json says {name} is licensed "
-                 f"{entry.get('license')!r}, but its SKILL.md frontmatter "
-                 f"says {lic!r}")
+            fail(
+                f"skills/manifest.json says {name} is licensed "
+                f"{entry.get('license')!r}, but its SKILL.md frontmatter "
+                f"says {lic!r}"
+            )
         stages = entry.get("stages")
         if not isinstance(stages, list) or not stages:
             fail(f"skills/manifest.json entry for {name} has no stages")
         else:
             for s in stages:
                 if s not in valid_stages:
-                    fail(f"skills/manifest.json entry for {name} has "
-                         f"unknown stage {s!r}")
-            if registry.get(name) is not None \
-                    and stages != registry[name]:
-                fail(f"skills/manifest.json says {name} serves stages "
-                     f"{stages}, but skills/stages.json says "
-                     f"{registry[name]}")
+                    fail(f"skills/manifest.json entry for {name} has unknown stage {s!r}")
+            if registry.get(name) is not None and stages != registry[name]:
+                fail(
+                    f"skills/manifest.json says {name} serves stages "
+                    f"{stages}, but skills/stages.json says "
+                    f"{registry[name]}"
+                )
         if entry.get("status") not in ("built", "external-optional", "todo"):
-            fail(f"skills/manifest.json entry for {name} has unknown "
-                 f"status {entry.get('status')!r}")
+            fail(
+                f"skills/manifest.json entry for {name} has unknown status {entry.get('status')!r}"
+            )
+        integration = entry.get("integration")
+        if integration not in ("verbatim", "wrapper", "merged", "from-scratch"):
+            fail(
+                f"skills/manifest.json entry for {name} has unknown "
+                f"integration {integration!r}: expected 'verbatim', "
+                f"'wrapper', 'merged', or 'from-scratch'"
+            )
         source = entry.get("source")
         if not source:
             fail(f"skills/manifest.json entry for {name} has no source")
-        elif source != "from-scratch" and not source_re.match(source) \
-                and not url_re.match(source):
-            fail(f"skills/manifest.json entry for {name} has source "
-                 f"{source!r}: expected 'from-scratch', 'owner/repo', "
-                 f"or a github.com repo URL (no trailing comma)")
+        elif source != "from-scratch" and not url_re.match(source):
+            fail(
+                f"skills/manifest.json entry for {name} has source "
+                f"{source!r}: expected 'from-scratch' or a github.com "
+                f"repo URL (no trailing comma)"
+            )
         commit = entry.get("upstream_commit")
-        if source == "from-scratch" and commit is not None:
-            fail(f"skills/manifest.json entry for {name} has source "
-                 f"'from-scratch' but upstream_commit {commit!r} — the "
-                 f"commit belongs to a bundled component, record it in "
-                 f"ATTRIBUTION.md, not here")
-        if source != "from-scratch" and commit is not None \
-                and not sha_re.match(commit):
-            fail(f"skills/manifest.json entry for {name} has "
-                 f"upstream_commit {commit!r}, expected a 40-hex SHA "
-                 f"or null")
+        frameworks = entry.get("supported_frameworks")
+        if frameworks is not None and (
+            not isinstance(frameworks, list)
+            or not frameworks
+            or not all(isinstance(f, str) and f for f in frameworks)
+        ):
+            fail(
+                f"skills/manifest.json entry for {name} has "
+                f"supported_frameworks {frameworks!r}: expected a "
+                f"non-empty list of framework names"
+            )
+        if integration == "from-scratch":
+            if source != "from-scratch":
+                fail(
+                    f"skills/manifest.json entry for {name} is "
+                    f"from-scratch but source is {source!r} — a "
+                    f"from-scratch skill has no upstream repo; record "
+                    f"a tool origin in ATTRIBUTION.md, not here"
+                )
+            if commit is not None:
+                fail(
+                    f"skills/manifest.json entry for {name} has source "
+                    f"'from-scratch' but upstream_commit {commit!r} — "
+                    f"the commit belongs to a bundled component, "
+                    f"record it in ATTRIBUTION.md, not here"
+                )
+        else:
+            if source == "from-scratch":
+                fail(
+                    f"skills/manifest.json entry for {name} has "
+                    f"integration {integration!r} but source is "
+                    f"'from-scratch' — the upstream repo is required"
+                )
+            if commit is None:
+                fail(
+                    f"skills/manifest.json entry for {name} has "
+                    f"integration {integration!r} but upstream_commit "
+                    f"is null — the commit pins the vendored content"
+                )
+            elif not sha_re.match(commit):
+                fail(
+                    f"skills/manifest.json entry for {name} has "
+                    f"upstream_commit {commit!r}, expected a 40-hex SHA"
+                )
 
 
 def check_json_files():
     """Every JSON file the repo owns must parse. A broken manifest or
     evidence schema is a silent gate failure: the validator would
     crash (or skip) instead of checking."""
-    for rel in ("skills/manifest.json", "skills/orcinus-verify/references/evidence.schema.json",
-                ".claude-plugin/plugin.json",
-                ".claude-plugin/marketplace.json"):
+    for rel in (
+        "skills/manifest.json",
+        "skills/orcinus-verify/references/evidence.schema.json",
+        ".claude-plugin/plugin.json",
+        ".claude-plugin/marketplace.json",
+    ):
         path = ROOT / rel
         if not path.is_file():
             continue
@@ -1011,7 +1136,9 @@ def check_relative_paths():
             fail(f"{doc} is missing")
             continue
         text = path.read_text(encoding="utf-8")
-        for ref in sorted(set(re.findall(r"(?:skills|docs|evals|examples)/[A-Za-z0-9_./-]+", text))):
+        for ref in sorted(
+            set(re.findall(r"(?:skills|docs|evals|examples)/[A-Za-z0-9_./-]+", text))
+        ):
             ref = ref.rstrip(").,")
             if not (ROOT / ref).exists():
                 fail(f"{doc} references {ref}, which does not exist")
@@ -1020,10 +1147,21 @@ def check_relative_paths():
 # Paths a SKILL.md may name that live in the USER's project, not the
 # repo — they resolve where the skill runs, not where it is installed.
 USER_PROJECT_PATHS = (
-    "docs/adr/", "docs/constitution.md", "docs/contract.md",
-    "docs/api/openapi.yaml", "docs/openapi.yaml", "openapi.yaml",
-    "ideas/", "tasks/", "evals/evals.json", "GLOSSARY.md",
-    "src/", "tests/", "dist/", "node_modules/", "mutants/",
+    "docs/adr/",
+    "docs/constitution.md",
+    "docs/contract.md",
+    "docs/api/openapi.yaml",
+    "docs/openapi.yaml",
+    "openapi.yaml",
+    "ideas/",
+    "tasks/",
+    "evals/evals.json",
+    "GLOSSARY.md",
+    "src/",
+    "tests/",
+    "dist/",
+    "node_modules/",
+    "mutants/",
     ".claude/",
 )
 # The first segment of a relative path that means "a file this skill
@@ -1032,19 +1170,39 @@ USER_PROJECT_PATHS = (
 # file — an example of the tree the skill prescribes — not a file this
 # skill must contain, so the check does not judge it.
 SKILL_OWNED_DIRS = (
-    "references", "reference", "scripts", "examples", "templates",
-    "assets", "agents", "commands", "rules", "evals",
+    "references",
+    "reference",
+    "scripts",
+    "examples",
+    "templates",
+    "assets",
+    "agents",
+    "commands",
+    "rules",
+    "evals",
 )
 FILE_EXTENSIONS = (
-    ".md", ".json", ".py", ".sh", ".mjs", ".js", ".jsx", ".ts", ".tsx",
-    ".yaml", ".yml", ".txt", ".html",
+    ".md",
+    ".json",
+    ".py",
+    ".sh",
+    ".mjs",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".yaml",
+    ".yml",
+    ".txt",
+    ".html",
 )
 # A SKILL.md may name another skill's file only in the publishing
 # instructions that tell the reader where to put the folder in a
 # public repo ("path like skills/<this-skill>/SKILL.md"). Every other
 # skills/<name>/SKILL.md reference is a file in another skill.
 PUBLISHING_INSTRUCTION_SKILLS = {
-    "frontend-architecture", "frontend-data-contracts",
+    "frontend-architecture",
+    "frontend-data-contracts",
     "frontend-optimistic-mutations",
 }
 
@@ -1102,19 +1260,17 @@ def check_skill_references():
             # contain $ and {} which the file-path filter below would
             # reject as non-paths.
             if target.startswith("${CLAUDE_PLUGIN_ROOT}/skills/"):
-                rest = target[len("${CLAUDE_PLUGIN_ROOT}/skills/"):]
+                rest = target[len("${CLAUDE_PLUGIN_ROOT}/skills/") :]
                 if rest == name or rest.startswith(name + "/"):
                     continue
-                fail(f"{name}/SKILL.md references {target!r}, which is "
-                     f"outside this skill")
+                fail(f"{name}/SKILL.md references {target!r}, which is outside this skill")
                 continue
             if target.startswith("${CLAUDE_SKILL_DIR}/"):
                 continue
             if not _looks_like_file_path(target):
                 continue
             if target.startswith("../"):
-                fail(f"{name}/SKILL.md references {target!r}, which "
-                     f"escapes the skill folder")
+                fail(f"{name}/SKILL.md references {target!r}, which escapes the skill folder")
                 continue
             if target.startswith("skills/"):
                 parts = target.rstrip("/").split("/")
@@ -1122,12 +1278,14 @@ def check_skill_references():
                     continue  # the generic `skills/` directory in prose
                 if len(parts) == 2:
                     continue  # a skill name, resolved by the router
-                if (name in PUBLISHING_INSTRUCTION_SKILLS
-                        and len(parts) == 3 and parts[1] == name
-                        and parts[2] == "SKILL.md"):
+                if (
+                    name in PUBLISHING_INSTRUCTION_SKILLS
+                    and len(parts) == 3
+                    and parts[1] == name
+                    and parts[2] == "SKILL.md"
+                ):
                     continue  # publishing instruction for this skill
-                fail(f"{name}/SKILL.md references {target!r}, which is "
-                     f"a file in another skill")
+                fail(f"{name}/SKILL.md references {target!r}, which is a file in another skill")
                 continue
             if target.startswith("evals/"):
                 # Only evals/evals.json is a user-project path; any
@@ -1140,15 +1298,18 @@ def check_skill_references():
                     resolved = (skill_dir / target).resolve()
                 except OSError:
                     resolved = None
-                if resolved is not None \
-                        and resolved.is_relative_to(skill_dir) \
-                        and resolved.is_file():
+                if (
+                    resolved is not None
+                    and resolved.is_relative_to(skill_dir)
+                    and resolved.is_file()
+                ):
                     continue
-                fail(f"{name}/SKILL.md references {target!r}, which is "
-                     f"a repo path outside this skill")
+                fail(
+                    f"{name}/SKILL.md references {target!r}, which is "
+                    f"a repo path outside this skill"
+                )
                 continue
-            if any(target == p or target.startswith(p)
-                   for p in USER_PROJECT_PATHS):
+            if any(target == p or target.startswith(p) for p in USER_PROJECT_PATHS):
                 continue
             # A relative file path under one of the skill's own
             # subdirectories must exist inside the skill folder. A
@@ -1157,18 +1318,20 @@ def check_skill_references():
             # check's business.
             stripped = target[2:] if target.startswith("./") else target
             first = stripped.split("/", 1)[0]
-            if "/" in stripped and first in SKILL_OWNED_DIRS \
-                    and stripped.endswith(FILE_EXTENSIONS):
+            if "/" in stripped and first in SKILL_OWNED_DIRS and stripped.endswith(FILE_EXTENSIONS):
                 try:
                     resolved = (skill_dir / stripped).resolve()
                 except OSError:
                     resolved = None
-                if resolved is None \
-                        or not resolved.is_relative_to(skill_dir) \
-                        or not resolved.is_file():
-                    fail(f"{name}/SKILL.md references {target!r}, which "
-                         f"does not exist inside this skill")
-
+                if (
+                    resolved is None
+                    or not resolved.is_relative_to(skill_dir)
+                    or not resolved.is_file()
+                ):
+                    fail(
+                        f"{name}/SKILL.md references {target!r}, which "
+                        f"does not exist inside this skill"
+                    )
 
 
 # Agents and commands shipped by this plugin, by the name Claude
@@ -1210,8 +1373,7 @@ def check_plugin_components():
             fail(f"agents/{name}.md: unparsable frontmatter: {error}")
             continue
         if fields.get("name") != name:
-            fail(f"agents/{name}.md: frontmatter name "
-                 f"{fields.get('name')!r} != filename {name!r}")
+            fail(f"agents/{name}.md: frontmatter name {fields.get('name')!r} != filename {name!r}")
         description = fields.get("description")
         if not isinstance(description, str) or not description.strip():
             fail(f"agents/{name}.md: missing non-empty description")
@@ -1232,9 +1394,11 @@ def check_plugin_components():
             continue
         for sub in ("agents", "commands"):
             if (skill_dir / sub).exists():
-                fail(f"stale plugin component copy: "
-                     f"skills/{skill_dir.name}/{sub} — agents and "
-                     f"commands live at the plugin root, not in a skill")
+                fail(
+                    f"stale plugin component copy: "
+                    f"skills/{skill_dir.name}/{sub} — agents and "
+                    f"commands live at the plugin root, not in a skill"
+                )
 
 
 VERSION_HEADING_RE = re.compile(r"^## \[(\d+\.\d+\.\d+)\]", re.MULTILINE)
@@ -1250,8 +1414,7 @@ def check_version_matches_changelog():
     if not changelog.is_file():
         fail("CHANGELOG.md is missing")
         return
-    match = VERSION_HEADING_RE.search(
-        changelog.read_text(encoding="utf-8"))
+    match = VERSION_HEADING_RE.search(changelog.read_text(encoding="utf-8"))
     if match is None:
         fail("CHANGELOG.md has no ## [x.y.z] release heading")
         return
@@ -1261,14 +1424,51 @@ def check_version_matches_changelog():
         fail(".claude-plugin/plugin.json is missing")
         return
     try:
-        version = json.loads(plugin.read_text(encoding="utf-8")).get(
-            "version")
+        version = json.loads(plugin.read_text(encoding="utf-8")).get("version")
     except json.JSONDecodeError as e:
         fail(f".claude-plugin/plugin.json is not valid JSON: {e}")
         return
     if version != changelog_version:
-        fail(f"plugin.json version {version!r} != CHANGELOG.md latest "
-             f"release {changelog_version!r}")
+        fail(
+            f"plugin.json version {version!r} != CHANGELOG.md latest release {changelog_version!r}"
+        )
+
+
+def check_security_versions():
+    """The Supported versions table in SECURITY.md must say Yes for
+    the major.minor of the version in .claude-plugin/plugin.json.
+    SECURITY.md said 1.0.x while the plugin was 0.9.0: a user reading
+    it would conclude the released version is unsupported, and nothing
+    checked the table at all."""
+    security = ROOT / "SECURITY.md"
+    if not security.is_file():
+        fail("SECURITY.md is missing")
+        return
+    yes_row = None
+    for line in security.read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and cells[1] == "Yes":
+            yes_row = cells[0]
+            break
+    if yes_row is None:
+        fail("SECURITY.md has no Supported versions row marked Yes")
+        return
+    match = re.fullmatch(r"(\d+)\.(\d+)\.x", yes_row)
+    if match is None:
+        fail(f"SECURITY.md Yes row {yes_row!r} is not a '<major>.<minor>.x' range")
+        return
+    plugin = ROOT / ".claude-plugin" / "plugin.json"
+    if not plugin.is_file():
+        fail(".claude-plugin/plugin.json is missing")
+        return
+    try:
+        version = json.loads(plugin.read_text(encoding="utf-8")).get("version")
+    except json.JSONDecodeError as e:
+        fail(f".claude-plugin/plugin.json is not valid JSON: {e}")
+        return
+    major_minor = ".".join(str(version).split(".")[:2]) if version else None
+    if major_minor != f"{match.group(1)}.{match.group(2)}":
+        fail(f"SECURITY.md says {yes_row} is supported but plugin.json version is {version!r}")
 
 
 def check_hermes_bundle():
@@ -1281,8 +1481,7 @@ def check_hermes_bundle():
     the router loads them on demand instead."""
     path = ROOT / "hermes" / "orcinus.yaml"
     if not path.is_file():
-        fail("hermes/orcinus.yaml is missing — Hermes users have no "
-             "bundle entry point")
+        fail("hermes/orcinus.yaml is missing — Hermes users have no bundle entry point")
         return
     data, error = parse_yaml_file(path)
     if error is not None:
@@ -1290,35 +1489,36 @@ def check_hermes_bundle():
         return
     name = data.get("name")
     if name is not None and name != "orcinus":
-        fail(f"hermes/orcinus.yaml: name {name!r} != filename stem "
-             f"'orcinus'")
+        fail(f"hermes/orcinus.yaml: name {name!r} != filename stem 'orcinus'")
     description = data.get("description")
-    if description is not None and (
-            not isinstance(description, str) or not description.strip()):
-        fail("hermes/orcinus.yaml: description must be a non-empty "
-             "string")
+    if description is not None and (not isinstance(description, str) or not description.strip()):
+        fail("hermes/orcinus.yaml: description must be a non-empty string")
     skills = data.get("skills")
     if not isinstance(skills, list) or not skills:
         fail("hermes/orcinus.yaml: skills must be a non-empty list")
         return
     for skill in skills:
         if not isinstance(skill, str) or not skill.strip():
-            fail(f"hermes/orcinus.yaml: skills entry {skill!r} is not "
-                 f"a skill name")
+            fail(f"hermes/orcinus.yaml: skills entry {skill!r} is not a skill name")
             continue
         if not (ROOT / "skills" / skill / "SKILL.md").is_file():
-            fail(f"hermes/orcinus.yaml: skill {skill!r} has no "
-                 f"skills/{skill}/SKILL.md — Hermes would silently "
-                 f"skip it")
+            fail(
+                f"hermes/orcinus.yaml: skill {skill!r} has no "
+                f"skills/{skill}/SKILL.md — Hermes would silently "
+                f"skip it"
+            )
     if "orcinus" not in skills:
-        fail("hermes/orcinus.yaml: the router 'orcinus' must be listed "
-             "— the bundle has no entry point without it")
-    extra = [s for s in skills
-             if isinstance(s, str) and s.strip() and s != "orcinus"]
+        fail(
+            "hermes/orcinus.yaml: the router 'orcinus' must be listed "
+            "— the bundle has no entry point without it"
+        )
+    extra = [s for s in skills if isinstance(s, str) and s.strip() and s != "orcinus"]
     if extra:
-        fail(f"hermes/orcinus.yaml: lists sub-skills directly "
-             f"({', '.join(extra)}) — this bundle is the entry point; "
-             f"the router loads sub-skills on demand")
+        fail(
+            f"hermes/orcinus.yaml: lists sub-skills directly "
+            f"({', '.join(extra)}) — this bundle is the entry point; "
+            f"the router loads sub-skills on demand"
+        )
 
 
 def main():
@@ -1335,6 +1535,7 @@ def main():
     check_skill_references()
     check_plugin_components()
     check_version_matches_changelog()
+    check_security_versions()
     check_hermes_bundle()
     for w in warnings:
         print(f"warning: {w}")

@@ -25,6 +25,7 @@ licence in the table is the upstream content's licence.
 | mcp-builder | anthropics/skills | Apache-2.0 | `skills/mcp-builder/` copied verbatim (SKILL.md, 5 references, 4 scripts). |
 | monitoring | ericrisco/rsc-harness | MIT | `skills/monitoring/` copied verbatim (6 files). |
 | monitoring-observability | yonatangross/orchestkit | MIT | The skill copied verbatim. |
+| mutation-testing-python | boxed/mutmut | BSD-3-Clause | The mutmut CLI, used as-is (no code copied); the method is ORCINUS's own words. |
 | performance-optimization | addyosmani/agent-skills | MIT | `skills/performance-optimization/` copied verbatim. |
 | refactor | MuhiminOsim/code-refactoring-skill | MIT | The skill copied verbatim, with 11 references. |
 | skill-creator | anthropics/skills | Apache-2.0 | `skills/skill-creator/` copied verbatim (19 files). |
@@ -47,10 +48,13 @@ licence in the table is the upstream content's licence.
   the split.
 - **independent-review:** the bundled agents and command are
   Apache-2.0, while the method text is ORCINUS's own words (MIT).
-  The skill's frontmatter licence is MIT (the text); the bundled
-  files' Apache-2.0 licence is in `LICENSE.txt` and in
+  The skill's frontmatter licence is `MIT AND Apache-2.0`; the
+  bundled files' Apache-2.0 licence is in `LICENSE.txt` and in
   `ATTRIBUTION.md`.
 - **breaking-change:** the oasdiff CLI is Apache-2.0 and is used
   as-is; no oasdiff code is in this repo. The skill's own text is MIT.
+- **mutation-testing-python:** the mutmut CLI is BSD-3-Clause and is
+  used as-is; no mutmut code is in this repo. The skill's own text
+  is MIT.
 - Run `python3 scripts/validate_repo.py` to check this file against
   every skill's `ATTRIBUTION.md` and frontmatter.

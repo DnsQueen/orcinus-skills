@@ -86,6 +86,7 @@ idea id on capture, and human-readable lines otherwise.
 
 Requires Python 3.9+ (builtin generics, Path.is_relative_to).
 """
+
 import argparse
 import os
 import re
@@ -125,9 +126,7 @@ def slugify(text: str) -> str:
 def validate_id(idea_id: str) -> None:
     """Reject any id that is not the generated shape. Raises ValueError."""
     if not ID_RE.match(idea_id):
-        raise ValueError(
-            f"invalid idea id {idea_id!r}: expected YYYYMMDD-HHMMSS-slug"
-        )
+        raise ValueError(f"invalid idea id {idea_id!r}: expected YYYYMMDD-HHMMSS-slug")
 
 
 def idea_path(store: Path, idea_id: str) -> Path:
@@ -196,9 +195,7 @@ def raw_text_of(text: str) -> str:
 def _atomic_write(path: Path, text: str) -> None:
     """Write via a temporary file in the same directory, then atomically
     replace the target. An interruption leaves the old file intact."""
-    fd, tmp_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
@@ -303,8 +300,7 @@ def _all_ideas(store: Path) -> tuple[list[tuple[str, dict, Path]], list[str]]:
             continue
         if fields.get("id", path.stem) != path.stem:
             malformed.append(
-                f"{path.name}: frontmatter id {fields.get('id')!r} "
-                f"does not match the filename"
+                f"{path.name}: frontmatter id {fields.get('id')!r} does not match the filename"
             )
             continue
         ideas.append((fields.get("id", path.stem), fields, path))
@@ -321,8 +317,7 @@ def _report_malformed(malformed: list[str]) -> bool:
         print(f"warning: skipping malformed idea file ({m})", file=sys.stderr)
     if malformed:
         print(
-            f"partial: {len(malformed)} malformed file(s) skipped — "
-            f"the result is incomplete",
+            f"partial: {len(malformed)} malformed file(s) skipped — the result is incomplete",
             file=sys.stderr,
         )
     return bool(malformed)
@@ -340,7 +335,9 @@ def cmd_list(args) -> int:
         raw = raw_text_of(text)
         if raw.strip():
             first_line = raw.strip().splitlines()[0]
-        print(f"{idea_id} [{fields.get('status', '?')}] {fields.get('created', '?')} — {first_line}")
+        print(
+            f"{idea_id} [{fields.get('status', '?')}] {fields.get('created', '?')} — {first_line}"
+        )
     # Exit 2 when the list is partial: a machine caller must not
     # treat an incomplete list as success.
     return 2 if partial else 0

@@ -3,6 +3,66 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.1] — 2026-11-06
+
+The fourth review round (reviewers 3 and 4 re-reviewed 0.9.0): every
+concrete claim was verified by running the code, and every confirmed
+bug is fixed here, each with a red-first regression test. No new
+skills; this release makes the checking machinery itself trustworthy.
+
+### Fixed
+
+- Evidence validator: `fail_first` is now required for a PASS verdict
+  (a behaviour change without a red run cannot pass); `change_type`
+  is an enum; every canonical gate (build, lint, typecheck, test)
+  must be a required gate or waived with a reason; a behaviour-change
+  PASS needs the `test` gate; findings without a `severity` are
+  blocking (fail-closed); checks require `tool_version`,
+  `started_at`, `finished_at`; a check's `finished_at` must not
+  precede its `started_at`; artifact paths must exist; dates are
+  strict RFC 3339 (identical on Python 3.10–3.13); an honest
+  INCOMPLETE bundle is valid — only PASS carries the strict rules.
+- Project state: VERIFIED and approval are now bound to a content
+  digest (sha256 over the committed tree, excluding `.orcinus/` and
+  `docs/verification/`), not to a commit SHA — a commit that only
+  records state no longer resets the stage. Reference implementation
+  in `scripts/content_digest.py`.
+- Manifest: a required `integration` field (`verbatim`, `wrapper`,
+  `merged`, `from-scratch`); non-from-scratch skills need a full
+  GitHub source URL and a 40-hex upstream commit; all sources
+  normalized; `handoff` and `codebase-knowledge-builder` stages
+  corrected to `0-100`; `mutation-testing-python` gained its
+  ATTRIBUTION and licence.
+- Router and handoff honesty: SCOPE no longer claims a single entry
+  point is "enforced"; the three React-scoped frontend skills load
+  only for React/React Native projects; handoff files are
+  router-proposed and user-confirmed, named `orcinus-handoff-*`;
+  the router states what to do when a sub-skill is missing, optional,
+  or not built.
+- Migration generator: table creation follows foreign-key dependency
+  order (proven on real PostgreSQL 16 — the old order fails there);
+  FK cycles defer to post-create ADD CONSTRAINT steps; the comparator
+  resets on every call; all set iterations are sorted; the generator
+  declares its PostgreSQL dialect; a `postgres-migration` CI job runs
+  the new tests against postgres:16.
+- Tooling: SECURITY.md says 0.9.x (it said 1.0.x while the plugin was
+  0.9.0) and the validator now checks the table; `doctor.py` finds a
+  ruff binary on PATH, its waza fallback is Linux-only, and its exit
+  codes are documented (1 incomplete, 2 incompatible); the clean-copy
+  check never renames the source (two modes: working-tree copy,
+  release via `git archive`); the version-bump check enforces two
+  rules and its CI job runs on pull requests; the waza download uses
+  `curl -fsSL`; `registry-publish` distinguishes E404 from
+  FETCH_ERROR/E401/E403 and publishes the exact smoke-tested tarball.
+- Format and typecheck are now CI gates: `ruff format --check` over
+  ORCINUS-owned code (vendored files excluded) and `mypy` over 25
+  owned Python files, with 8 type errors fixed.
+- Eval graders: the agent-behavior suite (9 tasks) requires the
+  structured verdict block; 3 new PASS tasks stop an always-FAIL
+  policy from passing (4/9) and an always-PASS policy from passing
+  (1/9); the suite's own eval.yaml was unparseable since round 3 and
+  is fixed.
+
 ## [0.9.0] — 2026-11-06
 
 The first public release — a pre-1.0 version. ORCINUS is one integrated nervous system for the

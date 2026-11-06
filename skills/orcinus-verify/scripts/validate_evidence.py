@@ -18,9 +18,17 @@ Two layers, kept separate:
    overall verdict is computed from the evidence by one function
    (expected_verdict), never taken from the agent: a blocking finding
    or a failed check forces FAIL; otherwise incomplete evidence forces
-   INCOMPLETE; otherwise PASS. A PASS also needs a verification plan
-   naming its required gates, each covered by a passing check with
-   the same name — one passing check must never stand for all gates.
+   INCOMPLETE; otherwise PASS. A finding without an explicit
+   "non-blocking" severity counts as blocking (fail-closed). A PASS
+   also needs a verification plan naming its required gates, each
+   covered by a passing check with the same name — one passing check
+   must never stand for all gates. Every canonical gate (build, lint,
+   typecheck, test) must be required or explicitly waived with a
+   reason; silence is not a waiver. A PASS for a behaviour change
+   (bug-fix, feature, refactor) additionally needs the test gate and
+   a fail-first proof. An honest FAIL or INCOMPLETE report is a valid
+   bundle: the fail-first and plan rules are PASS rules, never
+   validity rules — only a PASS must satisfy them.
 
 Structural validation runs first. If it finds any problem, the
 semantic checks do not run at all: a malformed bundle produces a
@@ -44,6 +52,7 @@ contradicted verdict cannot slip through as a PASS.
 """
 
 import json
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -61,11 +70,25 @@ VERDICTS = ("PASS", "FAIL", "INCOMPLETE")
 # schema raises, so an unimplemented keyword is a loud failure,
 # never a silent pass.
 SUPPORTED_KEYWORDS = {
-    "type", "const", "enum", "required", "properties",
-    "additionalProperties", "minLength", "minItems", "items",
-    "minimum", "maximum", "format",
+    "type",
+    "const",
+    "enum",
+    "required",
+    "properties",
+    "additionalProperties",
+    "minLength",
+    "minItems",
+    "items",
+    "minimum",
+    "maximum",
+    "format",
     # Documentation-only keys, ignored by the interpreter.
-    "description", "title", "$schema", "$id", "default", "examples",
+    "description",
+    "title",
+    "$schema",
+    "$id",
+    "default",
+    "examples",
 }
 
 
@@ -102,7 +125,20 @@ def _strict_equal(a, b):
 
 
 def _is_iso8601(value):
+    """Strict RFC 3339 date-time: full date, 'T', time, and a 'Z' or
+    numeric offset. datetime.fromisoformat alone is not enough: it
+    accepts date-only strings and naive datetimes, and on 3.11+ it
+    accepts week/basic formats that 3.10 rejects — so the same bundle
+    would validate differently across the CI matrix. The regex makes
+    acceptance identical on every Python >= 3.10; fromisoformat then
+    only validates the ranges."""
     if type(value) is not str:
+        return False
+    if not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?"
+        r"(Z|[+-]\d{2}:\d{2})",
+        value,
+    ):
         return False
     try:
         datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -117,58 +153,42 @@ def _validate(instance, schema, path, problems):
         raise ValueError(f"schema at {path or 'root'} is not an object")
     unknown = set(schema) - SUPPORTED_KEYWORDS
     if unknown:
-        raise ValueError(
-            f"unsupported schema keyword(s) at {path or 'root'}: "
-            f"{sorted(unknown)}")
+        raise ValueError(f"unsupported schema keyword(s) at {path or 'root'}: {sorted(unknown)}")
     if "type" in schema:
         wanted = schema["type"]
         types = wanted if isinstance(wanted, list) else [wanted]
         if not any(_type_matches(instance, t) for t in types):
             problems.append(
-                f"{path or 'value'} must be of type {wanted}, "
-                f"got {type(instance).__name__}")
+                f"{path or 'value'} must be of type {wanted}, got {type(instance).__name__}"
+            )
             return
     if "const" in schema and not _strict_equal(instance, schema["const"]):
-        problems.append(
-            f"{path or 'value'} must be {schema['const']!r}, "
-            f"got {instance!r}")
-    if "enum" in schema and not any(
-            _strict_equal(instance, e) for e in schema["enum"]):
-        problems.append(
-            f"{path or 'value'} must be one of {schema['enum']}, "
-            f"got {instance!r}")
+        problems.append(f"{path or 'value'} must be {schema['const']!r}, got {instance!r}")
+    if "enum" in schema and not any(_strict_equal(instance, e) for e in schema["enum"]):
+        problems.append(f"{path or 'value'} must be one of {schema['enum']}, got {instance!r}")
     if isinstance(instance, str) and "minLength" in schema:
         if len(instance) < schema["minLength"]:
             problems.append(
-                f"{path or 'value'} must be at least "
-                f"{schema['minLength']} character(s)")
+                f"{path or 'value'} must be at least {schema['minLength']} character(s)"
+            )
     if isinstance(instance, list) and "minItems" in schema:
         if len(instance) < schema["minItems"]:
-            problems.append(
-                f"{path or 'value'} must have at least "
-                f"{schema['minItems']} item(s)")
+            problems.append(f"{path or 'value'} must have at least {schema['minItems']} item(s)")
     if isinstance(instance, (int, float)) and not _is_bool(instance):
         if "minimum" in schema and instance < schema["minimum"]:
-            problems.append(
-                f"{path or 'value'} must be >= {schema['minimum']}")
+            problems.append(f"{path or 'value'} must be >= {schema['minimum']}")
         if "maximum" in schema and instance > schema["maximum"]:
-            problems.append(
-                f"{path or 'value'} must be <= {schema['maximum']}")
+            problems.append(f"{path or 'value'} must be <= {schema['maximum']}")
     if "format" in schema:
         if schema["format"] == "date-time":
             if not _is_iso8601(instance):
-                problems.append(
-                    f"{path or 'value'} must be an ISO 8601 date-time")
+                problems.append(f"{path or 'value'} must be an ISO 8601 date-time")
         else:
-            raise ValueError(
-                f"unsupported schema format at {path or 'root'}: "
-                f"{schema['format']!r}")
+            raise ValueError(f"unsupported schema format at {path or 'root'}: {schema['format']!r}")
     if isinstance(instance, dict):
         for field in schema.get("required", []):
             if field not in instance:
-                problems.append(
-                    f"{path + '.' if path else ''}{field}: "
-                    f"missing required field")
+                problems.append(f"{path + '.' if path else ''}{field}: missing required field")
         properties = schema.get("properties", {})
         for key, value in instance.items():
             if key in properties:
@@ -176,8 +196,8 @@ def _validate(instance, schema, path, problems):
                 _validate(value, properties[key], child, problems)
             elif schema.get("additionalProperties") is False:
                 problems.append(
-                    f"{path + '.' if path else ''}{key}: "
-                    f"unexpected property (not in the schema)")
+                    f"{path + '.' if path else ''}{key}: unexpected property (not in the schema)"
+                )
     if isinstance(instance, list) and "items" in schema:
         for i, item in enumerate(instance):
             _validate(item, schema["items"], f"{path}[{i}]", problems)
@@ -209,20 +229,27 @@ def expected_verdict(bundle):
     """The single verdict computation. A blocking finding or a failed
     check forces FAIL; otherwise incomplete evidence forces
     INCOMPLETE; otherwise PASS. A check that claims PASS with a
-    non-zero exit code counts as failed."""
+    non-zero exit code counts as failed. Fail-closed: a finding whose
+    severity is anything other than "non-blocking" counts as
+    blocking. No acceptance criteria means the verification stopped:
+    INCOMPLETE, never PASS."""
     checks = _checks(bundle)
     findings = _findings(bundle)
-    blocking = [f for f in findings if f.get("severity") == "blocking"]
-    failed = [c for c in checks
-              if c.get("verdict") == "FAIL"
-              or (c.get("verdict") == "PASS"
-                  and _is_int(c.get("exit_code"))
-                  and c["exit_code"] != 0)]
+    blocking = [f for f in findings if f.get("severity") != "non-blocking"]
+    failed = [
+        c
+        for c in checks
+        if c.get("verdict") == "FAIL"
+        or (c.get("verdict") == "PASS" and _is_int(c.get("exit_code")) and c["exit_code"] != 0)
+    ]
     unverified = bundle.get("unverified_items")
+    criteria = bundle.get("acceptance_criteria")
     incomplete = (
         [c for c in checks if c.get("verdict") == "INCOMPLETE"]
         or (isinstance(unverified, list) and bool(unverified))
-        or [c for c in checks if c.get("unverified_items")])
+        or [c for c in checks if c.get("unverified_items")]
+        or (isinstance(criteria, list) and not criteria)
+    )
     if blocking or failed:
         return "FAIL"
     if incomplete:
@@ -237,11 +264,10 @@ def check_verdict_consistency(bundle, problems):
         return
     checks = _checks(bundle)
     for c in checks:
-        if (c.get("verdict") == "PASS" and _is_int(c.get("exit_code"))
-                and c["exit_code"] != 0):
+        if c.get("verdict") == "PASS" and _is_int(c.get("exit_code")) and c["exit_code"] != 0:
             problems.append(
-                f"check {c.get('name')!r} has verdict PASS but "
-                f"exit_code {c['exit_code']}")
+                f"check {c.get('name')!r} has verdict PASS but exit_code {c['exit_code']}"
+            )
     expected = expected_verdict(bundle)
     if verdict == expected:
         return
@@ -249,63 +275,102 @@ def check_verdict_consistency(bundle, problems):
         if any(c.get("verdict") == "FAIL" for c in checks):
             problems.append("verdict is PASS but a check has verdict FAIL")
         if any(c.get("verdict") == "INCOMPLETE" for c in checks):
-            problems.append(
-                "verdict is PASS but a check has verdict INCOMPLETE")
-        if any(f.get("severity") == "blocking" for f in _findings(bundle)):
-            problems.append(
-                "verdict is PASS but there is a blocking finding")
+            problems.append("verdict is PASS but a check has verdict INCOMPLETE")
+        if any(f.get("severity") != "non-blocking" for f in _findings(bundle)):
+            problems.append("verdict is PASS but there is a blocking finding")
         if bundle.get("unverified_items"):
-            problems.append(
-                "verdict is PASS but unverified_items is non-empty")
+            problems.append("verdict is PASS but unverified_items is non-empty")
         if any(c.get("unverified_items") for c in checks):
-            problems.append(
-                "verdict is PASS but a check has non-empty "
-                "unverified_items")
+            problems.append("verdict is PASS but a check has non-empty unverified_items")
     elif verdict == "FAIL":
         problems.append(
-            "verdict is FAIL but there is no blocking finding and no "
-            "check with verdict FAIL")
+            "verdict is FAIL but there is no blocking finding and no check with verdict FAIL"
+        )
     elif verdict == "INCOMPLETE":
         if expected == "FAIL":
             problems.append(
                 "verdict is INCOMPLETE but a check has verdict FAIL or "
-                "there is a blocking finding: the evidence requires FAIL")
+                "there is a blocking finding: the evidence requires FAIL"
+            )
         else:
             problems.append(
-                "verdict is INCOMPLETE but no check is INCOMPLETE and "
-                "nothing is unverified")
+                "verdict is INCOMPLETE but no check is INCOMPLETE and nothing is unverified"
+            )
+
+
+# Change types that change behaviour: a PASS for one needs the test
+# gate and a fail-first proof. docs-only / config-only have no
+# behaviour to test, so fail-first may be absent or not-applicable.
+BEHAVIOR_CHANGE_TYPES = ("bug-fix", "feature", "refactor")
+
+# The canonical gates (orcinus-verify step 4: name every check after
+# its gate). Every one must be required or explicitly waived with a
+# reason in a PASS plan; silence is not a waiver.
+CANONICAL_GATES = ("build", "lint", "typecheck", "test")
 
 
 def check_fail_first(bundle, problems):
     """The fail-first proof must show the test failing before the fix
-    and passing after it, unless the method is not-applicable (with a
-    note saying why). Types are enforced by the schema layer, so
-    truthiness here is safe: failed_before/passed_after are real
-    booleans by the time this runs."""
+    and passing after it. These are PASS rules, not validity rules:
+    a verifier that honestly reports a failed red proof with verdict
+    INCOMPLETE is filing a valid bundle — the false values are the
+    reason for INCOMPLETE, not a problem with the bundle. Only a
+    PASS for a behaviour change must prove the red: there the proof
+    must be present, the method must be worktree or
+    revert-at-smallest-scope (not-applicable is only for changes with
+    no behaviour to test), and both booleans must be true. Types are
+    enforced by the schema layer, so truthiness here is safe:
+    failed_before/passed_after are real booleans by the time this
+    runs."""
     ff = bundle.get("fail_first")
-    if ff is None:
-        return
+    verdict = bundle.get("verdict")
+    plan = bundle.get("verification_plan")
+    change_type = plan.get("change_type") if isinstance(plan, dict) else None
+    is_behavior = change_type in BEHAVIOR_CHANGE_TYPES
     if not isinstance(ff, dict):
+        if verdict == "PASS" and is_behavior:
+            problems.append(
+                "verdict is PASS for a behaviour change "
+                f"({change_type}) but there is no fail_first proof: "
+                "a test must be shown failing before the fix and "
+                "passing after it"
+            )
         return
     if ff.get("method") == "not-applicable":
         if not ff.get("note"):
-            problems.append("fail_first.method is 'not-applicable' but no "
-                            "note says why")
+            problems.append("fail_first.method is 'not-applicable' but no note says why")
+        elif verdict == "PASS" and is_behavior:
+            problems.append(
+                "fail_first.method is 'not-applicable' for a behaviour "
+                f"change ({change_type}): the red proof cannot be "
+                "waived by assertion"
+            )
+        return
+    if verdict != "PASS":
         return
     if "failed_before" in ff and not ff["failed_before"]:
-        problems.append("fail_first.failed_before is false: the test was "
-                        "never shown failing on the pre-fix code")
+        problems.append(
+            "fail_first.failed_before is false: the test was "
+            "never shown failing on the pre-fix code"
+        )
     if "passed_after" in ff and not ff["passed_after"]:
-        problems.append("fail_first.passed_after is false: the test does "
-                        "not pass after the fix")
+        problems.append("fail_first.passed_after is false: the test does not pass after the fix")
 
 
 def check_plan_coverage(bundle, problems):
     """A PASS needs a verification plan naming its required gates,
-    each covered by a passing check with the same name. Gates the
-    change does not need go in not_applicable_gates with a reason.
-    For FAIL/INCOMPLETE the plan is only shape-checked (the schema
-    layer already enforces its types); coverage is a PASS rule."""
+    each covered by a passing check with the same name. The plan is
+    the agent's own, so the validator also enforces the policy the
+    agent cannot set for itself: every canonical gate (build, lint,
+    typecheck, test) must be required or listed in
+    not_applicable_gates with a reason — a gate that is never
+    mentioned is a hole, not an omission. A behaviour change
+    additionally needs the test gate required (waiving it is not
+    enough). For FAIL/INCOMPLETE the plan is only shape-checked (the
+    schema layer already enforces its types); coverage is a PASS
+    rule. The reason for a waiver is required but its truth is not
+    machine-checkable — that residual gap is recorded in SCOPE.md,
+    not silently assumed away."""
     plan = bundle.get("verification_plan")
     verdict = bundle.get("verdict")
     if verdict != "PASS":
@@ -313,31 +378,97 @@ def check_plan_coverage(bundle, problems):
     if plan is None:
         problems.append(
             "verdict is PASS but there is no verification_plan: a PASS "
-            "needs the plan naming its required gates")
+            "needs the plan naming its required gates"
+        )
         return
     if not isinstance(plan, dict):
         return
     required = plan.get("required_gates")
-    if not isinstance(required, list) or not required:
-        problems.append(
-            "verdict is PASS but verification_plan.required_gates is "
-            "empty or missing: name the gates this change was verified "
-            "against")
+    if not isinstance(required, list):
         return
-    checks = _checks(bundle)
-    passing = {c.get("name") for c in checks
-               if c.get("verdict") == "PASS"}
-    for gate in required:
-        if gate not in passing:
-            problems.append(
-                f"required gate {gate!r} has no passing check")
+    waived = {}
     for entry in plan.get("not_applicable_gates") or []:
         if not isinstance(entry, dict):
             continue
         if not entry.get("reason"):
             problems.append(
-                f"gate {entry.get('gate')!r} is listed as "
-                f"not-applicable but no reason says why")
+                f"gate {entry.get('gate')!r} is listed as not-applicable but no reason says why"
+            )
+        elif entry.get("gate"):
+            waived[entry["gate"]] = entry["reason"]
+    checks = _checks(bundle)
+    passing = {c.get("name") for c in checks if c.get("verdict") == "PASS"}
+    for gate in required:
+        if gate not in passing:
+            problems.append(f"required gate {gate!r} has no passing check")
+    for gate in CANONICAL_GATES:
+        if gate in required or gate in waived:
+            continue
+        problems.append(
+            f"gate {gate!r} is neither a required gate nor listed as "
+            f"not-applicable with a reason: a gate that is never "
+            f"mentioned cannot be PASSed by silence"
+        )
+    change_type = plan.get("change_type")
+    if change_type in BEHAVIOR_CHANGE_TYPES and "test" not in required:
+        problems.append(
+            f"change_type {change_type!r} needs the 'test' gate in "
+            f"required_gates: a behaviour change cannot waive its "
+            f"test gate"
+        )
+
+
+def check_acceptance_criteria(bundle, problems):
+    """An empty acceptance_criteria list means the verification
+    stopped: the verdict must be INCOMPLETE, never PASS. (The
+    verdict computation already treats it as incomplete; this is the
+    explicit problem for the PASS case.)"""
+    if (
+        bundle.get("verdict") == "PASS"
+        and isinstance(bundle.get("acceptance_criteria"), list)
+        and not bundle["acceptance_criteria"]
+    ):
+        problems.append(
+            "verdict is PASS but acceptance_criteria is empty: with no "
+            "acceptance criteria the verification must stop "
+            "(INCOMPLETE), not invent them"
+        )
+
+
+def check_time_order(bundle, problems):
+    """finished_at must not precede started_at. The schema layer
+    already enforces RFC 3339 on both, so parsing cannot fail here."""
+    for c in _checks(bundle):
+        started = c.get("started_at")
+        finished = c.get("finished_at")
+        if not isinstance(started, str) or not isinstance(finished, str):
+            continue
+        start = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+        if end < start:
+            problems.append(
+                f"check {c.get('name')!r} finished_at {finished} is before started_at {started}"
+            )
+
+
+def check_artifacts(bundle, problems, bundle_dir):
+    """An artifact path that does not exist is not evidence. Paths
+    resolve relative to the bundle file (absolute paths resolve as
+    themselves). Skipped when the bundle directory is unknown (the
+    in-process API without a directory) — the CLI always passes it."""
+    if bundle_dir is None:
+        return
+    base = Path(bundle_dir)
+    for c in _checks(bundle):
+        for field in ("stdout_artifact", "stderr_artifact"):
+            artifact = c.get(field)
+            if not isinstance(artifact, str) or not artifact:
+                continue
+            if not (base / artifact).is_file():
+                problems.append(
+                    f"check {c.get('name')!r} {field} {artifact!r} "
+                    f"does not exist (relative to the bundle)"
+                )
 
 
 def check_dirty_files(bundle, problems):
@@ -346,19 +477,24 @@ def check_dirty_files(bundle, problems):
     if bundle.get("working_tree_state") == "dirty":
         dirty = bundle.get("dirty_files")
         if not isinstance(dirty, list) or not dirty:
-            problems.append("working_tree_state is 'dirty' but dirty_files "
-                            "is empty or missing")
+            problems.append("working_tree_state is 'dirty' but dirty_files is empty or missing")
 
 
-def validate_bundle(bundle, schema):
+def validate_bundle(bundle, schema, bundle_dir=None):
     """Both layers. Structural problems short-circuit the semantic
-    checks, so a malformed bundle can never crash them."""
+    checks, so a malformed bundle can never crash them. bundle_dir
+    is the directory the bundle file lives in; artifact paths resolve
+    against it (the CLI passes the bundle's parent). When it is None,
+    the artifact-existence check is skipped."""
     problems = validate_against_schema(bundle, schema)
     if problems:
         return problems
     check_verdict_consistency(bundle, problems)
     check_fail_first(bundle, problems)
     check_plan_coverage(bundle, problems)
+    check_acceptance_criteria(bundle, problems)
+    check_time_order(bundle, problems)
+    check_artifacts(bundle, problems, bundle_dir)
     check_dirty_files(bundle, problems)
     return problems
 
@@ -373,8 +509,10 @@ def load_schema(path):
 
 def main(argv):
     if len(argv) != 2:
-        print("usage: python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json>",
-              file=sys.stderr)
+        print(
+            "usage: python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json>",
+            file=sys.stderr,
+        )
         return 2
     path = Path(argv[1])
     if not path.is_file():
@@ -393,7 +531,7 @@ def main(argv):
         return 2
     try:
         schema = load_schema(SCHEMA_PATH)
-        problems = validate_bundle(bundle, schema)
+        problems = validate_bundle(bundle, schema, bundle_dir=path.parent)
     except (ValueError, OSError) as e:
         print(f"validator error: {e}", file=sys.stderr)
         return 2

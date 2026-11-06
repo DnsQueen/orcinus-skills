@@ -86,8 +86,14 @@ it says so and stops instead of improvising.
 What Hermes does not get: the plugin-root `agents/` and `commands/`
 are Claude Code plugin components — Hermes has no equivalent, so the
 six reviewer agents and the `review-pr` command do not travel. The
+plugin root holds 9 agent files: the 6 pr-review-toolkit reviewers
+and 3 skill-creator agents (`analyzer`, `comparator`, `grader`). The
 `independent-review` skill still describes the review procedure; the
 agent follows it inline instead of spawning registered reviewers.
+The repo-root `scripts/` do not travel either — `npx skills` and
+Hermes copy per-skill folders, so `doctor.py`, `clean_copy_check.py`,
+the repo validator, and the drift check are absent there; the Claude
+Code plugin path installs the whole repo, so they are present there.
 And `${CLAUDE_PLUGIN_ROOT}` paths in skill text (one place:
 `orcinus-verify`) mean the Claude Code plugin root — in Hermes use
 the installed skill folder, or `${HERMES_SKILL_DIR}` inside a skill
@@ -178,7 +184,7 @@ After that, keep working. ORCINUS detects the stage; you confirm each major gate
 - `skills/manifest.json` — the single source of truth for the skill inventory: name, licence, stages, source, and status per skill. The validator checks it against the folders and the frontmatter.
 - `skills/orcinus-verify/references/evidence.schema.json` — the machine-readable form of the evidence bundle orcinus-verify returns. Validate a bundle with `python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json>`.
 - `scripts/doctor.py` — check whether this machine can run the ORCINUS gates (python, pytest, ruff, git, node, waza) and say exactly which ones it cannot.
-- `scripts/clean_copy_check.py` — prove the repo works from a clean copy, with the source hidden during the run so nothing in the copy can reach back to the original checkout (also run in CI). It is a copy check, not an install check: it copies the working tree and runs the repo's own gates there.
+- `scripts/clean_copy_check.py` — prove the repo works from a clean copy, in two modes: working-tree (copy the working tree) and release (`git archive` of a committed revision, so an uncommitted fix cannot make a broken release look green). It never renames or writes to the source: an earlier design hid the source by renaming it and could strand it hidden if the process was killed (demonstrated with a SIGKILL, removed 2026-11-06). The price is stated in the script's docstring — an absolute-path leak back to the live checkout is no longer caught. It is a copy check, not an install check: it runs the repo's own gates inside the copy (also run in CI).
 - `docs/adr/` — architecture decision records for ORCINUS's own decisions (one install, verification-first, verbatim-with-attribution, no Trust Score in v0.9).
 - `docs/report-format.md` — the unified machine-readable report format all checkers converge to.
 - `docs/project-state.md` — the persistent project state spec (`.orcinus/state.json`): BUILDING / VERIFYING / BLOCKED / VERIFIED / AWAITING_APPROVAL / RELEASE_READY, each bound to a revision and an evidence bundle.

@@ -6,6 +6,7 @@ checker used to report OK on a fixture that had a layer violation and
 a cycle. Run:
     python3 -m pytest skills/architecture/scripts/test_check_architecture.py -q
 """
+
 import json
 import subprocess
 import sys
@@ -26,9 +27,10 @@ def write(path, text):
 
 
 def pkg(root, deps=None):
-    write(root / "package.json",
-          json.dumps({"name": "fixture", "version": "1.0.0",
-                      "dependencies": deps or {}}))
+    write(
+        root / "package.json",
+        json.dumps({"name": "fixture", "version": "1.0.0", "dependencies": deps or {}}),
+    )
 
 
 def test_relative_root_finds_the_same_violations_as_absolute(tmp_path):
@@ -41,8 +43,13 @@ def test_relative_root_finds_the_same_violations_as_absolute(tmp_path):
     write(root / "tests" / "helper.ts", "export const h = 1;\n")
     pkg(root)
     rc_abs, out_abs, _ = run(root)
-    result = subprocess.run([sys.executable, str(SCRIPT), "--root", "."],
-                            capture_output=True, text=True, cwd=root, timeout=60)
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--root", "."],
+        capture_output=True,
+        text=True,
+        cwd=root,
+        timeout=60,
+    )
     rc_rel, out_rel = result.returncode, result.stdout
     assert rc_abs == 1, out_abs
     assert rc_rel == 1, out_rel
@@ -105,11 +112,13 @@ def test_import_type_and_comments_are_not_runtime_imports(tmp_path):
     """import type is erased at runtime, and an import in a comment is
     not an import. Neither may produce a layer violation."""
     root = tmp_path / "proj"
-    write(root / "src" / "a.ts",
-          'import type { H } from "../tests/helper.js";\n'
-          '// import { h } from "../tests/helper.js";\n'
-          '/* import { h } from "../tests/helper.js"; */\n'
-          'export const a = 1;\n')
+    write(
+        root / "src" / "a.ts",
+        'import type { H } from "../tests/helper.js";\n'
+        '// import { h } from "../tests/helper.js";\n'
+        '/* import { h } from "../tests/helper.js"; */\n'
+        "export const a = 1;\n",
+    )
     write(root / "tests" / "helper.ts", "export type H = number;\n")
     pkg(root)
     rc, out, _ = run(root)
@@ -118,8 +127,7 @@ def test_import_type_and_comments_are_not_runtime_imports(tmp_path):
 
 def test_tsconfig_paths_alias_is_resolved(tmp_path):
     root = tmp_path / "proj"
-    write(root / "tsconfig.json", json.dumps({
-        "compilerOptions": {"paths": {"@/*": ["src/*"]}}}))
+    write(root / "tsconfig.json", json.dumps({"compilerOptions": {"paths": {"@/*": ["src/*"]}}}))
     write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
     write(root / "src" / "b.ts", 'import { a } from "./a.js";\nexport const b = a;\n')
     pkg(root)
@@ -164,8 +172,9 @@ def test_legacy_licenses_array_is_read(tmp_path):
     root = tmp_path / "proj"
     write(root / "src" / "a.ts", "export const a = 1;\n")
     pkg(root, deps={"legacy-dep": "1.0.0"})
-    _dep_with_licence(root, "legacy-dep",
-                      {"licenses": [{"type": "MIT", "url": "https://example.com"}]})
+    _dep_with_licence(
+        root, "legacy-dep", {"licenses": [{"type": "MIT", "url": "https://example.com"}]}
+    )
     rc, out, _ = run(root)
     assert rc == 0, out
 
@@ -185,9 +194,8 @@ def test_deep_chain_does_not_hit_the_recursion_limit(tmp_path):
     root = tmp_path / "proj"
     n = 1100
     for i in range(n):
-        nxt = f'./f{i + 1}.js' if i + 1 < n else "./f0.js"
-        write(root / "src" / f"f{i}.ts",
-              f'import {{ x }} from "{nxt}";\nexport const x{i} = x;\n')
+        nxt = f"./f{i + 1}.js" if i + 1 < n else "./f0.js"
+        write(root / "src" / f"f{i}.ts", f'import {{ x }} from "{nxt}";\nexport const x{i} = x;\n')
     pkg(root)
     rc, out, err = run(root)
     assert "RecursionError" not in err
@@ -197,13 +205,16 @@ def test_deep_chain_does_not_hit_the_recursion_limit(tmp_path):
 
 # --- Second review round: regression tests (2026-11-06) ---
 
+
 def test_jsonc_tsconfig_with_comments_is_parsed(tmp_path):
     """A tsconfig with // comments and a trailing comma must still
     load its paths aliases — it used to fail silently and drop them."""
     root = tmp_path / "proj"
-    write(root / "tsconfig.json",
-          '{\n  // the base config\n  "compilerOptions": {\n'
-          '    "paths": { "@/*": ["src/*"], },\n  },\n}\n')
+    write(
+        root / "tsconfig.json",
+        '{\n  // the base config\n  "compilerOptions": {\n'
+        '    "paths": { "@/*": ["src/*"], },\n  },\n}\n',
+    )
     write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
     write(root / "src" / "b.ts", 'import { a } from "./a.js";\nexport const b = a;\n')
     pkg(root)
@@ -230,10 +241,10 @@ def test_baseurl_is_honoured(tmp_path):
     """paths resolve relative to baseUrl, not relative to the root:
     with baseUrl "src", @/b must find src/lib/b, not lib/b."""
     root = tmp_path / "proj"
-    write(root / "tsconfig.json", json.dumps({
-        "compilerOptions": {
-            "baseUrl": "src",
-            "paths": {"@/*": ["lib/*"]}}}))
+    write(
+        root / "tsconfig.json",
+        json.dumps({"compilerOptions": {"baseUrl": "src", "paths": {"@/*": ["lib/*"]}}}),
+    )
     write(root / "src" / "lib" / "b.ts", "export const b = 1;\n")
     write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
     pkg(root)
@@ -244,10 +255,13 @@ def test_baseurl_is_honoured(tmp_path):
 def test_tsconfig_extends_is_followed(tmp_path):
     """A tsconfig that extends a base config inherits its paths."""
     root = tmp_path / "proj"
-    write(root / "tsconfig.base.json", json.dumps({
-        "compilerOptions": {"paths": {"@/*": ["src/*"]}}}))
-    write(root / "tsconfig.json", json.dumps({
-        "extends": "./tsconfig.base.json", "compilerOptions": {}}))
+    write(
+        root / "tsconfig.base.json", json.dumps({"compilerOptions": {"paths": {"@/*": ["src/*"]}}})
+    )
+    write(
+        root / "tsconfig.json",
+        json.dumps({"extends": "./tsconfig.base.json", "compilerOptions": {}}),
+    )
     write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
     write(root / "src" / "b.ts", 'import { a } from "./a.js";\nexport const b = a;\n')
     pkg(root)
@@ -260,10 +274,11 @@ def test_star_pattern_does_not_flag_package_imports(tmp_path):
     """A catch-all "*" pattern must not turn every package import
     (react, ...) into a false "unresolved import"."""
     root = tmp_path / "proj"
-    write(root / "tsconfig.json", json.dumps({
-        "compilerOptions": {"paths": {"*": ["src/*"]}}}))
-    write(root / "src" / "a.ts",
-          'import { r } from "react";\nimport { b } from "./b.js";\nexport const a = b;\n')
+    write(root / "tsconfig.json", json.dumps({"compilerOptions": {"paths": {"*": ["src/*"]}}}))
+    write(
+        root / "src" / "a.ts",
+        'import { r } from "react";\nimport { b } from "./b.js";\nexport const a = b;\n',
+    )
     write(root / "src" / "b.ts", "export const b = 1;\n")
     pkg(root, deps={"react": "18.0.0"})
     _dep_with_licence(root, "react", {"license": "MIT"})
@@ -276,13 +291,12 @@ def test_longest_prefix_pattern_wins(tmp_path):
     """When two patterns match, TypeScript picks the longest prefix —
     the checker must resolve the same file, not the first pattern's."""
     root = tmp_path / "proj"
-    write(root / "tsconfig.json", json.dumps({
-        "compilerOptions": {"paths": {
-            "@/*": ["wrong/*"],
-            "@/deep/*": ["src/*"]}}}))
+    write(
+        root / "tsconfig.json",
+        json.dumps({"compilerOptions": {"paths": {"@/*": ["wrong/*"], "@/deep/*": ["src/*"]}}}),
+    )
     write(root / "src" / "b.ts", 'import { a } from "./a.js";\nexport const b = a;\n')
-    write(root / "src" / "a.ts",
-          'import { b } from "@/deep/b";\nexport const a = b;\n')
+    write(root / "src" / "a.ts", 'import { b } from "@/deep/b";\nexport const a = b;\n')
     pkg(root)
     rc, out, _ = run(root)
     assert rc == 1, out
@@ -294,9 +308,10 @@ def test_regex_literal_with_quote_does_not_swallow_imports(tmp_path):
     comment stripper think a string opened and swallow the rest of
     the file — the import after it must still be seen."""
     root = tmp_path / "proj"
-    write(root / "src" / "a.ts",
-          "const re = /'/;\n"
-          'import { h } from "../tests/helper.js";\nexport const a = h;\n')
+    write(
+        root / "src" / "a.ts",
+        'const re = /\'/;\nimport { h } from "../tests/helper.js";\nexport const a = h;\n',
+    )
     write(root / "tests" / "helper.ts", "export const h = 1;\n")
     pkg(root)
     rc, out, _ = run(root)
@@ -321,6 +336,7 @@ def test_spdx_parentheses_and_precedence(tmp_path):
 
 # --- Third review round: regression tests (2026-11-06) ---
 
+
 def test_inherited_baseurl_resolves_against_the_base_config(tmp_path):
     """A baseUrl inherited from a base config resolves against the
     BASE config's directory (the file that declared it), not the
@@ -328,12 +344,14 @@ def test_inherited_baseurl_resolves_against_the_base_config(tmp_path):
     so @/b pointed at config/src/lib/b and the import was reported
     unresolved."""
     root = tmp_path / "proj"
-    write(root / "tsconfig.base.json", json.dumps({
-        "compilerOptions": {
-            "baseUrl": "src",
-            "paths": {"@/*": ["lib/*"]}}}))
-    write(root / "config" / "tsconfig.json", json.dumps({
-        "extends": "../tsconfig.base.json", "compilerOptions": {}}))
+    write(
+        root / "tsconfig.base.json",
+        json.dumps({"compilerOptions": {"baseUrl": "src", "paths": {"@/*": ["lib/*"]}}}),
+    )
+    write(
+        root / "config" / "tsconfig.json",
+        json.dumps({"extends": "../tsconfig.base.json", "compilerOptions": {}}),
+    )
     write(root / "src" / "lib" / "b.ts", "export const b = 1;\n")
     write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
     pkg(root)
@@ -347,10 +365,14 @@ def test_inherited_paths_without_baseurl_resolve_against_the_base_config(tmp_pat
     resolve against the BASE config's directory (the file that
     declared them) — not the child's directory."""
     root = tmp_path / "proj"
-    write(root / "tsconfig.base.json", json.dumps({
-        "compilerOptions": {"paths": {"@/*": ["src/lib/*"]}}}))
-    write(root / "config" / "tsconfig.json", json.dumps({
-        "extends": "../tsconfig.base.json", "compilerOptions": {}}))
+    write(
+        root / "tsconfig.base.json",
+        json.dumps({"compilerOptions": {"paths": {"@/*": ["src/lib/*"]}}}),
+    )
+    write(
+        root / "config" / "tsconfig.json",
+        json.dumps({"extends": "../tsconfig.base.json", "compilerOptions": {}}),
+    )
     write(root / "src" / "lib" / "b.ts", "export const b = 1;\n")
     write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
     pkg(root)
@@ -364,11 +386,13 @@ def test_child_baseurl_wins_over_inherited_paths(tmp_path):
     resolve against the CHILD's baseUrl — the child's declaration
     wins over the base's (which declares none here)."""
     root = tmp_path / "proj"
-    write(root / "tsconfig.base.json", json.dumps({
-        "compilerOptions": {"paths": {"@/*": ["lib/*"]}}}))
-    write(root / "tsconfig.json", json.dumps({
-        "extends": "./tsconfig.base.json",
-        "compilerOptions": {"baseUrl": "src"}}))
+    write(
+        root / "tsconfig.base.json", json.dumps({"compilerOptions": {"paths": {"@/*": ["lib/*"]}}})
+    )
+    write(
+        root / "tsconfig.json",
+        json.dumps({"extends": "./tsconfig.base.json", "compilerOptions": {"baseUrl": "src"}}),
+    )
     write(root / "src" / "lib" / "b.ts", "export const b = 1;\n")
     write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
     pkg(root)

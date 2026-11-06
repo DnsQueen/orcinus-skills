@@ -5,17 +5,20 @@ bump and a changelog entry.
 A push is a release when it changes anything the plugin ships:
 skills/, agents/, or commands/. Such a push must bump the version in
 .claude-plugin/plugin.json AND change CHANGELOG.md in the same range.
-A docs-only push needs no bump; a version bump without a changelog
-entry (or vice versa) still fails — the two travel together.
+A docs-only push needs no bump, and a CHANGELOG-only push needs
+no version bump: the version rule is one-directional. A version
+bump without a changelog entry fails even when nothing shipped
+changed — a version number with no release notes is a release
+that never happened.
 
 The check is that the version CHANGED, not that it increased: the
 1.0.0 → 0.9.0 correction (2026-11-06) lowered an unreleased version
 number to the honest pre-1.0 value, and direction is the release
 process's job (tags), not this script's.
 
-Usage (CI, push events only — the repo's workflow is direct pushes
-to main; a PR merged to main is caught by the merge push, whose diff
-includes the PR's skill changes):
+Usage (CI, push and pull_request events — the workflow fetches the
+base commit; for a PR that is the PR's base SHA, for a push the
+push's before SHA):
 
   git fetch --depth=1 origin <base>   # the base commit is not in a
                                       # depth-1 checkout
@@ -27,6 +30,7 @@ bump. Exit 0 = the push is fine; exit 1 = the bump is missing.
 
 This script is stdlib-only and needs only git and python3.
 """
+
 import argparse
 import json
 import subprocess
@@ -43,8 +47,9 @@ CHANGELOG = "CHANGELOG.md"
 
 
 def _git(repo, *args):
-    proc = subprocess.run(["git", "-C", str(repo), *args],
-                          capture_output=True, text=True, timeout=60)
+    proc = subprocess.run(
+        ["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=60
+    )
     return proc.returncode, proc.stdout.strip()
 
 
@@ -58,8 +63,8 @@ def _resolve(repo, ref):
     rc, out = _git(repo, "rev-parse", "--verify", f"{ref}^{{commit}}")
     if rc != 0 or not out:
         raise RuntimeError(
-            f"cannot resolve base {ref!r} — fetch it first "
-            f"(git fetch --depth=1 origin {ref})")
+            f"cannot resolve base {ref!r} — fetch it first (git fetch --depth=1 origin {ref})"
+        )
     return out
 
 
@@ -91,44 +96,64 @@ def _plugin_version(repo, ref):
 
 
 def check(repo, base, head):
-    """Return (ok, message) for the range base..head."""
+    """Return (ok, message) for the range base..head.
+
+    Two independent rules:
+    1. A shipped change (skills/, agents/, commands/) needs BOTH a
+       version bump and a changelog entry.
+    2. A version bump needs a changelog entry even when nothing
+       shipped changed.
+    Rule 2 is one-directional: a CHANGELOG-only push needs no bump.
+    """
     base = _resolve(repo, base)
     head = _resolve(repo, head)
     files = _changed_files(repo, base, head)
-    shipped = [f for f in files
-               if f.startswith(SHIPPED_PREFIXES)]
-    if not shipped:
-        return True, ("no shipped plugin content changed "
-                      "(skills/, agents/, commands/); "
-                      "no version bump needed")
-    version_changed = _plugin_version(repo, base) != _plugin_version(
-        repo, head)
+    shipped = [f for f in files if f.startswith(SHIPPED_PREFIXES)]
+    version_changed = _plugin_version(repo, base) != _plugin_version(repo, head)
     changelog_changed = CHANGELOG in files
-    if version_changed and changelog_changed:
-        return True, (f"shipped content changed ({len(shipped)} "
-                      f"file(s)); version bumped and {CHANGELOG} "
-                      f"updated")
     missing = []
-    if not version_changed:
+    if shipped and not version_changed:
         missing.append(f"a version bump in {PLUGIN_JSON}")
-    if not changelog_changed:
+    if (shipped or version_changed) and not changelog_changed:
         missing.append(f"an entry in {CHANGELOG}")
-    return False, (f"shipped plugin content changed "
-                   f"({', '.join(shipped[:3])}"
-                   f"{'...' if len(shipped) > 3 else ''}) but the "
-                   f"push is missing {' and '.join(missing)} — the "
-                   f"version bump and the changelog entry travel "
-                   f"together")
+    if missing:
+        if shipped:
+            what = (
+                f"shipped plugin content changed "
+                f"({', '.join(shipped[:3])}"
+                f"{'...' if len(shipped) > 3 else ''})"
+            )
+        else:
+            what = (
+                f"the version was bumped "
+                f"({_plugin_version(repo, base)!r} -> "
+                f"{_plugin_version(repo, head)!r})"
+            )
+        return False, (
+            f"{what} but the push is missing "
+            f"{' and '.join(missing)} — the version bump "
+            f"and the changelog entry travel together"
+        )
+    if shipped:
+        return True, (
+            f"shipped content changed ({len(shipped)} "
+            f"file(s)); version bumped and {CHANGELOG} "
+            f"updated"
+        )
+    if version_changed:
+        return True, (f"version bumped and {CHANGELOG} updated; no shipped content changed")
+    return True, (
+        "no shipped plugin content changed "
+        "(skills/, agents/, commands/) and the version "
+        "did not change; no version bump needed"
+    )
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", required=True,
-                        help="base revision (e.g. the push's before SHA)")
-    parser.add_argument("--head", required=True,
-                        help="head revision (e.g. the push's SHA)")
-    parser.add_argument("--repo", default=str(ROOT),
-                        help="repo to check (default: this repo)")
+    parser.add_argument("--base", required=True, help="base revision (e.g. the push's before SHA)")
+    parser.add_argument("--head", required=True, help="head revision (e.g. the push's SHA)")
+    parser.add_argument("--repo", default=str(ROOT), help="repo to check (default: this repo)")
     args = parser.parse_args(argv)
     try:
         ok, message = check(Path(args.repo), args.base, args.head)

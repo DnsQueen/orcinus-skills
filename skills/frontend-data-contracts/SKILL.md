@@ -1,6 +1,6 @@
 ---
 name: frontend-data-contracts
-description: A portable, framework-agnostic discipline for type safety at the network edge of any React or React Native app. Establishes one typed API client as the single fetch boundary, a parse-don't-validate rule that turns wire JSON into trusted domain types before it enters the app, a single response envelope ({ data } / { error }), one normalized typed error class for every failure mode (server error, bad status, network/abort), per-field validation errors mapped to forms, branded ID types so identifiers can't be mixed, and the rule that raw API shapes never leak past the client. Works with fetch, Zod/Valibot validation, and TanStack Query / RTK Query / SWR. Use this skill when designing an API client, validating or parsing API responses, modeling request/response types, handling API errors, mapping server validation to form fields, or stopping untyped fetch calls from spreading through components. Works with React + Vite, Next.js, Remix, and Expo / React Native. Only invoke via the orcinus router.
+description: Type safety at the network edge of any React or React Native app, with one typed API client as the single fetch boundary, parse-don't-validate, one response envelope, one typed ApiError for every failure mode, and branded IDs. Only invoke via the orcinus router.
 compatibility: Works with Claude Code, OpenCode, Codex, Cursor, Windsurf, Copilot, and any tool that reads SKILL.md or is pointed here from AGENTS.md / CLAUDE.md.
 license: MIT
 user-invocable: false

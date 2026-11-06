@@ -123,13 +123,13 @@ def build_manifest() -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--update", action="store_true",
-                        help="regenerate the manifest from the current files")
+    parser.add_argument(
+        "--update", action="store_true", help="regenerate the manifest from the current files"
+    )
     args = parser.parse_args()
     if args.update:
         manifest = build_manifest()
-        MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n",
-                            encoding="utf-8")
+        MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {MANIFEST} ({len(manifest)} files)")
         return 0
     if not MANIFEST.exists():
@@ -143,12 +143,16 @@ def main() -> int:
         if not path.exists():
             problems.append(f"missing: {rel}")
         elif _sha256(path) != expected:
-            problems.append(f"drifted: {rel} (changed since the manifest was recorded — update the skill's ATTRIBUTION.md and regenerate the manifest)")
+            problems.append(
+                f"drifted: {rel} (changed since the manifest was recorded — update the skill's ATTRIBUTION.md and regenerate the manifest)"
+            )
     # A vendored file that is not in the manifest is also a problem:
     # it was added without being recorded.
     for rel in sorted(build_manifest()):
         if rel not in manifest:
-            problems.append(f"unrecorded: {rel} (a vendored file with no recorded checksum — add it to the manifest)")
+            problems.append(
+                f"unrecorded: {rel} (a vendored file with no recorded checksum — add it to the manifest)"
+            )
     if problems:
         print(f"FAIL: {len(problems)} problem(s)")
         for problem in problems:

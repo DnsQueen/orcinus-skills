@@ -30,7 +30,10 @@ Publishing is the one step in the lifecycle that cannot be undone cleanly. You c
 ### 2. Check
 
 - The four commands are green (build, lint, typecheck, test).
-- The version does not exist on the registry yet (`npm view <name>@<version> version` must return nothing — query the exact version, not the latest, or a different version's existence will mislead you).
+- Pin the registry explicitly (`--registry https://registry.npmjs.org`, or the project's `.npmrc` — never rely on the ambient default), then check whether the exact version exists. Query the exact version, not the latest, or a different version's existence will mislead you. Capture the exit code AND stderr: the three empty-stdout cases are different.
+  - `E404` (version not found) = free to publish.
+  - `FETCH_ERROR` / timeout / `E401` / `E403` = INCOMPLETE, stop — the registry is unreachable or the credentials are wrong, and an empty answer proves nothing. Do not read it as "free to publish".
+- Build the exact artifact once: `npm pack`. Record its sha256, install THAT tarball in a clean directory and smoke-test it (Step 6 verifies the published one the same way). Publish that exact artifact, never a second build.
 - The git tree is clean and the version bump is committed.
 
 ### 3. Dry-run
@@ -43,15 +46,15 @@ Read the file list. It must contain exactly the built output, the README, the LI
 
 ### 4. Human gate
 
-Show the user the version, the changelog entry, and the dry-run file list. Publish only after their explicit written confirmation.
+Show the user the version, the changelog entry, the dry-run file list, and the tarball sha256 from Step 2. Publish only after their explicit written confirmation.
 
 ### 5. Publish
 
 ```bash
-npm publish
+npm publish ./<name>-<version>.tgz
 ```
 
-Use `--provenance` where the registry and CI support it, so the published artifact is tied to its build.
+Publish the exact tarball built and smoke-tested in Step 2, never a fresh build. Use `--provenance` where the registry and CI support it, so the published artifact is tied to its build.
 
 ### 6. Verify after publish
 

@@ -13,6 +13,7 @@ verbatim test (it accepted a 20-character prefix). Each has a
 regression test below.
 Run: python3 -m pytest skills/idea-capture/scripts/test_capture.py -q
 """
+
 import os
 import subprocess
 import sys
@@ -84,12 +85,12 @@ def test_note_and_reason_newlines_are_rejected(tmp_path):
     store = tmp_path / "ideas"
     rc, out, err = capture(store, "an idea")
     idea_id = out.strip()
-    rc, out, err = run(store, "promote", "--store", str(store), idea_id,
-                       "calibrated", "--note", "a\nb")
+    rc, out, err = run(
+        store, "promote", "--store", str(store), idea_id, "calibrated", "--note", "a\nb"
+    )
     assert rc == 1
     assert "single line" in err
-    rc, out, err = run(store, "drop", "--store", str(store), idea_id,
-                       "--reason", "a\nb")
+    rc, out, err = run(store, "drop", "--store", str(store), idea_id, "--reason", "a\nb")
     assert rc == 1
     assert "single line" in err
 
@@ -166,8 +167,7 @@ def test_two_captures_with_the_same_text_get_distinct_ids(tmp_path):
         if id1[:15] == id2[:15]:  # same YYYYMMDD-HHMMSS stamp
             assert id2.endswith("-2")
             return
-    raise AssertionError("two captures never landed in the same second "
-                         "after 10 attempts")
+    raise AssertionError("two captures never landed in the same second after 10 attempts")
 
 
 def test_id_stamp_and_created_agree(tmp_path):
@@ -209,8 +209,9 @@ def test_set_status_on_malformed_file_is_a_clean_error(tmp_path):
     store = tmp_path / "ideas"
     store.mkdir()
     (store / "20261106-120000-broken.md").write_text("no frontmatter\n", encoding="utf-8")
-    rc, out, err = run(store, "promote", "--store", str(store),
-                       "20261106-120000-broken", "calibrated")
+    rc, out, err = run(
+        store, "promote", "--store", str(store), "20261106-120000-broken", "calibrated"
+    )
     assert rc == 1
     assert "Traceback" not in err
     assert "error" in err
@@ -222,8 +223,12 @@ def test_traversal_id_is_rejected(tmp_path):
     store.mkdir()
     outside = tmp_path / "outside.md"
     outside.write_text("secret\n", encoding="utf-8")
-    for bad_id in ("../../outside", "../outside", "/tmp/outside",
-                   "20261106-120000-x/../../outside"):
+    for bad_id in (
+        "../../outside",
+        "../outside",
+        "/tmp/outside",
+        "20261106-120000-x/../../outside",
+    ):
         rc, out, err = run(store, "show", "--store", str(store), bad_id)
         assert rc == 1, bad_id
         assert "secret" not in out
@@ -262,6 +267,7 @@ def test_list_status_filter(tmp_path):
 
 
 # --- Second review round: regression tests (2026-11-06) ---
+
 
 def test_persian_only_idea_round_trips(tmp_path):
     """A Persian-only idea must capture, show, search and promote —
@@ -306,7 +312,10 @@ def test_persian_half_space_and_emoji_and_punctuation(tmp_path):
     assert rc == 0, err
     assert "Traceback" not in err
     first = out.strip()
-    assert cap.raw_text_of((store / f"{first}.md").read_text(encoding="utf-8")) == "می‌خواهم یک اپ بسازم"
+    assert (
+        cap.raw_text_of((store / f"{first}.md").read_text(encoding="utf-8"))
+        == "می‌خواهم یک اپ بسازم"
+    )
     rc, out, err = capture(store, "🚀💡🎉")
     assert rc == 0, err
     # Slug "idea" (no ASCII words); a -2 suffix is fine when another
@@ -433,6 +442,7 @@ def test_concurrent_promotes_do_not_lose_history(tmp_path):
 
 # --- Third review round: regression tests (2026-11-06) ---
 
+
 def test_list_with_malformed_file_is_partial_not_success(tmp_path):
     """list with a malformed file exits 2 (partial), not 0: a machine
     caller must not treat an incomplete list as success. The good
@@ -496,12 +506,11 @@ def test_set_status_with_missing_status_is_an_error(tmp_path):
     appended a History entry claiming the transition happened and
     returned 0."""
     store = tmp_path / "ideas"
-    path = _handwritten_idea(
-        store, "20261106-120000-no-status", [],
-        "an idea with no status field")
+    path = _handwritten_idea(store, "20261106-120000-no-status", [], "an idea with no status field")
     before = path.read_text(encoding="utf-8")
-    rc, out, err = run(store, "promote", "--store", str(store),
-                       "20261106-120000-no-status", "calibrated")
+    rc, out, err = run(
+        store, "promote", "--store", str(store), "20261106-120000-no-status", "calibrated"
+    )
     assert rc == 1, out
     assert "error" in err
     assert "status" in err
@@ -516,11 +525,15 @@ def test_set_status_does_not_rewrite_a_status_line_in_the_raw_text(tmp_path):
     while claiming success. The file must be left untouched."""
     store = tmp_path / "ideas"
     path = _handwritten_idea(
-        store, "20261106-120000-status-in-text", [],
-        "an idea whose text says\nstatus: raw\non its own line")
+        store,
+        "20261106-120000-status-in-text",
+        [],
+        "an idea whose text says\nstatus: raw\non its own line",
+    )
     before = path.read_text(encoding="utf-8")
-    rc, out, err = run(store, "promote", "--store", str(store),
-                       "20261106-120000-status-in-text", "calibrated")
+    rc, out, err = run(
+        store, "promote", "--store", str(store), "20261106-120000-status-in-text", "calibrated"
+    )
     assert rc == 1, out
     assert "error" in err
     assert path.read_text(encoding="utf-8") == before
@@ -533,13 +546,19 @@ def test_set_status_rewrites_only_the_frontmatter(tmp_path):
     text is never edited."""
     store = tmp_path / "ideas"
     path = _handwritten_idea(
-        store, "20261106-120000-status-both", ["status: raw"],
-        "an idea whose text says\nstatus: raw\non its own line")
-    rc, out, err = run(store, "promote", "--store", str(store),
-                       "20261106-120000-status-both", "calibrated")
+        store,
+        "20261106-120000-status-both",
+        ["status: raw"],
+        "an idea whose text says\nstatus: raw\non its own line",
+    )
+    rc, out, err = run(
+        store, "promote", "--store", str(store), "20261106-120000-status-both", "calibrated"
+    )
     assert rc == 0, err
     content = path.read_text(encoding="utf-8")
-    assert content.startswith("---\nid: 20261106-120000-status-both\n"
-                              "created: 2026-11-06T12:00:00+00:00\n"
-                              "source: test\nstatus: calibrated\n---\n")
+    assert content.startswith(
+        "---\nid: 20261106-120000-status-both\n"
+        "created: 2026-11-06T12:00:00+00:00\n"
+        "source: test\nstatus: calibrated\n---\n"
+    )
     assert "an idea whose text says\nstatus: raw\non its own line" in content

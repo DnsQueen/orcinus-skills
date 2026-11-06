@@ -22,6 +22,7 @@ UNIQUE case is covered on CREATE TABLE.
 
 Run: python3 -m pytest skills/database-designer/test_migration_integration.py -q
 """
+
 import sqlite3
 import sys
 from pathlib import Path
@@ -31,9 +32,14 @@ from migration_generator import MigrationGenerator, SchemaComparator
 
 # Step types SQLite cannot execute (Postgres-only SQL).
 NON_SQLITE_STEPS = {
-    "MODIFY_COLUMN", "ADD_CONSTRAINT", "DROP_CONSTRAINT",
-    "ADD_COLUMN_ZD", "ADD_TEMP_COLUMN", "DROP_OLD_COLUMN",
-    "COPY_DATA", "VALIDATE_DATA",
+    "MODIFY_COLUMN",
+    "ADD_CONSTRAINT",
+    "DROP_CONSTRAINT",
+    "ADD_COLUMN_ZD",
+    "ADD_TEMP_COLUMN",
+    "DROP_OLD_COLUMN",
+    "COPY_DATA",
+    "VALIDATE_DATA",
 }
 
 
@@ -41,16 +47,17 @@ def schema(tables):
     return {"tables": tables}
 
 
-def table(columns, primary_key=None, unique_constraints=None,
-          check_constraints=None, indexes=None):
-    return {"columns": columns, "primary_key": primary_key or [],
-            "unique_constraints": unique_constraints or [],
-            "check_constraints": check_constraints or {},
-            "indexes": indexes or []}
+def table(columns, primary_key=None, unique_constraints=None, check_constraints=None, indexes=None):
+    return {
+        "columns": columns,
+        "primary_key": primary_key or [],
+        "unique_constraints": unique_constraints or [],
+        "check_constraints": check_constraints or {},
+        "indexes": indexes or [],
+    }
 
 
-def col(type_, nullable=True, unique=False, foreign_key=None,
-        default=None, check_constraint=None):
+def col(type_, nullable=True, unique=False, foreign_key=None, default=None, check_constraint=None):
     d = {"type": type_, "nullable": nullable}
     if unique:
         d["unique"] = True
@@ -69,8 +76,8 @@ def compare_and_generate(current, target):
     changes = comp.compare_schemas()
     gen = MigrationGenerator()
     return changes, gen.generate_migration(
-        changes, current_schema=schema(current),
-        target_schema=schema(target))
+        changes, current_schema=schema(current), target_schema=schema(target)
+    )
 
 
 def new_db():
@@ -103,9 +110,13 @@ def introspect(conn):
     (type, notnull)}, "indexes": {name: (columns, unique)}, "fks":
     [(from_col, ref_table, ref_col)]}}."""
     out = {}
-    tables = [r[0] for r in conn.execute(
-        "SELECT name FROM sqlite_master WHERE type = 'table'"
-        " AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    tables = [
+        r[0]
+        for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+            " AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+    ]
     for t in tables:
         columns = {}
         for row in conn.execute(f"PRAGMA table_info({t})"):
@@ -121,8 +132,7 @@ def introspect(conn):
                 continue
             cols = [r[2] for r in conn.execute(f"PRAGMA index_info({name})")]
             indexes[name] = (cols, unique)
-        fks = [(r[3], r[2], r[4]) for r in
-               conn.execute(f"PRAGMA foreign_key_list({t})")]
+        fks = [(r[3], r[2], r[4]) for r in conn.execute(f"PRAGMA foreign_key_list({t})")]
         out[t] = {"columns": columns, "indexes": indexes, "fks": sorted(fks)}
     return out
 
@@ -144,21 +154,17 @@ def expected_schema(target):
         for col_name, col_def in t["columns"].items():
             # A primary-key column is NOT NULL in SQLite even when the
             # schema dict does not say so.
-            notnull = (not col_def.get("nullable", True)
-                       or col_name in t.get("primary_key", []))
-            columns[col_name] = (col_def.get("type", "VARCHAR(255)").upper(),
-                                 notnull)
+            notnull = not col_def.get("nullable", True) or col_name in t.get("primary_key", [])
+            columns[col_name] = (col_def.get("type", "VARCHAR(255)").upper(), notnull)
         indexes = {}
         for idx in t.get("indexes", []):
-            indexes[idx["name"]] = (list(idx["columns"]),
-                                    bool(idx.get("unique", False)))
+            indexes[idx["name"]] = (list(idx["columns"]), bool(idx.get("unique", False)))
         fks = []
         for col_name, col_def in t["columns"].items():
             if col_def.get("foreign_key"):
                 ref_table, ref_col = col_def["foreign_key"].rsplit(".", 1)
                 fks.append((col_name, ref_table, ref_col))
-        out[name] = {"columns": columns, "indexes": indexes,
-                     "fks": sorted(fks)}
+        out[name] = {"columns": columns, "indexes": indexes, "fks": sorted(fks)}
     return out
 
 
@@ -166,16 +172,28 @@ def test_index_change_executes_and_matches_target():
     """§3.5: an index that keeps its name but changes columns — the
     migration must drop the old index and create the new one, and the
     live index must cover the new columns."""
-    current = {"orders": table(
-        {"id": col("INTEGER", nullable=False),
-         "user_id": col("INTEGER"), "created_at": col("TEXT")},
-        primary_key=["id"],
-        indexes=[{"name": "idx_orders_search", "columns": ["user_id"]}] )}
-    target = {"orders": table(
-        {"id": col("INTEGER", nullable=False),
-         "user_id": col("INTEGER"), "created_at": col("TEXT")},
-        primary_key=["id"],
-        indexes=[{"name": "idx_orders_search", "columns": ["created_at"]}] )}
+    current = {
+        "orders": table(
+            {
+                "id": col("INTEGER", nullable=False),
+                "user_id": col("INTEGER"),
+                "created_at": col("TEXT"),
+            },
+            primary_key=["id"],
+            indexes=[{"name": "idx_orders_search", "columns": ["user_id"]}],
+        )
+    }
+    target = {
+        "orders": table(
+            {
+                "id": col("INTEGER", nullable=False),
+                "user_id": col("INTEGER"),
+                "created_at": col("TEXT"),
+            },
+            primary_key=["id"],
+            indexes=[{"name": "idx_orders_search", "columns": ["created_at"]}],
+        )
+    }
     conn = new_db()
     build_v1(conn, current)
     conn.execute("INSERT INTO orders VALUES (1, 7, '2026-01-01')")
@@ -194,15 +212,27 @@ def test_rename_and_drop_column_executes_with_data_surviving():
     """§3.6: a renamed table that also loses a column — the DROP COLUMN
     must name the new table, the data must survive, and the rollback
     must restore the old table (with the dropped column back, empty)."""
-    current = {"orders": table(
-        {"id": col("INTEGER", nullable=False),
-         "user_id": col("INTEGER"), "amount": col("NUMERIC"),
-         "note": col("TEXT")},
-        primary_key=["id"])}
-    target = {"purchases": table(
-        {"id": col("INTEGER", nullable=False),
-         "user_id": col("INTEGER"), "amount": col("NUMERIC")},
-        primary_key=["id"])}
+    current = {
+        "orders": table(
+            {
+                "id": col("INTEGER", nullable=False),
+                "user_id": col("INTEGER"),
+                "amount": col("NUMERIC"),
+                "note": col("TEXT"),
+            },
+            primary_key=["id"],
+        )
+    }
+    target = {
+        "purchases": table(
+            {
+                "id": col("INTEGER", nullable=False),
+                "user_id": col("INTEGER"),
+                "amount": col("NUMERIC"),
+            },
+            primary_key=["id"],
+        )
+    }
     conn = new_db()
     build_v1(conn, current)
     conn.execute("INSERT INTO orders VALUES (1, 7, 42.5, 'gift')")
@@ -227,15 +257,19 @@ def test_create_table_with_fk_and_constraints_executes():
     "users.id") and the table-level unique and check constraints —
     and SQLite must actually enforce them."""
     target = {
-        "authors": table({"id": col("INTEGER", nullable=False),
-                          "name": col("TEXT")}, primary_key=["id"]),
+        "authors": table(
+            {"id": col("INTEGER", nullable=False), "name": col("TEXT")}, primary_key=["id"]
+        ),
         "books": table(
-            {"id": col("INTEGER", nullable=False),
-             "author_id": col("INTEGER", foreign_key="authors.id"),
-             "title": col("TEXT"),
-             "price": col("NUMERIC", check_constraint="price > 0")},
+            {
+                "id": col("INTEGER", nullable=False),
+                "author_id": col("INTEGER", foreign_key="authors.id"),
+                "title": col("TEXT"),
+                "price": col("NUMERIC", check_constraint="price > 0"),
+            },
             primary_key=["id"],
-            unique_constraints=[["title"]]),
+            unique_constraints=[["title"]],
+        ),
     }
     conn = new_db()
     _, plan = compare_and_generate({}, target)
@@ -276,20 +310,26 @@ def test_add_column_with_check_and_fk_executes():
     no longer part of this test; it is covered by the CREATE TABLE
     test above, which still executes the named constraints."""
     current = {
-        "groups": table({"id": col("INTEGER", nullable=False),
-                         "label": col("TEXT")}, primary_key=["id"]),
-        "users": table({"id": col("INTEGER", nullable=False),
-                        "name": col("TEXT")}, primary_key=["id"]),
+        "groups": table(
+            {"id": col("INTEGER", nullable=False), "label": col("TEXT")}, primary_key=["id"]
+        ),
+        "users": table(
+            {"id": col("INTEGER", nullable=False), "name": col("TEXT")}, primary_key=["id"]
+        ),
     }
     target = {
-        "groups": table({"id": col("INTEGER", nullable=False),
-                         "label": col("TEXT")}, primary_key=["id"]),
+        "groups": table(
+            {"id": col("INTEGER", nullable=False), "label": col("TEXT")}, primary_key=["id"]
+        ),
         "users": table(
-            {"id": col("INTEGER", nullable=False),
-             "name": col("TEXT"),
-             "status": col("TEXT", check_constraint="status IN ('a', 'b')"),
-             "group_id": col("INTEGER", foreign_key="groups.id")},
-            primary_key=["id"]),
+            {
+                "id": col("INTEGER", nullable=False),
+                "name": col("TEXT"),
+                "status": col("TEXT", check_constraint="status IN ('a', 'b')"),
+                "group_id": col("INTEGER", foreign_key="groups.id"),
+            },
+            primary_key=["id"],
+        ),
     }
     conn = new_db()
     build_v1(conn, current)
@@ -304,12 +344,14 @@ def test_add_column_with_check_and_fk_executes():
     conn.commit()
     conn.execute("UPDATE users SET status = 'a', group_id = 1 WHERE id = 1")
     assert conn.execute("SELECT status, group_id FROM users WHERE id = 1").fetchone() == ("a", 1)
-    constraints = [s.sql_forward for s in plan.steps
-                   if s.step_type == "ADD_CONSTRAINT"]
-    assert any("ADD CONSTRAINT ck_users_status CHECK (status IN ('a', 'b'))" in s
-               for s in constraints)
-    assert any("ADD CONSTRAINT fk_users_group_id FOREIGN KEY (group_id) REFERENCES groups(id)" in s
-               for s in constraints)
+    constraints = [s.sql_forward for s in plan.steps if s.step_type == "ADD_CONSTRAINT"]
+    assert any(
+        "ADD CONSTRAINT ck_users_status CHECK (status IN ('a', 'b'))" in s for s in constraints
+    )
+    assert any(
+        "ADD CONSTRAINT fk_users_group_id FOREIGN KEY (group_id) REFERENCES groups(id)" in s
+        for s in constraints
+    )
 
 
 def test_full_v1_to_v2_flow_matches_target_schema():
@@ -318,34 +360,50 @@ def test_full_v1_to_v2_flow_matches_target_schema():
     substring of the SQL. Then roll back and compare to v1."""
     current = {
         "users": table(
-            {"id": col("INTEGER", nullable=False),
-             "name": col("TEXT"), "email": col("TEXT"),
-             "age": col("INTEGER")},
+            {
+                "id": col("INTEGER", nullable=False),
+                "name": col("TEXT"),
+                "email": col("TEXT"),
+                "age": col("INTEGER"),
+            },
             primary_key=["id"],
-            indexes=[{"name": "idx_users_email", "columns": ["email"]}]),
+            indexes=[{"name": "idx_users_email", "columns": ["email"]}],
+        ),
         "posts": table(
-            {"id": col("INTEGER", nullable=False),
-             "user_id": col("INTEGER", foreign_key="users.id"),
-             "body": col("TEXT")},
-            primary_key=["id"]),
+            {
+                "id": col("INTEGER", nullable=False),
+                "user_id": col("INTEGER", foreign_key="users.id"),
+                "body": col("TEXT"),
+            },
+            primary_key=["id"],
+        ),
     }
     target = {
         "users": table(
-            {"id": col("INTEGER", nullable=False),
-             "name": col("TEXT"), "email": col("TEXT"),
-             "city": col("TEXT")},
+            {
+                "id": col("INTEGER", nullable=False),
+                "name": col("TEXT"),
+                "email": col("TEXT"),
+                "city": col("TEXT"),
+            },
             primary_key=["id"],
-            indexes=[{"name": "idx_users_email", "columns": ["email"]},
-                     {"name": "idx_users_name", "columns": ["name"]}]),
+            indexes=[
+                {"name": "idx_users_email", "columns": ["email"]},
+                {"name": "idx_users_name", "columns": ["name"]},
+            ],
+        ),
         "posts": table(
-            {"id": col("INTEGER", nullable=False),
-             "user_id": col("INTEGER", foreign_key="users.id"),
-             "body": col("TEXT")},
-            primary_key=["id"]),
+            {
+                "id": col("INTEGER", nullable=False),
+                "user_id": col("INTEGER", foreign_key="users.id"),
+                "body": col("TEXT"),
+            },
+            primary_key=["id"],
+        ),
         "tags": table(
-            {"id": col("INTEGER", nullable=False),
-             "label": col("TEXT", unique=True)},
-            primary_key=["id"]),
+            {"id": col("INTEGER", nullable=False), "label": col("TEXT", unique=True)},
+            primary_key=["id"],
+        ),
     }
     conn = new_db()
     build_v1(conn, current)
@@ -354,7 +412,11 @@ def test_full_v1_to_v2_flow_matches_target_schema():
     _, plan = compare_and_generate(current, target)
     execute_plan(conn, plan)
     assert introspect(conn) == expected_schema(target)
-    assert conn.execute("SELECT name, email, city FROM users WHERE id = 1").fetchone() == ("Niloufar", "n@example.com", None)
+    assert conn.execute("SELECT name, email, city FROM users WHERE id = 1").fetchone() == (
+        "Niloufar",
+        "n@example.com",
+        None,
+    )
     assert conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0] == 1
     execute_rollback(conn, plan)
     assert introspect(conn) == expected_schema(current)

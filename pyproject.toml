@@ -18,7 +18,20 @@
 # migration_generator.py is NOT excluded — ORCINUS maintains it.
 line-length = 100
 target-version = "py310"
+# One exclude list for both `ruff check` and `ruff format`: format
+# honors the top-level exclude, while directory patterns under
+# [tool.ruff.format] exclude do NOT exclude files in ruff 0.17.4
+# (verified by experiment 2026-11-06 — keep format excludes here).
+# ruff format also rewrites fenced Python blocks in Markdown files,
+# so vendored prose is excluded too, not just vendored Python. A
+# directory is excluded whole only when everything in it is
+# vendored; mixed directories (owned code beside vendored prose)
+# exclude only their Markdown files, so the owned code stays
+# linted and formatted.
 exclude = [
+    # Vendored Python: upstream style, and the drift check
+    # (scripts/check_drift.py) forbids changing these files.
+    # migration_generator.py is NOT excluded — ORCINUS maintains it.
     "skills/database-designer/index_optimizer.py",
     "skills/database-designer/schema_analyzer.py",
     "skills/mcp-builder/scripts/",
@@ -26,6 +39,29 @@ exclude = [
     "skills/skill-creator/",
     "skills/webapp-testing/examples/",
     "skills/webapp-testing/scripts/with_server.py",
+    # Vendored Markdown, whole directories (entirely vendored; no
+    # owned .py lives under any of them).
+    "agents/",
+    "commands/",
+    "skills/api-and-interface-design/",
+    "skills/ask-questions-if-underspecified/",
+    "skills/codebase-knowledge-builder/",
+    "skills/diagnosing-bugs/",
+    "skills/frontend-architecture/",
+    "skills/frontend-data-contracts/",
+    "skills/frontend-optimistic-mutations/",
+    "skills/i18n/",
+    "skills/independent-review/",
+    "skills/issue-triage/",
+    "skills/mcp-builder/",
+    "skills/monitoring/",
+    "skills/monitoring-observability/",
+    "skills/performance-optimization/",
+    "skills/refactor/",
+    "skills/waza/",
+    # Vendored Markdown in mixed directories (owned code beside it).
+    "skills/database-designer/**/*.md",
+    "skills/webapp-testing/**/*.md",
 ]
 
 [tool.ruff.lint]
@@ -34,3 +70,20 @@ exclude = [
 # Style rules are deliberately NOT enabled: the vendored files carry
 # upstream style and must not be restyled.
 select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+# The typecheck gate: default settings, targeting Python 3.10 (the
+# lowest version the scripts claim). Scope is the ORCINUS-owned
+# Python plus migration_generator.py, which ORCINUS maintains:
+# scripts/ and the skill scripts, and the eval-grader harness test.
+# Pure vendored copies are not checked (same rule as ruff). Run:
+# mypy scripts/
+# skills/architecture/scripts/ skills/database-designer/migration_generator.py
+# skills/database-designer/test_migration_generator.py
+# skills/database-designer/test_migration_integration.py
+# skills/database-designer/test_postgres_migration.py
+# skills/idea-capture/scripts/ skills/incomplete-refactor/scripts/
+# skills/orcinus-verify/scripts/
+# skills/webapp-testing/scripts/test_with_server.py
+# evals/waza-orcinus-verify-agent/test_graders.py
+python_version = "3.10"

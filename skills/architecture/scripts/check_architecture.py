@@ -70,8 +70,19 @@ IMPORT_RE = re.compile(
 
 # Words after which a "/" starts a regex literal, not a division.
 _REGEX_KEYWORDS = {
-    "return", "typeof", "case", "delete", "void", "in", "of", "new",
-    "throw", "else", "do", "yield", "await",
+    "return",
+    "typeof",
+    "case",
+    "delete",
+    "void",
+    "in",
+    "of",
+    "new",
+    "throw",
+    "else",
+    "do",
+    "yield",
+    "await",
 }
 
 
@@ -280,7 +291,8 @@ def load_tsconfig_paths(root, tsconfig_path):
         parent = cfg["extends"]
         if parent.startswith("."):
             base_path = os.path.normpath(
-                os.path.join(os.path.dirname(os.path.abspath(path)), parent))
+                os.path.join(os.path.dirname(os.path.abspath(path)), parent)
+            )
             if not base_path.endswith(".json"):
                 base_path += ".json"
         else:
@@ -291,8 +303,7 @@ def load_tsconfig_paths(root, tsconfig_path):
             raise TsconfigError(f"tsconfig extends cycle at {base_path}")
         seen.add(os.path.abspath(base_path))
         if not os.path.isfile(base_path):
-            raise TsconfigError(
-                f"tsconfig {path} extends {parent!r}, which was not found")
+            raise TsconfigError(f"tsconfig {path} extends {parent!r}, which was not found")
         cfg = _load_tsconfig_file(base_path)
         chain.append((os.path.abspath(base_path), cfg))
         path = base_path
@@ -311,16 +322,14 @@ def load_tsconfig_paths(root, tsconfig_path):
     paths = opts.get("paths", {})
     if not isinstance(paths, dict):
         raise TsconfigError(
-            f"{origins.get('paths', chain[0][0])}: "
-            f"compilerOptions.paths is not an object")
+            f"{origins.get('paths', chain[0][0])}: compilerOptions.paths is not an object"
+        )
     base_url = opts.get("baseUrl")
     if base_url is not None and not isinstance(base_url, str):
-        raise TsconfigError(
-            f"{origins['baseUrl']}: compilerOptions.baseUrl is not a string")
+        raise TsconfigError(f"{origins['baseUrl']}: compilerOptions.baseUrl is not a string")
     if base_url is not None:
         # baseUrl resolves relative to the file that declared it.
-        base_dir = os.path.normpath(
-            os.path.join(os.path.dirname(origins["baseUrl"]), base_url))
+        base_dir = os.path.normpath(os.path.join(os.path.dirname(origins["baseUrl"]), base_url))
     elif paths:
         # No baseUrl: paths resolve relative to the file that declared
         # them.
@@ -346,8 +355,7 @@ def _candidates_for(target):
     # TypeScript with NodeNext resolution maps a ".js" import to a ".ts"
     # source file, so "./b.js" resolves to "./b.ts". Without that mapping
     # the import graph breaks and cycles are missed.
-    for js_ext, ts_ext in ((".js", ".ts"), (".jsx", ".tsx"),
-                           (".mjs", ".mts"), (".cjs", ".cts")):
+    for js_ext, ts_ext in ((".js", ".ts"), (".jsx", ".tsx"), (".mjs", ".mts"), (".cjs", ".cts")):
         if target.endswith(js_ext):
             candidates.append(target[: -len(js_ext)] + ts_ext)
     return candidates
@@ -384,7 +392,7 @@ def resolve_import(from_file, spec, root, src_dir, tsconfig=None):
         if "*" in pattern:
             prefix, suffix = pattern.split("*", 1)
             if spec.startswith(prefix) and spec.endswith(suffix):
-                middle = spec[len(prefix): len(spec) - len(suffix) if suffix else None]
+                middle = spec[len(prefix) : len(spec) - len(suffix) if suffix else None]
                 matches.append((len(prefix), pattern, replacements, middle))
         elif spec == pattern:
             matches.append((len(pattern), pattern, replacements, None))
@@ -517,7 +525,7 @@ def find_cycles(graph):
             nxt = neighbours[idx]
             stack[-1] = (node, neighbours, idx + 1)
             if colour[nxt] == GREY:
-                cycle = path[path.index(nxt):] + [nxt]
+                cycle = path[path.index(nxt) :] + [nxt]
                 cycles.append(cycle)
             elif colour[nxt] == WHITE:
                 colour[nxt] = GREY
@@ -532,10 +540,16 @@ def main():
     ap.add_argument("--src-dir", default="src")
     ap.add_argument("--test-dir", default="tests")
     ap.add_argument("--allow-licences", default=",".join(sorted(DEFAULT_ALLOWED)))
-    ap.add_argument("--licence-allowlist", default=None,
-                    help="JSON file mapping dependency name -> licence, for licences outside the allowed set that were decided in an ADR.")
-    ap.add_argument("--tsconfig", default=None,
-                    help="Path to tsconfig.json (default: <root>/tsconfig.json), for resolving paths aliases.")
+    ap.add_argument(
+        "--licence-allowlist",
+        default=None,
+        help="JSON file mapping dependency name -> licence, for licences outside the allowed set that were decided in an ADR.",
+    )
+    ap.add_argument(
+        "--tsconfig",
+        default=None,
+        help="Path to tsconfig.json (default: <root>/tsconfig.json), for resolving paths aliases.",
+    )
     args = ap.parse_args()
 
     # Absolutise and normalise the root FIRST. Every path derived from
@@ -571,7 +585,8 @@ def main():
     if not files:
         violations.append(
             f"no source files found under {args.src_dir}/ — nothing was "
-            f"checked (INCOMPLETE, not clean)")
+            f"checked (INCOMPLETE, not clean)"
+        )
     for path in files:
         try:
             with open(path, encoding="utf-8", errors="ignore") as f:
@@ -591,20 +606,18 @@ def main():
                 # matches every package name, so it must not turn a
                 # package import into a false "unresolved import".
                 if spec.startswith(".") or any(
-                    spec.startswith(p.split("*")[0])
-                    for p in tsconfig["paths"]
-                    if p.split("*")[0]
+                    spec.startswith(p.split("*")[0]) for p in tsconfig["paths"] if p.split("*")[0]
                 ):
                     violations.append(f"{rel}: unresolved import {spec}")
                 continue
             target_rel = os.path.relpath(target, root)
             if os.path.commonpath([target, test_base]) == test_base:
-                violations.append(
-                    f"{rel}: layer violation — imports from tests/ ({spec})")
+                violations.append(f"{rel}: layer violation — imports from tests/ ({spec})")
             elif os.path.commonpath([target, src_base]) != src_base:
                 violations.append(
                     f"{rel}: layer violation — imports from outside "
-                    f"{args.src_dir}/ ({spec} -> {target_rel})")
+                    f"{args.src_dir}/ ({spec} -> {target_rel})"
+                )
             else:
                 graph[rel].add(target_rel)
 
@@ -651,7 +664,8 @@ def main():
                 else:
                     violations.append(
                         f"dependency {name}: licence {lic} is not in the allowed set "
-                        f"({', '.join(sorted(allowed))}) and has no recorded decision")
+                        f"({', '.join(sorted(allowed))}) and has no recorded decision"
+                    )
 
     if violations:
         print(f"FAIL: {len(violations)} violation(s)")

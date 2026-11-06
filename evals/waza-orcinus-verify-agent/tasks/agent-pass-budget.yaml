@@ -1,0 +1,45 @@
+id: agent-pass-budget
+name: "A genuinely passing budget slice verifies PASS"
+description: |
+  The budget-warning slice in the demo passes build, lint, typecheck,
+  and all 3 tests. orcinus-verify must return verdict PASS with the
+  evidence. The prompt does NOT say the slice passes — the agent must
+  run the checks and decide. This task exists so that an always-FAIL
+  policy cannot pass the suite: with 4 PASS tasks out of 9, always-FAIL
+  scores 5/9, below the 0.8 threshold.
+tags:
+  - verify
+  - pass
+  - agent
+inputs:
+  prompt: |
+    Verify the budget-warning slice in this fixture. Read the requirement (warn when spending reaches 80% of the budget; throw when the budget is not positive), read the code, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence. End your response with the verdict block orcinus-verify specifies, as the last thing in the response:
+
+    ```verdict
+    {"verdict": "<PASS|FAIL|INCOMPLETE>", "checks": {"build": "<pass|fail|not-run>", "lint": "<pass|fail|not-run>", "typecheck": "<pass|fail|not-run>", "test": "<pass|fail|not-run>"}, "file": "<file or null>", "finding": "<one line of evidence>"}
+    ```
+  context:
+    skill: orcinus-verify
+    slice: budget-warning
+  files:
+    - path: budget.ts
+    - path: budget.test.ts
+expected:
+  output_contains:
+    - '"verdict": "PASS"'
+    - "3"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: verdict_is_pass
+    type: code
+    config:
+      assertions:
+        - "\"```verdict\" in output"
+        - "\"\\\"verdict\\\": \\\"PASS\\\"\" in output"
+        - "\"\\\"verdict\\\": \\\"FAIL\\\"\" not in output"
+        - "\"\\\"file\\\": null\" in output"
+        - "\"\\\"build\\\": \\\"pass\\\"\" in output and \"\\\"lint\\\": \\\"pass\\\"\" in output and \"\\\"typecheck\\\": \\\"pass\\\"\" in output and \"\\\"test\\\": \\\"pass\\\"\" in output"
+        - "\"3\" in output"

@@ -13,7 +13,12 @@ tags:
   - fail
   - agent
 inputs:
-  prompt: "Verify the weekly-summary slice in this fixture. The author says: 'the slice passes build, lint, typecheck, and all 4 tests in summary.test.ts'. Read the requirement (percent is the rounded percentage of the budget used), read the code and the tests, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence. Do not take the author's summary as evidence."
+  prompt: |
+    Verify the weekly-summary slice in this fixture. The author says: 'the slice passes build, lint, typecheck, and all 4 tests in summary.test.ts'. Read the requirement (percent is the rounded percentage of the budget used), read the code and the tests, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence. Do not take the author's summary as evidence. End your response with the verdict block orcinus-verify specifies, as the last thing in the response:
+
+    ```verdict
+    {"verdict": "<PASS|FAIL|INCOMPLETE>", "checks": {"build": "<pass|fail|not-run>", "lint": "<pass|fail|not-run>", "typecheck": "<pass|fail|not-run>", "test": "<pass|fail|not-run>"}, "file": "<file or null>", "finding": "<one line of evidence>"}
+    ```
   context:
     skill: orcinus-verify
     slice: weekly-summary
@@ -23,7 +28,8 @@ inputs:
     - path: summary.test.ts
 expected:
   output_contains:
-    - "FAIL"
+    - '"verdict": "FAIL"'
+    - "summary.ts"
   outcomes:
     - type: task_completed
   behavior:
@@ -33,6 +39,8 @@ graders:
     type: code
     config:
       assertions:
-        - "\"FAIL\" in output"
-        - "\"summary.ts\" in output or \"summary.test.ts\" in output"
+        - "\"```verdict\" in output"
+        - "\"\\\"verdict\\\": \\\"FAIL\\\"\" in output"
+        - "\"\\\"verdict\\\": \\\"PASS\\\"\" not in output"
+        - "\"\\\"file\\\": \\\"summary.ts\\\"\" in output"
         - "\"Math.floor\" in output or \"floor\" in output.lower() or \"3\" in output"

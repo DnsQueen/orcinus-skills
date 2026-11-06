@@ -1,10 +1,12 @@
 # Persistent project state — `.orcinus/state.json`
 
 Date: 2026-11-06
-Status: spec (v0.9). The router reads and writes this file; the
+Status: spec (v0.9.1). The router reads and writes this file; the
 enforcement layer that would make it tamper-proof is v1.1 (see
 SCOPE.md). This spec defines the file so the router, the verifier,
-and the human all agree on what "verified" means.
+and the human all agree on what "verified" means. v0.9.1 fixes the
+v0.9 self-contradiction: VERIFIED is bound to the *content digest*,
+not to the commit SHA (see Rule 2 and "The content digest").
 
 ## Why
 
@@ -25,22 +27,49 @@ the human approves transitions that need approval.
 
 ```json
 {
-  "format_version": 1,
+  "format_version": 2,
   "project": "weekly-budget",
   "stage": "VERIFYING",
   "revision": "b2809bd64f5679ce56eb79a239109978f0c9f06a",
+  "content_digest": "sha256:9f2c…",
   "evidence_bundle": "docs/verification/stage-30.json",
   "approval": null,
   "history": [
     {
       "stage": "BUILDING",
       "revision": "90a91c8",
+      "content_digest": "sha256:41ab…",
       "at": "2026-11-06T14:00:00+03:30",
       "note": "Stage 20 built test-first, 31/31 tests."
     }
   ]
 }
 ```
+
+## The content digest
+
+VERIFIED is bound to what was verified — the content of the project
+— not to the identity of the commit that happened to hold it. The
+content digest is sha256 over the sorted `git ls-tree -r` listing of
+the revision's tree, excluding the two places where recording
+verification itself writes:
+
+1. Run `git ls-tree -r <rev>`; each line is
+   `<mode> SP <type> SP <sha> TAB <path>`.
+2. Drop lines whose path is under `.orcinus/` or `docs/verification/`
+   (exact directory prefixes, with the slash — a file named
+   `.orcinus-notes.txt` still counts).
+3. Sort the remaining lines by path.
+4. Join with "\n" (no trailing newline), UTF-8, sha256 hex.
+   The digest is recorded as `sha256:<hex>`.
+
+Reference implementation: `scripts/content_digest.py` (standard
+library only; `python3 scripts/content_digest.py [repo] [rev]`).
+Its docstring states the same algorithm — keep the two in agreement.
+
+The digest covers committed content only: a dirty working tree is
+never VERIFIED, because the digest would not describe what was
+verified. Record VERIFIED only when the tree is clean.
 
 ## Stages
 
@@ -49,36 +78,40 @@ the human approves transitions that need approval.
 | `BUILDING` | A slice is being built. Nothing in this stage is verified. |
 | `VERIFYING` | The verifier is running. The `revision` is the one being checked. |
 | `BLOCKED` | Verification found a blocking finding. The `evidence_bundle` says what. |
-| `VERIFIED` | The revision passed verification. Bound to the `evidence_bundle` for that exact revision. A new commit moves the project back to `BUILDING` — a VERIFIED state from one revision does not certify another. |
+| `VERIFIED` | The content digest passed verification. Bound to the `evidence_bundle` for that exact content digest. A commit that changes the content digest moves the project back to `BUILDING`; a commit that only records the state file or an evidence bundle leaves the digest unchanged and does not reset the stage. |
 | `AWAITING_APPROVAL` | Verified, and waiting for the human to approve the next step (release, merge, publish). |
-| `RELEASE_READY` | The human approved the verified revision for release. The `approval` field records who approved, what revision, and what artifact. |
+| `RELEASE_READY` | The human approved the verified content digest for release. The `approval` field records who approved, what content digest, and what artifact. |
 
 ## Fields
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `format_version` | integer | yes | 1. Bump when a required field is added or a rule changes. |
+| `format_version` | integer | yes | 2. Bump when a required field is added or a rule changes. |
 | `project` | string | yes | The project name. |
 | `stage` | string | yes | One of the six stages above. |
-| `revision` | string | yes | The exact commit the stage refers to. |
-| `evidence_bundle` | string or null | yes | The path to the evidence bundle (per `skills/orcinus-verify/references/evidence.schema.json`) for the `revision`, or null when there is none (BUILDING). |
-| `approval` | object or null | yes | When the human approves: `{approved_by, revision, artifact, at}`. The approval is bound to a specific revision and artifact hash — approving one revision does not approve the next. |
-| `history` | array | yes | Every stage transition, with the revision and the time. The history is append-only; a transition is never rewritten. |
+| `revision` | string | yes | The exact commit the stage refers to. Human-readable pointer; the binding is the content digest. |
+| `content_digest` | string | yes | `sha256:<hex>` over the tree excluding `.orcinus/` and `docs/verification/` (see "The content digest"). This is what VERIFIED is bound to. |
+| `evidence_bundle` | string or null | yes | The path to the evidence bundle (per `skills/orcinus-verify/references/evidence.schema.json`) for the `content_digest`, or null when there is none (BUILDING). |
+| `approval` | object or null | yes | When the human approves: `{approved_by, revision, content_digest, artifact, at}`. The approval is bound to a specific content digest and artifact hash — approving one content digest does not approve the next. |
+| `history` | array | yes | Every stage transition, with the revision, the content digest, and the time. The history is append-only; a transition is never rewritten. |
 
 ## Rules
 
-1. **VERIFIED is bound to a revision and an evidence bundle.** A
+1. **VERIFIED is bound to a content digest and an evidence bundle.** A
    state file that says VERIFIED without an `evidence_bundle` that
    validates (see `skills/orcinus-verify/scripts/validate_evidence.py`) is corrupt, not
    verified.
-2. **A new commit resets the stage.** When the revision changes, the
-   stage goes back to BUILDING. The history keeps the old VERIFIED
-   entry — it is a record, not a claim about the new code.
-3. **Approval is bound to a revision and an artifact.** The human
-   approves a specific revision and a specific artifact (a release
-   tarball, a commit, a published package). Approving revision A does
-   not approve revision B.
-4. **The state file is not the enforcement.** In v0.9, any agent (or
+2. **A content change resets the stage.** When the content digest
+   changes, the stage goes back to BUILDING. A commit that leaves the
+   digest unchanged — for example a commit that only records the
+   state file or an evidence bundle — does not reset the stage. The
+   history keeps the old VERIFIED entry — it is a record, not a
+   claim about the new content.
+3. **Approval is bound to a content digest and an artifact.** The human
+   approves a specific content digest and a specific artifact (a release
+   tarball, a commit, a published package). Approving one content digest
+   does not approve the next.
+4. **The state file is not the enforcement.** In v0.9.1, any agent (or
    human) with write access can edit it. The enforcement layer
    (v1.1, in SCOPE.md) would make transitions checkable — the
    verifier's signature, the evidence bundle's hash, the approval's

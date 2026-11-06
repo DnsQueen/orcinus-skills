@@ -1,0 +1,47 @@
+id: agent-pass-fixed
+name: "A previously reported rounding bug, now fixed, verifies PASS"
+description: |
+  A previous session reported a rounding bug in this slice (percent
+  used Math.floor). The bug is fixed: the percent uses Math.round and
+  all 4 tests pass. The agent must check the current code, not the
+  report — returning FAIL because the file "usually" has the bug is a
+  fail of this task. This is the control for the planted-bug task: the
+  same file, the same evidence strings available, the opposite verdict.
+  It exists so that an always-FAIL policy cannot pass the suite.
+tags:
+  - verify
+  - pass
+  - agent
+inputs:
+  prompt: |
+    Verify the weekly-summary slice in this fixture. A previous session reported a rounding bug here (percent computed with Math.floor instead of Math.round). Check whether the bug is still present: read the requirement (percent is the rounded percentage of the budget used), read the code, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence. End your response with the verdict block orcinus-verify specifies, as the last thing in the response:
+
+    ```verdict
+    {"verdict": "<PASS|FAIL|INCOMPLETE>", "checks": {"build": "<pass|fail|not-run>", "lint": "<pass|fail|not-run>", "typecheck": "<pass|fail|not-run>", "test": "<pass|fail|not-run>"}, "file": "<file or null>", "finding": "<one line of evidence>"}
+    ```
+  context:
+    skill: orcinus-verify
+    slice: weekly-summary
+  files:
+    - path: summary.ts
+    - path: summary.test.ts
+expected:
+  output_contains:
+    - '"verdict": "PASS"'
+    - "Math.round"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: verdict_is_pass
+    type: code
+    config:
+      assertions:
+        - "\"```verdict\" in output"
+        - "\"\\\"verdict\\\": \\\"PASS\\\"\" in output"
+        - "\"\\\"verdict\\\": \\\"FAIL\\\"\" not in output"
+        - "\"\\\"file\\\": null\" in output"
+        - "\"\\\"build\\\": \\\"pass\\\"\" in output and \"\\\"lint\\\": \\\"pass\\\"\" in output and \"\\\"typecheck\\\": \\\"pass\\\"\" in output and \"\\\"test\\\": \\\"pass\\\"\" in output"
+        - "\"Math.round\" in output"
+        - "\"fixed\" in output.lower()"

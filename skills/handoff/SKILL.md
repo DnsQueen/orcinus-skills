@@ -15,11 +15,11 @@ This skill merges two handoff methods into one: the base method (write a handoff
 
 - The user asks: "handoff", "/handoff", "create handoff", "hand off to new session", "resume handoff".
 - Or the context is large and the task is still open: propose a handoff. Never write one without confirming first.
-- User-invoked only. Never auto-write.
+- Router-invoked, user-confirmed: the router proposes a handoff; never write one without the user's confirmation.
 
 ## Path
 
-- Default: `$TMPDIR/claude-handoff-<YYYYMMDD-HHMMSS>-<slug>.md` (`/tmp` if `$TMPDIR` is unset; `%TEMP%` on Windows). The slug is 3–5 kebab-case words from the goal.
+- Default: `$TMPDIR/orcinus-handoff-<YYYYMMDD-HHMMSS>-<slug>.md` (`/tmp` if `$TMPDIR` is unset; `%TEMP%` on Windows). The slug is 3–5 kebab-case words from the goal.
 - A user-supplied path is honored exactly, and must end in `.md`.
 - Confirm the path with the user (one sentence), then write. Report the path after writing.
 - If the target already exists, stop, report it, and ask. Never overwrite.

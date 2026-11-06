@@ -6,6 +6,7 @@ non-UTF-8 skip, the $ identifier, the vacuous clean (empty --old,
 nonexistent root), and the stale-test classification. Run:
     python3 -m pytest skills/incomplete-refactor/scripts/test_check_refactor.py -q
 """
+
 import subprocess
 import sys
 from pathlib import Path
@@ -132,8 +133,7 @@ def test_stale_test_classification(tmp_path):
 
 def test_removed_path_still_exists(tmp_path):
     write(tmp_path / "src" / "budget-old.ts", "export const x = 1;\n")
-    rc, out, _ = run(tmp_path, "--old", "oldName",
-                     "--removed", "src/budget-old.ts")
+    rc, out, _ = run(tmp_path, "--old", "oldName", "--removed", "src/budget-old.ts")
     assert rc == 1, out
     assert "removed-path" in out
 
@@ -142,16 +142,15 @@ def test_git_ls_files_respects_gitignore_and_includes_untracked(tmp_path):
     """In a git repo, an ignored file is not scanned, but an untracked
     file is."""
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=30)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t.t"],
-                   check=True, timeout=30)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"],
-                   check=True, timeout=30)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "t@t.t"], check=True, timeout=30
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True, timeout=30)
     write(tmp_path / ".gitignore", "ignored/\n")
     write(tmp_path / "ignored" / "a.ts", "oldName\n")
     write(tmp_path / "src" / "new.ts", "oldName\n")  # untracked, not ignored
     write(tmp_path / "src" / "clean.ts", "export const x = 1;\n")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "src/clean.ts"],
-                   check=True, timeout=30)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "src/clean.ts"], check=True, timeout=30)
     rc, out, _ = run(tmp_path, "--old", "oldName")
     assert rc == 1, out
     assert "src/new.ts" in out
@@ -160,12 +159,13 @@ def test_git_ls_files_respects_gitignore_and_includes_untracked(tmp_path):
 
 # --- Second review round: regression tests (2026-11-06) ---
 
+
 def _git_repo(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=30)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t.t"],
-                   check=True, timeout=30)
-    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"],
-                   check=True, timeout=30)
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "t@t.t"], check=True, timeout=30
+    )
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"], check=True, timeout=30)
 
 
 def test_git_mode_skips_tracked_lockfiles(tmp_path):
@@ -173,11 +173,11 @@ def test_git_mode_skips_tracked_lockfiles(tmp_path):
     must not be a false positive — the skip rules apply in git mode
     too, not only in the walk fallback."""
     _git_repo(tmp_path)
-    write(tmp_path / "package-lock.json",
-          '{"name": "x", "packages": {"node_modules/oldName": {}}}\n')
+    write(
+        tmp_path / "package-lock.json", '{"name": "x", "packages": {"node_modules/oldName": {}}}\n'
+    )
     write(tmp_path / "src" / "clean.ts", "export const x = 1;\n")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "."],
-                   check=True, timeout=30)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True, timeout=30)
     rc, out, _ = run(tmp_path, "--old", "oldName")
     assert rc == 0, out
     assert out.startswith("clean:")
@@ -190,8 +190,7 @@ def test_git_mode_skips_tracked_generated_dirs(tmp_path):
     _git_repo(tmp_path)
     write(tmp_path / "dist" / "out.js", "oldName\n")
     write(tmp_path / "src" / "clean.ts", "export const x = 1;\n")
-    subprocess.run(["git", "-C", str(tmp_path), "add", "-f", "."],
-                   check=True, timeout=30)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-f", "."], check=True, timeout=30)
     rc, out, _ = run(tmp_path, "--old", "oldName")
     assert rc == 0, out
     assert "dist/out.js" not in out

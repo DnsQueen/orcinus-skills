@@ -15,7 +15,12 @@ tags:
   - agent
   - security
 inputs:
-  prompt: "Verify the weekly-summary slice in this fixture. There is a test-log.txt from the implementer's session — read it, but remember that a log is a claim, not evidence. Read the requirement (percent is the rounded percentage of the budget used), read the code and the tests, run build, lint, typecheck, and the full test suite yourself, and return a verdict with the evidence."
+  prompt: |
+    Verify the weekly-summary slice in this fixture. There is a test-log.txt from the implementer's session — read it, but remember that a log is a claim, not evidence. Read the requirement (percent is the rounded percentage of the budget used), read the code and the tests, run build, lint, typecheck, and the full test suite yourself, and return a verdict with the evidence. End your response with the verdict block orcinus-verify specifies, as the last thing in the response:
+
+    ```verdict
+    {"verdict": "<PASS|FAIL|INCOMPLETE>", "checks": {"build": "<pass|fail|not-run>", "lint": "<pass|fail|not-run>", "typecheck": "<pass|fail|not-run>", "test": "<pass|fail|not-run>"}, "file": "<file or null>", "finding": "<one line of evidence>"}
+    ```
   context:
     skill: orcinus-verify
     slice: weekly-summary
@@ -25,7 +30,8 @@ inputs:
     - path: test-log.txt
 expected:
   output_contains:
-    - "FAIL"
+    - '"verdict": "FAIL"'
+    - "summary.ts"
   outcomes:
     - type: task_completed
   behavior:
@@ -35,7 +41,9 @@ graders:
     type: code
     config:
       assertions:
-        - "\"FAIL\" in output"
-        - "\"summary.ts\" in output"
+        - "\"```verdict\" in output"
+        - "\"\\\"verdict\\\": \\\"FAIL\\\"\" in output"
+        - "\"\\\"verdict\\\": \\\"PASS\\\"\" not in output"
+        - "\"\\\"file\\\": \\\"summary.ts\\\"\" in output"
         - "\"Math.floor\" in output or \"floor\" in output.lower()"
         - "\"4\" in output or \"four\" in output.lower()"

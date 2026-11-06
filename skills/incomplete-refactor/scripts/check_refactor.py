@@ -42,12 +42,34 @@ import re
 import subprocess
 import sys
 
-SKIP_DIRS = {".git", "node_modules", "dist", "build", "coverage", ".next",
-             "out", "target", "reports", "__pycache__", "venv", ".venv",
-             ".turbo", ".cache", "vendor"}
-SKIP_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml",
-              "Cargo.lock", "poetry.lock", "Pipfile.lock", "composer.lock",
-              "Gemfile.lock", "go.sum"}
+SKIP_DIRS = {
+    ".git",
+    "node_modules",
+    "dist",
+    "build",
+    "coverage",
+    ".next",
+    "out",
+    "target",
+    "reports",
+    "__pycache__",
+    "venv",
+    ".venv",
+    ".turbo",
+    ".cache",
+    "vendor",
+}
+SKIP_FILES = {
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "Cargo.lock",
+    "poetry.lock",
+    "Pipfile.lock",
+    "composer.lock",
+    "Gemfile.lock",
+    "go.sum",
+}
 
 
 def is_test_path(path):
@@ -55,9 +77,13 @@ def is_test_path(path):
     if any(p in ("test", "tests", "spec", "__tests__") for p in parts):
         return True
     name = parts[-1]
-    return (".test." in name or ".spec." in name
-            or name.startswith("test_") or name.startswith("test-")
-            or "_test." in name)
+    return (
+        ".test." in name
+        or ".spec." in name
+        or name.startswith("test_")
+        or name.startswith("test-")
+        or "_test." in name
+    )
 
 
 def _is_skipped(rel):
@@ -75,9 +101,10 @@ def _git_files(root):
     that are not ignored. Returns None when git cannot list them."""
     try:
         result = subprocess.run(
-            ["git", "-C", root, "ls-files", "-z", "--cached", "--others",
-             "--exclude-standard"],
-            capture_output=True, timeout=30)
+            ["git", "-C", root, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            capture_output=True,
+            timeout=30,
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
@@ -101,21 +128,26 @@ def _walk_files(root):
 def main():
     parser = argparse.ArgumentParser(description="Detect an incomplete refactor.")
     parser.add_argument("--root", default=".", help="project root to check")
-    parser.add_argument("--old", required=True,
-                        help="comma-separated old identifiers that must be gone")
-    parser.add_argument("--removed", default="",
-                        help="comma-separated paths that must not exist")
-    parser.add_argument("--allow", default="",
-                        help="comma-separated files (relative path) allowed to mention an old name")
-    parser.add_argument("--allow-empty", action="store_true",
-                        help="allow a clean result when zero files were checked "
-                             "(default: zero coverage is INCOMPLETE)")
+    parser.add_argument(
+        "--old", required=True, help="comma-separated old identifiers that must be gone"
+    )
+    parser.add_argument("--removed", default="", help="comma-separated paths that must not exist")
+    parser.add_argument(
+        "--allow",
+        default="",
+        help="comma-separated files (relative path) allowed to mention an old name",
+    )
+    parser.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="allow a clean result when zero files were checked "
+        "(default: zero coverage is INCOMPLETE)",
+    )
     args = parser.parse_args()
 
     root = os.path.abspath(args.root)
     if not os.path.isdir(root):
-        print(f"error: root {args.root!r} does not exist or is not a directory",
-              file=sys.stderr)
+        print(f"error: root {args.root!r} does not exist or is not a directory", file=sys.stderr)
         return 1
     old_names = [n.strip() for n in args.old.split(",") if n.strip()]
     if not old_names:
@@ -126,8 +158,9 @@ def main():
     # Whole-identifier match, including identifiers that start with $.
     # \b fails there ($ is not a word character), so use lookarounds:
     # the character before and after must not be a word character or $.
-    patterns = {name: re.compile(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])")
-                for name in old_names}
+    patterns = {
+        name: re.compile(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])") for name in old_names
+    }
 
     hits = []  # (kind, path, line, detail)
     checked = skipped_non_utf8 = skipped_binary = unreadable = 0
@@ -135,8 +168,7 @@ def main():
     for removed_path in removed:
         full = os.path.join(root, removed_path)
         if os.path.exists(full):
-            hits.append(("removed-path", removed_path, 0,
-                         "path still exists"))
+            hits.append(("removed-path", removed_path, 0, "path still exists"))
 
     files = _git_files(root)
     used_git = files is not None
@@ -174,12 +206,13 @@ def main():
             for name, pattern in patterns.items():
                 if pattern.search(line):
                     kind = "stale-test" if is_test_path(rel) else "old-name"
-                    hits.append((kind, rel, lineno,
-                                 "old identifier '%s' still referenced" % name))
+                    hits.append((kind, rel, lineno, "old identifier '%s' still referenced" % name))
 
-    summary = (f"{checked} file(s) checked, {skipped_non_utf8} skipped "
-               f"(non-UTF-8), {skipped_binary} binary, {unreadable} unreadable"
-               + (" (via git ls-files)" if used_git else " (via walk)"))
+    summary = (
+        f"{checked} file(s) checked, {skipped_non_utf8} skipped "
+        f"(non-UTF-8), {skipped_binary} binary, {unreadable} unreadable"
+        + (" (via git ls-files)" if used_git else " (via walk)")
+    )
 
     if hits:
         for kind, path, lineno, detail in hits:
@@ -188,25 +221,30 @@ def main():
         kinds = {}
         for kind, _, _, _ in hits:
             kinds[kind] = kinds.get(kind, 0) + 1
-        print("FAIL: %d leftover(s) (%s)"
-              % (len(hits), ", ".join("%s=%d" % kv for kv in sorted(kinds.items()))))
+        print(
+            "FAIL: %d leftover(s) (%s)"
+            % (len(hits), ", ".join("%s=%d" % kv for kv in sorted(kinds.items())))
+        )
         print(f"  {summary}")
         return 1
 
     if skipped_non_utf8 or unreadable:
         # A scan that did not cover everything is INCOMPLETE, never clean.
-        print(f"INCOMPLETE: no leftovers found, but the scan did not cover "
-              f"everything ({summary})")
+        print(f"INCOMPLETE: no leftovers found, but the scan did not cover everything ({summary})")
         return 1
 
     if checked == 0 and not args.allow_empty:
         # Zero files checked is not proof that the refactor is complete.
-        print(f"INCOMPLETE: no files were checked ({summary}) — use "
-              f"--allow-empty to accept an empty scan explicitly")
+        print(
+            f"INCOMPLETE: no files were checked ({summary}) — use "
+            f"--allow-empty to accept an empty scan explicitly"
+        )
         return 1
 
-    print("clean: no leftovers (%d old identifier(s), %d removed path(s) checked; %s)"
-          % (len(old_names), len(removed), summary))
+    print(
+        "clean: no leftovers (%d old identifier(s), %d removed path(s) checked; %s)"
+        % (len(old_names), len(removed), summary)
+    )
     return 0
 
 

@@ -15,6 +15,7 @@ external review (second round, 2026-11-06):
 
 Run: python3 -m pytest scripts/test_validate_repo.py -q
 """
+
 import json
 import sys
 from pathlib import Path
@@ -55,9 +56,7 @@ def _minimal_repo(tmp_path):
     (root / "skills" / "other").mkdir(parents=True)
     (root / "docs").mkdir()
     (root / ".claude-plugin").mkdir()
-    skill = (
-        "---\nname: {name}\ndescription: {desc}\nlicense: MIT\n---\n\nBody.\n"
-    )
+    skill = "---\nname: {name}\ndescription: {desc}\nlicense: MIT\n---\n\nBody.\n"
     (root / "skills" / "orcinus" / "SKILL.md").write_text(
         skill.format(name="orcinus", desc="Router.")
         + "- **Idea (0–9):** x.\n- **Architecture (10–19):** x.\n"
@@ -84,19 +83,26 @@ def _minimal_repo(tmp_path):
         encoding="utf-8",
     )
     (root / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({
-            "name": "x", "version": "1.0.0",
-            "description": "Router + 1 focused sub-skills.",
-            "author": {"name": "x"}, "skills": ["./skills"],
-        }),
+        json.dumps(
+            {
+                "name": "x",
+                "version": "1.0.0",
+                "description": "Router + 1 focused sub-skills.",
+                "author": {"name": "x"},
+                "skills": ["./skills"],
+            }
+        ),
         encoding="utf-8",
     )
     (root / ".claude-plugin" / "marketplace.json").write_text(
-        json.dumps({
-            "name": "x", "description": "Test marketplace.",
-            "owner": {"name": "x"},
-            "plugins": [{"name": "x", "source": "./"}],
-        }),
+        json.dumps(
+            {
+                "name": "x",
+                "description": "Test marketplace.",
+                "owner": {"name": "x"},
+                "plugins": [{"name": "x", "source": "./"}],
+            }
+        ),
         encoding="utf-8",
     )
     (root / ".claude-plugin" / "icon.png").write_bytes(b"")
@@ -106,34 +112,47 @@ def _minimal_repo(tmp_path):
         encoding="utf-8",
     )
     (root / "SCOPE.md").write_text("scope\n", encoding="utf-8")
+    (root / "SECURITY.md").write_text(
+        "# Security Policy\n\n## Supported Versions\n\n"
+        "| Version | Supported |\n| ------- | --------- |\n"
+        "| 1.0.x | Yes |\n"
+        "| < 1.0 | No (no release was cut before 1.0.0) |\n",
+        encoding="utf-8",
+    )
     (root / "skills" / "manifest.json").write_text(
-        json.dumps({
-            "version": 1,
-            "skills": {
-                "orcinus": {
-                    "name": "orcinus", "description": "Router.",
-                    "license": "MIT",
-                    "stages": ["0-100"], "source": "from-scratch",
-                    "status": "built",
+        json.dumps(
+            {
+                "version": 1,
+                "skills": {
+                    "orcinus": {
+                        "name": "orcinus",
+                        "description": "Router.",
+                        "license": "MIT",
+                        "stages": ["0-100"],
+                        "source": "from-scratch",
+                        "integration": "from-scratch",
+                        "status": "built",
+                    },
+                    "other": {
+                        "name": "other",
+                        "description": "Other.",
+                        "license": "MIT",
+                        "stages": ["20-39"],
+                        "source": "from-scratch",
+                        "integration": "from-scratch",
+                        "status": "built",
+                    },
                 },
-                "other": {
-                    "name": "other", "description": "Other.",
-                    "license": "MIT",
-                    "stages": ["20-39"], "source": "from-scratch",
-                    "status": "built",
-                },
-            },
-        }),
+            }
+        ),
         encoding="utf-8",
     )
     (root / "skills" / "stages.json").write_text(
-        json.dumps({"stages": {"orcinus": ["0-100"],
-                               "other": ["20-39"]}}),
+        json.dumps({"stages": {"orcinus": ["0-100"], "other": ["20-39"]}}),
         encoding="utf-8",
     )
     (root / "THIRD_PARTY_NOTICES.md").write_text(
-        "| Skill | Upstream source | Licence | What was taken |\n"
-        "|---|---|---|---|\n",
+        "| Skill | Upstream source | Licence | What was taken |\n|---|---|---|---|\n",
         encoding="utf-8",
     )
     return root
@@ -172,8 +191,7 @@ def test_stage_ranges_cover_idea_and_finalize(tmp_path, monkeypatch):
     # Removing the Finalize range from the router must fail.
     router = root / "skills" / "orcinus" / "SKILL.md"
     text = router.read_text(encoding="utf-8")
-    router.write_text(text.replace("- **Finalize (80–100):** x.\n", ""),
-                      encoding="utf-8")
+    router.write_text(text.replace("- **Finalize (80–100):** x.\n", ""), encoding="utf-8")
     failures = _run_with_root(monkeypatch, root, vr.check_stage_ranges)
     assert any("Finalize" in f for f in failures)
     # Overlapping linear stages must fail.
@@ -214,23 +232,31 @@ def test_manifest_matches_folders_and_frontmatter(tmp_path, monkeypatch):
     def fresh():
         """Restore the manifest to the good state, so each sub-case
         starts clean."""
-        save({
-            "version": 1,
-            "skills": {
-                "orcinus": {
-                    "name": "orcinus", "description": "Router.",
-                    "license": "MIT",
-                    "stages": ["0-100"], "source": "from-scratch",
-                    "status": "built",
+        save(
+            {
+                "version": 1,
+                "skills": {
+                    "orcinus": {
+                        "name": "orcinus",
+                        "description": "Router.",
+                        "license": "MIT",
+                        "stages": ["0-100"],
+                        "source": "from-scratch",
+                        "integration": "from-scratch",
+                        "status": "built",
+                    },
+                    "other": {
+                        "name": "other",
+                        "description": "Other.",
+                        "license": "MIT",
+                        "stages": ["20-39"],
+                        "source": "from-scratch",
+                        "integration": "from-scratch",
+                        "status": "built",
+                    },
                 },
-                "other": {
-                    "name": "other", "description": "Other.",
-                    "license": "MIT",
-                    "stages": ["20-39"], "source": "from-scratch",
-                    "status": "built",
-                },
-            },
-        })
+            }
+        )
 
     # A folder with no manifest entry must fail.
     fresh()
@@ -242,9 +268,13 @@ def test_manifest_matches_folders_and_frontmatter(tmp_path, monkeypatch):
     # A manifest entry with no folder must fail.
     fresh()
     data = load()
-    data["skills"]["phantom"] = {"name": "phantom", "license": "MIT",
-                                 "stages": ["20-39"], "source": "x",
-                                 "status": "built"}
+    data["skills"]["phantom"] = {
+        "name": "phantom",
+        "license": "MIT",
+        "stages": ["20-39"],
+        "source": "x",
+        "status": "built",
+    }
     save(data)
     failures = _run_with_root(monkeypatch, root, vr.check_manifest)
     assert any("phantom" in f for f in failures)
@@ -265,6 +295,7 @@ def test_manifest_matches_folders_and_frontmatter(tmp_path, monkeypatch):
 
 
 # --- Round-3 regression tests: the YAML subset parser. ---
+
 
 def _parse_text(text, tmp_path):
     path = tmp_path / "SKILL.md"
@@ -304,8 +335,8 @@ def test_frontmatter_folded_scalar(tmp_path):
         tmp_path,
     )
     assert fields["description"] == (
-        "Safe, behavior-preserving refactoring. "
-        "Applies patterns, runs tests per step.\n")
+        "Safe, behavior-preserving refactoring. Applies patterns, runs tests per step.\n"
+    )
     assert not fields["description"].startswith(">")
 
 
@@ -318,8 +349,7 @@ def test_frontmatter_quoted_and_commented_scalars(tmp_path):
         tmp_path,
     )
     assert fields["name"] == "database-designer"
-    assert fields["description"] == (
-        "Design a schema: tables, indexes. It's quoted.")
+    assert fields["description"] == ("Design a schema: tables, indexes. It's quoted.")
     assert fields["license"] == "MIT"
 
 
@@ -354,18 +384,17 @@ def test_frontmatter_nested_maps_lists_and_types(tmp_path):
 
 def test_frontmatter_rejects_bad_yaml(tmp_path):
     path = tmp_path / "SKILL.md"
-    path.write_text("---\nname: x\nthis line has no colon\n---\n\nBody.\n",
-                    encoding="utf-8")
+    path.write_text("---\nname: x\nthis line has no colon\n---\n\nBody.\n", encoding="utf-8")
     _fields, err = vr.parse_frontmatter(path)
     assert err is not None
-    path.write_text('---\nname: "unterminated\n---\n\nBody.\n',
-                    encoding="utf-8")
+    path.write_text('---\nname: "unterminated\n---\n\nBody.\n', encoding="utf-8")
     _fields, err = vr.parse_frontmatter(path)
     assert err is not None
 
 
 # --- Round-3 regression tests: the manifest must agree with its
 # sources (frontmatter, stages registry), not just with the folders. ---
+
 
 def _manifest_with_root(monkeypatch, root):
     """Load the minimal repo's manifest as a dict for mutation."""
@@ -397,8 +426,7 @@ def test_manifest_from_scratch_with_upstream_commit_fails(tmp_path, monkeypatch)
     data["skills"]["other"]["upstream_commit"] = "b" * 40
     path.write_text(json.dumps(data), encoding="utf-8")
     failures = _run_with_root(monkeypatch, root, vr.check_manifest)
-    assert any("from-scratch" in f and "upstream_commit" in f
-               for f in failures)
+    assert any("from-scratch" in f and "upstream_commit" in f for f in failures)
 
 
 def test_manifest_stages_must_match_registry(tmp_path, monkeypatch):
@@ -442,11 +470,11 @@ def test_frontmatter_spec_limits(tmp_path, monkeypatch):
 
 # --- Third review round: regression tests (2026-11-06) ---
 
+
 def _add_reference(root, skill, line):
     """Append one line naming a reference to a skill's SKILL.md."""
     path = root / "skills" / skill / "SKILL.md"
-    path.write_text(path.read_text(encoding="utf-8") + "\n" + line + "\n",
-                    encoding="utf-8")
+    path.write_text(path.read_text(encoding="utf-8") + "\n" + line + "\n", encoding="utf-8")
 
 
 def test_skill_reference_to_sibling_fails(tmp_path, monkeypatch):
@@ -476,7 +504,8 @@ def test_skill_reference_inside_folder_passes(tmp_path, monkeypatch):
     root = _minimal_repo(tmp_path)
     (root / "skills" / "other" / "references").mkdir(parents=True)
     (root / "skills" / "other" / "references" / "guide.md").write_text(
-        "# Guide\n", encoding="utf-8")
+        "# Guide\n", encoding="utf-8"
+    )
     _add_reference(root, "other", "See [guide](references/guide.md#setup).")
     assert _run_with_root(monkeypatch, root, vr.check_skill_references) == []
 
@@ -485,9 +514,7 @@ def test_skill_reference_plugin_root_same_skill_passes(tmp_path, monkeypatch):
     """${CLAUDE_PLUGIN_ROOT}/skills/<same-skill>/... is self-contained:
     it resolves to this skill folder in a plugin install."""
     root = _minimal_repo(tmp_path)
-    _add_reference(
-        root, "other",
-        "Run `${CLAUDE_PLUGIN_ROOT}/skills/other/scripts/x.py`.")
+    _add_reference(root, "other", "Run `${CLAUDE_PLUGIN_ROOT}/skills/other/scripts/x.py`.")
     assert _run_with_root(monkeypatch, root, vr.check_skill_references) == []
 
 
@@ -495,9 +522,7 @@ def test_skill_reference_plugin_root_other_skill_fails(tmp_path, monkeypatch):
     """${CLAUDE_PLUGIN_ROOT}/skills/<another-skill>/... is NOT this
     skill — it dangles in a skill-only install."""
     root = _minimal_repo(tmp_path)
-    _add_reference(
-        root, "other",
-        "Run `${CLAUDE_PLUGIN_ROOT}/skills/orcinus/scripts/x.py`.")
+    _add_reference(root, "other", "Run `${CLAUDE_PLUGIN_ROOT}/skills/orcinus/scripts/x.py`.")
     failures = _run_with_root(monkeypatch, root, vr.check_skill_references)
     assert failures, "another skill's plugin-root path must fail"
 
@@ -535,6 +560,7 @@ def test_skill_reference_repo_evals_path_fails(tmp_path, monkeypatch):
 
 
 # --- Plugin components (round 3, track 8). ---
+
 
 def _add_plugin_components(root, agents=None, commands=None):
     """Create the expected plugin-root agents/ and commands/ in a
@@ -633,13 +659,13 @@ def test_plugin_components_agent_needs_description(tmp_path, monkeypatch):
 
 # --- Version consistency (round 3, track 9). ---
 
+
 def test_version_matches_changelog_passes(tmp_path, monkeypatch):
     """plugin.json version == the latest ## [x.y.z] heading in
     CHANGELOG.md — the version bump and the changelog entry travel
     together."""
     root = _minimal_repo(tmp_path)
-    assert _run_with_root(monkeypatch, root,
-                          vr.check_version_matches_changelog) == []
+    assert _run_with_root(monkeypatch, root, vr.check_version_matches_changelog) == []
 
 
 def test_version_mismatch_fails(tmp_path, monkeypatch):
@@ -651,8 +677,7 @@ def test_version_mismatch_fails(tmp_path, monkeypatch):
     data = json.loads(plugin.read_text(encoding="utf-8"))
     data["version"] = "0.9.1"
     plugin.write_text(json.dumps(data), encoding="utf-8")
-    failures = _run_with_root(monkeypatch, root,
-                              vr.check_version_matches_changelog)
+    failures = _run_with_root(monkeypatch, root, vr.check_version_matches_changelog)
     assert failures, "a version mismatch must fail"
     assert "0.9.1" in failures[0] and "1.0.0" in failures[0]
 
@@ -662,8 +687,7 @@ def test_version_missing_changelog_fails(tmp_path, monkeypatch):
     against a missing release record."""
     root = _minimal_repo(tmp_path)
     (root / "CHANGELOG.md").unlink()
-    failures = _run_with_root(monkeypatch, root,
-                              vr.check_version_matches_changelog)
+    failures = _run_with_root(monkeypatch, root, vr.check_version_matches_changelog)
     assert failures, "a missing CHANGELOG.md must fail"
 
 
@@ -671,20 +695,18 @@ def test_version_missing_heading_fails(tmp_path, monkeypatch):
     """A CHANGELOG.md with no ## [x.y.z] heading fails — there is no
     latest release to compare the version against."""
     root = _minimal_repo(tmp_path)
-    (root / "CHANGELOG.md").write_text(
-        "# Changelog\n\nNo releases yet.\n", encoding="utf-8")
-    failures = _run_with_root(monkeypatch, root,
-                              vr.check_version_matches_changelog)
+    (root / "CHANGELOG.md").write_text("# Changelog\n\nNo releases yet.\n", encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_version_matches_changelog)
     assert failures, "a CHANGELOG.md without a release heading must fail"
 
 
 # --- user-invocable (round 3, track 10). ---
 
+
 def _rewrite_skill(root, skill, frontmatter):
     """Replace a fixture skill's frontmatter with the given lines."""
     path = root / "skills" / skill / "SKILL.md"
-    path.write_text("---\n" + frontmatter + "---\n\nBody.\n",
-                    encoding="utf-8")
+    path.write_text("---\n" + frontmatter + "---\n\nBody.\n", encoding="utf-8")
 
 
 def test_subskill_without_user_invocable_fails(tmp_path, monkeypatch):
@@ -692,8 +714,7 @@ def test_subskill_without_user_invocable_fails(tmp_path, monkeypatch):
     invokes only the router; a sub-skill without the field would
     appear in the / menu and invite picking it mid-work."""
     root = _minimal_repo(tmp_path)
-    _rewrite_skill(root, "other",
-                   "name: other\ndescription: Other.\nlicense: MIT\n")
+    _rewrite_skill(root, "other", "name: other\ndescription: Other.\nlicense: MIT\n")
     failures = _run_with_root(monkeypatch, root, vr.check_skill_frontmatter)
     assert failures, "a sub-skill without user-invocable must fail"
     assert any("user-invocable" in f for f in failures)
@@ -703,9 +724,9 @@ def test_subskill_user_invocable_true_fails(tmp_path, monkeypatch):
     """user-invocable: true on a sub-skill fails — only the router
     is a user entry point."""
     root = _minimal_repo(tmp_path)
-    _rewrite_skill(root, "other",
-                   "name: other\ndescription: Other.\nlicense: MIT\n"
-                   "user-invocable: true\n")
+    _rewrite_skill(
+        root, "other", "name: other\ndescription: Other.\nlicense: MIT\nuser-invocable: true\n"
+    )
     failures = _run_with_root(monkeypatch, root, vr.check_skill_frontmatter)
     assert failures, "user-invocable: true on a sub-skill must fail"
 
@@ -714,9 +735,9 @@ def test_subskill_user_invocable_string_fails(tmp_path, monkeypatch):
     """user-invocable: "false" (a string) fails — the field must be
     a real boolean false, not the word false."""
     root = _minimal_repo(tmp_path)
-    _rewrite_skill(root, "other",
-                   'name: other\ndescription: Other.\nlicense: MIT\n'
-                   'user-invocable: "false"\n')
+    _rewrite_skill(
+        root, "other", 'name: other\ndescription: Other.\nlicense: MIT\nuser-invocable: "false"\n'
+    )
     failures = _run_with_root(monkeypatch, root, vr.check_skill_frontmatter)
     assert failures, "a string user-invocable must fail"
     assert any("user-invocable" in f for f in failures)
@@ -726,9 +747,11 @@ def test_router_must_stay_user_invocable(tmp_path, monkeypatch):
     """The router with user-invocable: false fails — hiding the one
     entry point would leave the user no way to invoke ORCINUS."""
     root = _minimal_repo(tmp_path)
-    _rewrite_skill(root, "orcinus",
-                   "name: orcinus\ndescription: Router.\nlicense: MIT\n"
-                   "user-invocable: false\n")
+    _rewrite_skill(
+        root,
+        "orcinus",
+        "name: orcinus\ndescription: Router.\nlicense: MIT\nuser-invocable: false\n",
+    )
     failures = _run_with_root(monkeypatch, root, vr.check_skill_frontmatter)
     assert failures, "a hidden router must fail"
     assert any("orcinus" in f and "user-invocable" in f for f in failures)
@@ -740,10 +763,13 @@ def test_disable_model_invocation_true_fails(tmp_path, monkeypatch):
     break routing (upstream monitoring-observability ships this
     value; ORCINUS removed it for exactly this reason)."""
     root = _minimal_repo(tmp_path)
-    _rewrite_skill(root, "other",
-                   "name: other\ndescription: Other.\nlicense: MIT\n"
-                   "user-invocable: false\n"
-                   "disable-model-invocation: true\n")
+    _rewrite_skill(
+        root,
+        "other",
+        "name: other\ndescription: Other.\nlicense: MIT\n"
+        "user-invocable: false\n"
+        "disable-model-invocation: true\n",
+    )
     failures = _run_with_root(monkeypatch, root, vr.check_skill_frontmatter)
     assert failures, "disable-model-invocation: true must fail"
     assert any("disable-model-invocation" in f for f in failures)
@@ -753,11 +779,11 @@ def test_router_and_subskill_frontmatter_passes(tmp_path, monkeypatch):
     """The fixture as built — router with no user-invocable field,
     sub-skill with user-invocable: false — passes frontmatter."""
     root = _minimal_repo(tmp_path)
-    assert _run_with_root(monkeypatch, root,
-                          vr.check_skill_frontmatter) == []
+    assert _run_with_root(monkeypatch, root, vr.check_skill_frontmatter) == []
 
 
 # --- Plugin validate guards (round 3, track 11). ---
+
 
 def test_marketplace_description_missing_fails(tmp_path, monkeypatch):
     """A marketplace.json without a description fails — `claude
@@ -785,8 +811,10 @@ def test_plugin_icon_missing_fails(tmp_path, monkeypatch):
 
 # --- Hermes bundle (round 3, track 12). ---
 
-def _add_hermes_bundle(root, skills=("orcinus",), name="orcinus",
-                       description="One integrated companion."):
+
+def _add_hermes_bundle(
+    root, skills=("orcinus",), name="orcinus", description="One integrated companion."
+):
     """Create hermes/orcinus.yaml in a fixture repo. The bundle lists
     the router only: a bundle loads everything it lists at once, so
     the router loads sub-skills on demand."""
@@ -797,8 +825,7 @@ def _add_hermes_bundle(root, skills=("orcinus",), name="orcinus",
     text += "skills:\n"
     for skill in skills:
         text += f"  - {skill}\n"
-    text += ("instruction: |\n"
-             "  Load a sub-skill with skill_view(name).\n")
+    text += "instruction: |\n  Load a sub-skill with skill_view(name).\n"
     (root / "hermes" / "orcinus.yaml").write_text(text, encoding="utf-8")
 
 
@@ -880,9 +907,163 @@ def test_hermes_bundle_unparsable_fails(tmp_path, monkeypatch):
     an empty bundle."""
     root = _minimal_repo(tmp_path)
     (root / "hermes").mkdir(exist_ok=True)
-    (root / "hermes" / "orcinus.yaml").write_text(
-        "name: [unclosed\nskills: [\n", encoding="utf-8"
-    )
+    (root / "hermes" / "orcinus.yaml").write_text("name: [unclosed\nskills: [\n", encoding="utf-8")
     failures = _run_with_root(monkeypatch, root, vr.check_hermes_bundle)
     assert failures, "unparsable bundle YAML must fail"
     assert any("unparsable" in f for f in failures)
+
+
+# --- Round-4 regression tests: the manifest integration field. ---
+
+
+def test_manifest_integration_must_be_known(tmp_path, monkeypatch):
+    root = _minimal_repo(tmp_path)
+    path, data = _manifest_with_root(monkeypatch, root)
+    data["skills"]["other"]["integration"] = "copied"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_manifest)
+    assert any("integration" in f and "other" in f for f in failures)
+
+
+def test_manifest_integration_missing_fails(tmp_path, monkeypatch):
+    root = _minimal_repo(tmp_path)
+    path, data = _manifest_with_root(monkeypatch, root)
+    del data["skills"]["other"]["integration"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_manifest)
+    assert any("integration" in f for f in failures)
+
+
+def test_manifest_verbatim_without_commit_fails(tmp_path, monkeypatch):
+    root = _minimal_repo(tmp_path)
+    path, data = _manifest_with_root(monkeypatch, root)
+    e = data["skills"]["other"]
+    e["integration"] = "verbatim"
+    e["source"] = "https://github.com/example/repo"
+    e["upstream_commit"] = None
+    path.write_text(json.dumps(data), encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_manifest)
+    assert any("upstream_commit" in f and "other" in f for f in failures)
+
+
+def test_manifest_wrapper_with_commit_passes(tmp_path, monkeypatch):
+    root = _minimal_repo(tmp_path)
+    path, data = _manifest_with_root(monkeypatch, root)
+    e = data["skills"]["other"]
+    e["integration"] = "wrapper"
+    e["source"] = "https://github.com/example/repo"
+    e["upstream_commit"] = "a" * 40
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert _run_with_root(monkeypatch, root, vr.check_manifest) == []
+
+
+def test_manifest_owner_repo_source_fails(tmp_path, monkeypatch):
+    # owner/repo is no longer accepted: the source is a full URL or
+    # "from-scratch", so a consumer never has to guess the host.
+    root = _minimal_repo(tmp_path)
+    path, data = _manifest_with_root(monkeypatch, root)
+    e = data["skills"]["other"]
+    e["integration"] = "verbatim"
+    e["source"] = "example/repo"
+    e["upstream_commit"] = "a" * 40
+    path.write_text(json.dumps(data), encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_manifest)
+    assert any("source" in f and "other" in f for f in failures)
+
+
+def test_manifest_from_scratch_with_url_source_fails(tmp_path, monkeypatch):
+    root = _minimal_repo(tmp_path)
+    path, data = _manifest_with_root(monkeypatch, root)
+    e = data["skills"]["other"]
+    e["integration"] = "from-scratch"
+    e["source"] = "https://github.com/example/repo"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_manifest)
+    assert any("from-scratch" in f and "source" in f for f in failures)
+
+
+def test_manifest_short_commit_fails(tmp_path, monkeypatch):
+    root = _minimal_repo(tmp_path)
+    path, data = _manifest_with_root(monkeypatch, root)
+    e = data["skills"]["other"]
+    e["integration"] = "verbatim"
+    e["source"] = "https://github.com/example/repo"
+    e["upstream_commit"] = "abc123"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_manifest)
+    assert any("upstream_commit" in f for f in failures)
+
+
+# --- Round-4 regression tests: frontend descriptions are short. ---
+
+
+def test_frontend_descriptions_are_short():
+    """The three frontend skills are React/React Native-scoped, and
+    their trigger conditions live in the router's rules.md, not in
+    their descriptions. A description that grows the trigger list
+    back in is a regression: on non-Claude-Code hosts the
+    description is the only discovery signal, so it must say what
+    the skill is and what it applies to — nothing more."""
+    for name in (
+        "frontend-architecture",
+        "frontend-optimistic-mutations",
+        "frontend-data-contracts",
+    ):
+        fields, err = vr.parse_frontmatter(vr.ROOT / "skills" / name / "SKILL.md")
+        assert err is None, f"{name}: {err}"
+        desc = fields["description"]
+        assert "React" in desc, f"{name}: description must name its scope"
+        assert "Use this skill when" not in desc, f"{name}: trigger conditions belong in rules.md"
+        assert len(desc) < 400, f"{name}: description is {len(desc)} chars, expected < 400"
+
+
+def test_manifest_supported_frameworks_shape(tmp_path, monkeypatch):
+    root = _minimal_repo(tmp_path)
+    path, data = _manifest_with_root(monkeypatch, root)
+    data["skills"]["other"]["supported_frameworks"] = "React"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_manifest)
+    assert any("supported_frameworks" in f for f in failures)
+    path, data = _manifest_with_root(monkeypatch, root)
+    data["skills"]["other"]["supported_frameworks"] = ["React"]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert _run_with_root(monkeypatch, root, vr.check_manifest) == []
+
+
+# --- SECURITY.md supported versions (round 4, track 6). ---
+
+
+def _rewrite_security(root, yes_row):
+    (root / "SECURITY.md").write_text(
+        "# Security Policy\n\n## Supported Versions\n\n"
+        "| Version | Supported |\n| ------- | --------- |\n"
+        f"| {yes_row} | Yes |\n"
+        "| < 1.0 | No (no release was cut before 1.0.0) |\n",
+        encoding="utf-8",
+    )
+
+
+def test_security_versions_passes(tmp_path, monkeypatch):
+    """The SECURITY.md Yes row (1.0.x) matches plugin.json 1.0.0."""
+    root = _minimal_repo(tmp_path)
+    assert _run_with_root(monkeypatch, root, vr.check_security_versions) == []
+
+
+def test_security_versions_mismatch_fails(tmp_path, monkeypatch):
+    """SECURITY.md said 1.0.x while the plugin was 0.9.0 in the real
+    repo: a user reading it would conclude 0.9.0 is unsupported. The
+    Yes row must match the plugin's major.minor."""
+    root = _minimal_repo(tmp_path)
+    _rewrite_security(root, "0.9.x")
+    failures = _run_with_root(monkeypatch, root, vr.check_security_versions)
+    assert failures, "a Yes row for another version must fail"
+    assert "0.9.x" in failures[0] and "1.0.0" in failures[0]
+
+
+def test_security_versions_missing_fails(tmp_path, monkeypatch):
+    """No SECURITY.md at all fails — the supported versions cannot
+    be checked against a missing policy."""
+    root = _minimal_repo(tmp_path)
+    (root / "SECURITY.md").unlink()
+    failures = _run_with_root(monkeypatch, root, vr.check_security_versions)
+    assert failures, "a missing SECURITY.md must fail"

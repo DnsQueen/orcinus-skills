@@ -7,6 +7,7 @@ it), cleanup killed the shell but left the server running, and a hung
 test command hung the script forever. Run:
     python3 -m pytest skills/webapp-testing/scripts/test_with_server.py -q
 """
+
 import socket
 import subprocess
 import sys
@@ -23,13 +24,20 @@ def free_port():
 
 
 def run_with_server(server_cmd, port, command, timeout=30, extra=None):
-    argv = [sys.executable, str(SCRIPT), "--server", server_cmd,
-            "--port", str(port), "--timeout", str(timeout)]
+    argv = [
+        sys.executable,
+        str(SCRIPT),
+        "--server",
+        server_cmd,
+        "--port",
+        str(port),
+        "--timeout",
+        str(timeout),
+    ]
     if extra:
         argv += extra
     argv += ["--", *command]
-    result = subprocess.run(argv, capture_output=True, text=True,
-                            timeout=120)
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=120)
     return result.returncode, result.stdout, result.stderr
 
 
@@ -59,10 +67,15 @@ def test_normal_flow_and_server_is_stopped(tmp_path):
     server = tmp_path / "server.py"
     server.write_text(http_server_script(port), encoding="utf-8")
     rc, out, err = run_with_server(
-        f"{sys.executable} {server}", port,
-        [sys.executable, "-c",
-         f"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:{port}/').status)"],
-        timeout=15)
+        f"{sys.executable} {server}",
+        port,
+        [
+            sys.executable,
+            "-c",
+            f"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:{port}/').status)",
+        ],
+        timeout=15,
+    )
     assert rc == 0, err
     assert "200" in out
     # The server is gone: the port must be closed after cleanup.
@@ -80,9 +93,8 @@ def test_log_heavy_server_does_not_block(tmp_path):
     # 2000 lines x ~70 bytes = ~140KB, well over the 64KB pipe buffer.
     server.write_text(http_server_script(port, log_lines=2000), encoding="utf-8")
     rc, out, err = run_with_server(
-        f"{sys.executable} {server}", port,
-        [sys.executable, "-c", "print('test done')"],
-        timeout=15)
+        f"{sys.executable} {server}", port, [sys.executable, "-c", "print('test done')"], timeout=15
+    )
     assert rc == 0, err
     assert "test done" in out
     # The server's output is forwarded, not swallowed.
@@ -101,19 +113,23 @@ def test_ready_path_rejects_a_non_http_service(tmp_path):
         "while True:\n"
         "    conn, _ = s.accept()\n"
         "    conn.close()\n",
-        encoding="utf-8")
+        encoding="utf-8",
+    )
     # Without --ready-path the port check alone says ready (and the
     # command runs). That is the documented limitation of the port check.
     rc, out, err = run_with_server(
-        f"{sys.executable} {raw}", port,
-        [sys.executable, "-c", "print('ran')"], timeout=10)
+        f"{sys.executable} {raw}", port, [sys.executable, "-c", "print('ran')"], timeout=10
+    )
     assert rc == 0, err
     assert "ran" in out
     # With --ready-path the same service is NOT ready (no HTTP response).
     rc, out, err = run_with_server(
-        f"{sys.executable} {raw}", port,
-        [sys.executable, "-c", "print('ran')"], timeout=6,
-        extra=["--ready-path", "/"])
+        f"{sys.executable} {raw}",
+        port,
+        [sys.executable, "-c", "print('ran')"],
+        timeout=6,
+        extra=["--ready-path", "/"],
+    )
     assert rc == 1, out
     assert "failed to start" in err
 
@@ -124,8 +140,11 @@ def test_server_that_exits_fails_fast(tmp_path):
     port = free_port()
     start = time.time()
     rc, out, err = run_with_server(
-        f"{sys.executable} -c 'import sys; sys.exit(3)'", port,
-        [sys.executable, "-c", "print('ran')"], timeout=20)
+        f"{sys.executable} -c 'import sys; sys.exit(3)'",
+        port,
+        [sys.executable, "-c", "print('ran')"],
+        timeout=20,
+    )
     elapsed = time.time() - start
     assert rc == 1, out
     assert "exited" in err
@@ -139,9 +158,12 @@ def test_test_command_timeout(tmp_path):
     server.write_text(http_server_script(port), encoding="utf-8")
     start = time.time()
     rc, out, err = run_with_server(
-        f"{sys.executable} {server}", port,
+        f"{sys.executable} {server}",
+        port,
         [sys.executable, "-c", "import time; time.sleep(60)"],
-        timeout=15, extra=["--test-timeout", "3"])
+        timeout=15,
+        extra=["--test-timeout", "3"],
+    )
     elapsed = time.time() - start
     assert rc == 1, out
     assert "timed out" in err
@@ -156,8 +178,21 @@ def test_test_command_timeout(tmp_path):
 def test_mismatched_server_and_port_counts(tmp_path):
     port = free_port()
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "--server", "true", "--port", str(port),
-         "--port", str(port + 1), "--", "true"],
-        capture_output=True, text=True, timeout=30)
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--server",
+            "true",
+            "--port",
+            str(port),
+            "--port",
+            str(port + 1),
+            "--",
+            "true",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
     assert result.returncode == 1
     assert "must match" in result.stderr
