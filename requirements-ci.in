@@ -9,3 +9,9 @@ ruff==0.17.4
 pyyaml==6.0.1
 mypy==1.18.2
 psycopg[binary]==3.3.8
+# tomli is mypy's dependency on Python < 3.11 only (3.11+ uses
+# stdlib tomllib), so a plain `pip-compile` on 3.12 omits it — and
+# then the 3.10 CI job resolves it unpinned, which
+# --require-hashes rejects (run 42298838900). Pin it explicitly
+# so every supported Python installs from hashes.
+tomli==2.5.0

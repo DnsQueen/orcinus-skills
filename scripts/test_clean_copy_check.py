@@ -226,6 +226,11 @@ def test_ci_requirements_are_hashed():
         "pyyaml": "6.0.1",
         "mypy": "1.18.2",
         "psycopg": "3.3.8",
+        # tomli is a conditional mypy dependency (Python < 3.11 only):
+        # pip-compile on 3.12 omits it, but the 3.10 CI job resolves
+        # it unpinned and --require-hashes rejects that (run
+        # 42298838900). It must be pinned with hashes like the rest.
+        "tomli": "2.5.0",
     }
     pins = {}
     current = None

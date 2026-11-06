@@ -74,6 +74,11 @@ in the checking machinery itself.
   instruction; ORCINUS is presented as a guided workflow, and the
   verifier's independence is reported with its level (same agent
   session, not a separate process).
+- CI dependencies: `tomli` is pinned with hashes. It is mypy's
+  dependency on Python < 3.11 only, so `pip-compile` on 3.12 omitted
+  it — and the Python 3.10 CI job then resolved it unpinned, which
+  `--require-hashes` rejects. The 3.10 job failed on the install step
+  for exactly that reason; the other Python versions never needed it.
 
 ## [0.9.1] — 2026-11-06
 
