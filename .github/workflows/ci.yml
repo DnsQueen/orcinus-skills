@@ -98,3 +98,29 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
       - name: Fetch the push's base commit
+        run: git fetch --depth=1 origin ${{ github.event.before }} || true
+      - name: Check the version was bumped with skill changes
+        run: python3 scripts/check_version_bump.py --base ${{ github.event.before }} --head ${{ github.sha }}
+
+  plugin-validate:
+    # The official Claude Code plugin validator, on a fresh checkout.
+    # It needs no login: it only checks that the files are
+    # well-formed. Pinned to the CLI version verified locally
+    # (2.1.318, 2026-11-06). --strict treats warnings as errors;
+    # --profile directory additionally checks the plugin-directory
+    # submission rules. A green run proves well-formedness only —
+    # the repo's own validator checks the deeper rules (frontmatter
+    # spec, counts, references, licences).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install Claude Code CLI (pinned)
+        run: npm install -g @anthropic-ai/claude-code@2.1.318
+      - name: Validate the plugin (strict)
+        run: claude plugin validate . --strict
+      - name: Validate against the plugin-directory rules (strict)
+        run: claude plugin validate . --profile directory --strict
