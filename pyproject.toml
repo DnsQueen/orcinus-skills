@@ -1,8 +1,14 @@
 # ORCINUS — Python tooling configuration.
 #
-# The scripts in this repo claim Python 3.9+ (standard library only).
-# CI runs them on a 3.9–3.13 matrix; keep that claim true: no syntax or
-# stdlib feature newer than 3.9 in any script the tests import.
+# The scripts in this repo claim Python 3.10+ (standard library only).
+# CI runs them on a 3.10–3.13 matrix; keep that claim true: no syntax or
+# stdlib feature newer than 3.10 in any script the tests import.
+#
+# Python 3.9 was dropped 2026-11-06: it reached end-of-life 2025-10-31
+# and has no build for Ubuntu 26.04, which is what ubuntu-latest now
+# resolves to — the 3.9 CI job failed in "Set up Python" with
+# "The version '3.9' ... was not found for Ubuntu 26.04". Pinning the
+# runner to ubuntu-24.04 would only postpone the same failure.
 
 [tool.ruff]
 # Lint the ORCINUS-owned Python and migration_generator.py, which
@@ -11,7 +17,7 @@
 # (scripts/check_drift.py) forbids changing them.
 # migration_generator.py is NOT excluded — ORCINUS maintains it.
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 exclude = [
     "skills/database-designer/index_optimizer.py",
     "skills/database-designer/schema_analyzer.py",

@@ -20,7 +20,7 @@ An idea that arrives mid-work and is not written down is gone by the next sessio
 
 ### 1. Capture
 
-Run the script (`scripts/capture.py`, Python 3.9+, standard library only):
+Run the script (`scripts/capture.py`, Python 3.10+, standard library only):
 
 ```
 capture.py capture --store <project>/ideas --text "<the idea, verbatim>" --source "<who said it>"
