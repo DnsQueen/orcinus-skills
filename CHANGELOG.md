@@ -3,6 +3,23 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.3] — 2026-11-07
+
+Follow-up to the unreleased 0.9.2: the 0.9.2 tree was pushed to main
+but never tagged, and the follow-up below changes shipped files, so
+the releasable version moves to 0.9.3 (the version-bump gate requires
+an increase whenever shipped content changes).
+
+### Fixed
+
+- CI dependencies: `exceptiongroup` is pinned with hashes. It is
+  pytest's dependency on Python < 3.11 only, so `pip-compile` on 3.12
+  omitted it — the Python 3.10 CI job resolved it unpinned, which
+  `--require-hashes` rejects (run 42300115306, right after the same
+  failure for `tomli` in run 42298838900). Together the two pins close
+  the complete set of Python < 3.11 conditional dependencies in the CI
+  tree.
+
 ## [0.9.2] — 2026-11-06
 
 The fifth review round (reviewers 3 and 4 re-reviewed 0.9.1): every

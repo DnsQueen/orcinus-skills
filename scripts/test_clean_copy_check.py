@@ -231,6 +231,10 @@ def test_ci_requirements_are_hashed():
         # it unpinned and --require-hashes rejects that (run
         # 42298838900). It must be pinned with hashes like the rest.
         "tomli": "2.5.0",
+        # exceptiongroup is pytest's conditional dependency on
+        # Python < 3.11 (same omission, same failure — the 3.10 job
+        # in run 42300115306 hit it right after tomli was pinned).
+        "exceptiongroup": "1.3.1",
     }
     pins = {}
     current = None
