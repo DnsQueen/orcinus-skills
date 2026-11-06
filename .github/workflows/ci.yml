@@ -36,7 +36,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install pytest and ruff (pinned)
-        run: pip install pytest==8.4.2 ruff==0.17.4
+        run: pip install pytest==8.4.2 ruff==0.17.4 pyyaml==6.0.1
       - name: Validate the repo (frontmatter, licences, glossary, stage ranges, manifests, links, skill counts)
         run: python3 scripts/validate_repo.py
       - name: Check vendored files have not drifted
@@ -80,6 +80,21 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install pytest and ruff (pinned)
-        run: pip install pytest==8.4.2 ruff==0.17.4
+        run: pip install pytest==8.4.2 ruff==0.17.4 pyyaml==6.0.1
       - name: Clean-environment install check
-        run: python3 scripts/clean_install_check.py
+        run: python3 scripts/clean_copy_check.py
+
+  version-bump:
+    # A push that ships plugin content (skills/, agents/, commands/)
+    # must bump the version and the changelog in the same push.
+    # Push events only: the repo's workflow is direct pushes to main.
+    # A PR merged to main is caught by the merge push, whose diff
+    # includes the PR's skill changes. The base commit is not in a
+    # depth-1 checkout, so it is fetched first; the script fails
+    # loudly (exit 2) if the base cannot be resolved, rather than
+    # silently passing.
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Fetch the push's base commit
