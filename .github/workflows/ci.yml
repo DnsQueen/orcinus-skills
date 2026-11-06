@@ -1,35 +1,55 @@
 name: CI
 
 # ORCINUS practices verification-first on itself: every change must
-# pass the repo validator, the script tests, and the waza
-# harness-smoke suite. The waza suite uses the mock executor, so it
-# proves the harness (schema, tasks, graders, results JSON), never
-# agent quality. The agent-behavior suite
+# pass the repo validator, the drift check, the linter, the script
+# tests, and the waza harness-smoke suite. The waza suite uses the
+# mock executor, so it proves the harness (schema, tasks, graders,
+# results JSON), never agent quality. The agent-behavior suite
 # (evals/waza-orcinus-verify-agent/) needs a real agent executor and
 # is not run in CI.
+#
+# Actions are pinned by full commit SHA, not by tag, so a compromised
+# or moved tag cannot change what CI runs. To update an action, fetch
+# the new SHA from the GitHub API
+# (GET /repos/<owner>/<repo>/git/ref/tags/<tag>) and replace the SHA
+# below, keeping the "# <action>@<tag>" comment in sync.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
-  validate:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - name: Install pytest
-        run: pip install pytest
-      - name: Validate the repo (frontmatter, licences, glossary, stage ranges, manifests, links)
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest and ruff (pinned)
+        run: pip install pytest==8.4.2 ruff==0.17.4
+      - name: Validate the repo (frontmatter, licences, glossary, stage ranges, manifests, links, skill counts)
         run: python3 scripts/validate_repo.py
       - name: Check vendored files have not drifted
         run: python3 scripts/check_drift.py
+      - name: Lint the ORCINUS-owned Python (ruff, see pyproject.toml)
+        run: python3 -m ruff check
       - name: Run the script tests
         run: python3 -m pytest -q
+
+  waza:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
       - name: Install waza (v0.40.0, checksum verified)
         run: |
           curl -sL -o /tmp/waza-linux-amd64 https://github.com/microsoft/waza/releases/download/v0.40.0/waza-linux-amd64
@@ -39,3 +59,27 @@ jobs:
           /tmp/waza-linux-amd64 --help | head -n 3
       - name: Run the waza harness-smoke suite (mock executor)
         run: /tmp/waza-linux-amd64 run evals/waza-orcinus-verify/eval.yaml --output /tmp/waza-results.json
+      - name: Upload the waza results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+        with:
+          name: waza-results
+          path: /tmp/waza-results.json
+          if-no-files-found: error
+
+  clean-install:
+    # Proves the repo works from a clean copy, not just in the author's
+    # working tree: copies it to a fresh temp dir and runs the gates
+    # there. A real `claude plugin install` still needs a machine with
+    # Claude Code and is not run here (see SCOPE.md).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest and ruff (pinned)
+        run: pip install pytest==8.4.2 ruff==0.17.4
+      - name: Clean-environment install check
+        run: python3 scripts/clean_install_check.py
