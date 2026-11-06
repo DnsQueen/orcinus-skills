@@ -6,7 +6,6 @@ non-UTF-8 skip, the $ identifier, the vacuous clean (empty --old,
 nonexistent root), and the stale-test classification. Run:
     python3 -m pytest skills/incomplete-refactor/scripts/test_check_refactor.py -q
 """
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -157,3 +156,58 @@ def test_git_ls_files_respects_gitignore_and_includes_untracked(tmp_path):
     assert rc == 1, out
     assert "src/new.ts" in out
     assert "ignored/a.ts" not in out
+
+
+# --- Second review round: regression tests (2026-11-06) ---
+
+def _git_repo(tmp_path):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=30)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.email", "t@t.t"],
+                   check=True, timeout=30)
+    subprocess.run(["git", "-C", str(tmp_path), "config", "user.name", "t"],
+                   check=True, timeout=30)
+
+
+def test_git_mode_skips_tracked_lockfiles(tmp_path):
+    """A tracked package-lock.json that merely names an old package
+    must not be a false positive — the skip rules apply in git mode
+    too, not only in the walk fallback."""
+    _git_repo(tmp_path)
+    write(tmp_path / "package-lock.json",
+          '{"name": "x", "packages": {"node_modules/oldName": {}}}\n')
+    write(tmp_path / "src" / "clean.ts", "export const x = 1;\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."],
+                   check=True, timeout=30)
+    rc, out, _ = run(tmp_path, "--old", "oldName")
+    assert rc == 0, out
+    assert out.startswith("clean:")
+    assert "package-lock.json" not in out
+
+
+def test_git_mode_skips_tracked_generated_dirs(tmp_path):
+    """A tracked file under dist/ (force-added) is generated output,
+    not source — it must not be scanned in git mode either."""
+    _git_repo(tmp_path)
+    write(tmp_path / "dist" / "out.js", "oldName\n")
+    write(tmp_path / "src" / "clean.ts", "export const x = 1;\n")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "-f", "."],
+                   check=True, timeout=30)
+    rc, out, _ = run(tmp_path, "--old", "oldName")
+    assert rc == 0, out
+    assert "dist/out.js" not in out
+
+
+def test_empty_root_is_incomplete_not_clean(tmp_path):
+    """A directory with nothing to check must not report clean — zero
+    coverage is INCOMPLETE, not proof that the refactor is done."""
+    rc, out, _ = run(tmp_path, "--old", "oldName")
+    assert rc == 1, out
+    assert "INCOMPLETE" in out
+    assert "0 file(s) checked" in out
+
+
+def test_allow_empty_accepts_an_empty_scan(tmp_path):
+    """--allow-empty is the explicit opt-in for an empty scan."""
+    rc, out, _ = run(tmp_path, "--old", "oldName", "--allow-empty")
+    assert rc == 0, out
+    assert out.startswith("clean:")

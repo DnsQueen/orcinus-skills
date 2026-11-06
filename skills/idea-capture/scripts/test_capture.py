@@ -4,6 +4,13 @@ Each test covers a real defect found by an external review (2026-11-06):
 frontmatter injection, CRLF silent failure, malformed files, search
 scope, the TOCTOU race, non-verbatim storage, the double timestamp,
 id validation / path traversal, and the non-atomic status update.
+
+Second review round (2026-11-06): the Persian-only crash (slugify
+kept Persian letters but ID_RE rejected them), the lost update in
+_set_status (no lock), the symlink gap in list/search, the
+"## History" delimiter collision in the raw text, and the weak
+verbatim test (it accepted a 20-character prefix). Each has a
+regression test below.
 Run: python3 -m pytest skills/idea-capture/scripts/test_capture.py -q
 """
 import os
@@ -12,6 +19,9 @@ import sys
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "capture.py"
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import capture as cap  # noqa: E402  (the module under test)
 
 
 def run(store, *argv):
@@ -41,17 +51,17 @@ def test_capture_and_show_round_trip(tmp_path):
 
 
 def test_capture_stores_text_verbatim(tmp_path):
-    """The raw text is stored exactly as given, not stripped."""
+    """The raw text is stored exactly as given, not stripped — and the
+    check is exact equality, not a 20-character prefix."""
     store = tmp_path / "ideas"
     text = "  an idea with leading and trailing space  \nand a second line\n"
     rc, out, err = capture(store, text)
     assert rc == 0, err
     idea_id = out.strip()
     content = (store / f"{idea_id}.md").read_text(encoding="utf-8")
-    # The raw section (between the marker and History) is the input verbatim.
-    raw = content.split("# Raw idea (verbatim)\n\n", 1)[1].split("\n## History\n", 1)[0]
-    assert raw == text.rstrip("\n") or raw.startswith(text[:20])
-    assert "  an idea with leading" in raw
+    # Exact round-trip: raw_text_of returns the input, nothing more.
+    assert cap.raw_text_of(content) == text
+    assert "  an idea with leading" in cap.raw_text_of(content)
 
 
 def test_capture_rejects_empty_text(tmp_path):
@@ -153,7 +163,7 @@ def test_id_stamp_and_created_agree(tmp_path):
     assert rc == 0, err
     idea_id = out.strip()
     content = (store / f"{idea_id}.md").read_text(encoding="utf-8")
-    created = [l for l in content.splitlines() if l.startswith("created: ")][0]
+    created = [line for line in content.splitlines() if line.startswith("created: ")][0]
     created = created.split("created: ", 1)[1]
     # created is ISO; the id starts with YYYYMMDD-HHMMSS.
     stamp = idea_id[:15]  # YYYYMMDD-HHMMSS
@@ -235,3 +245,173 @@ def test_list_status_filter(tmp_path):
     assert first in out and second not in out
     rc, out, err = run(store, "list", "--store", str(store), "--status", "dropped")
     assert second in out and first not in out
+
+
+# --- Second review round: regression tests (2026-11-06) ---
+
+def test_persian_only_idea_round_trips(tmp_path):
+    """A Persian-only idea must capture, show, search and promote —
+    the slug is ASCII ("idea") while the raw text stays Persian.
+    This is the bug that crashed with a ValueError traceback."""
+    store = tmp_path / "ideas"
+    text = "یک ایده تازه"
+    rc, out, err = capture(store, text)
+    assert rc == 0, err
+    assert "Traceback" not in err
+    idea_id = out.strip()
+    assert idea_id.endswith("-idea"), idea_id
+    rc, out, err = run(store, "show", "--store", str(store), idea_id)
+    assert rc == 0, err
+    assert text in out
+    rc, out, err = run(store, "search", "--store", str(store), "ایده")
+    assert rc == 0, err
+    assert idea_id in out
+    rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
+    assert rc == 0, err
+
+
+def test_persian_and_english_mixed(tmp_path):
+    """Mixed text uses the Latin words for the slug; the raw text is
+    still the full mixed input."""
+    store = tmp_path / "ideas"
+    text = "سامانه مدیریت هزینه weekly budget"
+    rc, out, err = capture(store, text)
+    assert rc == 0, err
+    idea_id = out.strip()
+    assert "weekly-budget" in idea_id
+    content = (store / f"{idea_id}.md").read_text(encoding="utf-8")
+    assert cap.raw_text_of(content) == text
+
+
+def test_persian_half_space_and_emoji_and_punctuation(tmp_path):
+    """Half-space (ZWNJ), emoji-only and punctuation-only ideas all
+    capture without a traceback."""
+    store = tmp_path / "ideas"
+    # U+200C ZERO WIDTH NON-JOINER between می and خواهم.
+    rc, out, err = capture(store, "می‌خواهم یک اپ بسازم")
+    assert rc == 0, err
+    assert "Traceback" not in err
+    first = out.strip()
+    assert cap.raw_text_of((store / f"{first}.md").read_text(encoding="utf-8")) == "می‌خواهم یک اپ بسازم"
+    rc, out, err = capture(store, "🚀💡🎉")
+    assert rc == 0, err
+    # Slug "idea" (no ASCII words); a -2 suffix is fine when another
+    # "idea" slug was captured in the same second.
+    assert "-idea" in out.strip()
+    rc, out, err = capture(store, "!!! ??? ...")
+    assert rc == 0, err
+    assert "-idea" in out.strip()
+
+
+def test_raw_text_containing_history_marker_is_not_truncated(tmp_path):
+    """An idea that itself contains a line reading '## History' must
+    round-trip in full — raw_length makes the section unambiguous."""
+    store = tmp_path / "ideas"
+    text = "my idea\n## History\n- not the real history\nmore text after it"
+    rc, out, err = capture(store, text)
+    assert rc == 0, err
+    idea_id = out.strip()
+    content = (store / f"{idea_id}.md").read_text(encoding="utf-8")
+    assert cap.raw_text_of(content) == text
+    rc, out, err = run(store, "search", "--store", str(store), "more text after it")
+    assert rc == 0, err
+    assert idea_id in out
+
+
+def test_crlf_input_is_stored_as_lf_and_round_trips(tmp_path):
+    """CRLF input is normalised to LF on capture, so raw_length stays
+    exact and the round-trip is verbatim."""
+    store = tmp_path / "ideas"
+    text = "first line\r\nsecond line\r\n"
+    rc, out, err = capture(store, text)
+    assert rc == 0, err
+    idea_id = out.strip()
+    content = (store / f"{idea_id}.md").read_text(encoding="utf-8")
+    assert cap.raw_text_of(content) == "first line\nsecond line\n"
+    assert "\r" not in content
+
+
+def test_symlink_in_list_and_search_is_reported_not_read(tmp_path):
+    """A symlink inside the store pointing outside must not be read
+    by list/search — it is reported as malformed instead."""
+    store = tmp_path / "ideas"
+    store.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text(
+        "---\nid: 20261106-120000-outside\ncreated: 2026-11-06T12:00:00+00:00\n"
+        "source: test\nstatus: raw\n---\n\n# Raw idea (verbatim)\n\nsecret outside\n\n"
+        "## History\n\n- 2026-11-06T12:00:00+00:00: captured (status raw)\n",
+        encoding="utf-8",
+    )
+    link = store / "20261106-120000-outside.md"
+    try:
+        os.symlink(outside, link)
+    except OSError:
+        return  # Symlinks not supported here; skip.
+    rc, out, err = run(store, "list", "--store", str(store))
+    assert rc == 0, err
+    assert "secret outside" not in out
+    assert "escapes the store" in err
+    rc, out, err = run(store, "search", "--store", str(store), "secret")
+    assert rc == 1
+    assert "20261106-120000-outside" not in out
+
+
+def test_frontmatter_id_must_match_filename(tmp_path):
+    """A file whose frontmatter id differs from its filename is
+    malformed and reported, not silently listed under the wrong id."""
+    store = tmp_path / "ideas"
+    store.mkdir()
+    (store / "20261106-120000-aaa.md").write_text(
+        "---\nid: 20261106-120000-bbb\ncreated: 2026-11-06T12:00:00+00:00\n"
+        "source: test\nstatus: raw\n---\n\n# Raw idea (verbatim)\n\nmismatched\n\n"
+        "## History\n\n- 2026-11-06T12:00:00+00:00: captured (status raw)\n",
+        encoding="utf-8",
+    )
+    rc, out, err = run(store, "list", "--store", str(store))
+    assert rc == 0, err
+    assert "20261106-120000-aaa" not in out
+    assert "does not match the filename" in err
+
+
+def test_concurrent_promotes_do_not_lose_history(tmp_path):
+    """Two status changes at once must not lose a History entry: the
+    lock serialises the read-modify-write, so the second process reads
+    the updated status. The two transitions may conflict (a dropped
+    idea cannot be promoted), so the assertion is consistency, not
+    that both succeed: the number of History entries must equal the
+    number of successful operations. Without the lock, both could
+    read "raw", both succeed, and the second write would silently
+    drop the first one's entry."""
+    import threading
+
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "concurrent idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    results = []
+
+    def promote():
+        r = run(store, "promote", "--store", str(store), idea_id, "calibrated")
+        results.append(r[0])
+
+    def drop():
+        r = run(store, "drop", "--store", str(store), idea_id, "--reason", "second")
+        results.append(r[0])
+
+    t1 = threading.Thread(target=promote)
+    t2 = threading.Thread(target=drop)
+    t1.start()
+    t2.start()
+    t1.join(timeout=30)
+    t2.join(timeout=30)
+    assert len(results) == 2
+    content = (store / f"{idea_id}.md").read_text(encoding="utf-8")
+    # Every successful transition left its History entry behind (the
+    # capture entry has no "->"; each transition adds exactly one).
+    assert content.count("->") == results.count(0), content
+    # The final status matches the last successful transition.
+    if results.count(0) == 2:
+        assert "status: dropped" in content
+    # No lock file left behind.
+    assert list(store.glob(".*.lock")) == []

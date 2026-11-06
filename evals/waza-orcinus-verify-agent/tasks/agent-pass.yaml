@@ -31,3 +31,4 @@ graders:
       assertions:
         - "\"PASS\" in output"
         - "\"FAIL\" not in output"
+        - "\"7\" in output or \"npm test\" in output or \"test suite\" in output.lower()"

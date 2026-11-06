@@ -24,8 +24,7 @@ import argparse
 import json
 import re
 import sys
-from collections import defaultdict, OrderedDict
-from typing import Dict, List, Set, Tuple, Optional, Any, Union
+from typing import Dict, List, Set, Optional, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
 import hashlib
@@ -183,9 +182,16 @@ class SchemaComparator:
     def _compare_renamed_table_columns(self):
         """A renamed table's column changes are not compared by
         _compare_columns (it only looks at tables with the same name in
-        both schemas). Compare them here, under the OLD table name —
-        the column steps run before the rename step, so they must
-        reference the table by its current name."""
+        both schemas). Compare them here.
+
+        Which name a change is recorded under depends on WHEN its step
+        runs relative to the rename (see generate_migration): column
+        addition, column modification, constraint removal/addition and
+        index removal/addition run BEFORE the rename, so they use the
+        OLD name; column removal runs AFTER the rename, so it uses the
+        NEW name. Recording a dropped column under the old name used
+        to produce a DROP COLUMN against a table that no longer
+        existed."""
         for rename in self.changes['tables_renamed']:
             old_name = rename['old_name']
             new_name = rename['new_name']
@@ -200,8 +206,9 @@ class SchemaComparator:
                     'definition': target_table.columns[col_name]
                 })
             for col_name in current_columns - target_columns:
+                # The drop runs after the rename: use the new name.
                 self.changes['columns_dropped'].append({
-                    'table': old_name,
+                    'table': new_name,
                     'column': col_name,
                     'definition': current_table.columns[col_name]
                 })
@@ -218,7 +225,7 @@ class SchemaComparator:
                     })
             # Constraints and indexes have the same gap: they are only
             # compared for tables with the same name. Compare them here
-            # too, under the old name.
+            # too, under the old name — both run before the rename.
             self._compare_table_constraints(current_table, target_table, old_name)
             self._compare_table_indexes(current_table, target_table, old_name)
     
@@ -442,9 +449,39 @@ class SchemaComparator:
                 self.current_schema[table_name],
                 self.target_schema[table_name], table_name)
 
+        # A new table's indexes are part of its creation, but the
+        # CREATE TABLE step does not emit them — so they must be added
+        # here, or they are silently lost. (The ADD_INDEX steps run
+        # after table creation in generate_migration, so the table
+        # exists by then.) A dropped table's indexes go away with the
+        # table and need no step.
+        added_tables = {t['table'] for t in self.changes['tables_added']}
+        for table_name in sorted(added_tables):
+            for idx in self.target_schema[table_name].indexes:
+                self.changes['indexes_added'].append({
+                    'table': table_name,
+                    'index': idx
+                })
+
+    @staticmethod
+    def _index_signature(idx):
+        """The definition of an index, normalised for comparison:
+        the columns in order, whether it is unique, and any predicate
+        or method. Two indexes with the same name but a different
+        signature are different indexes — comparing only the name set
+        used to miss a change of columns entirely."""
+        columns = tuple(idx.get('columns') or [])
+        unique = bool(idx.get('unique', False))
+        # A partial index (WHERE ...) or an expression/method index.
+        predicate = idx.get('where') or idx.get('predicate') or ""
+        method = idx.get('method') or idx.get('using') or ""
+        expression = idx.get('expression') or ""
+        return (columns, unique, str(predicate), str(method), str(expression))
+
     def _compare_table_indexes(self, current_table, target_table, table_name):
         """Compare the indexes of one table pair. Called for common
-        tables and for renamed tables (under the old name)."""
+        tables and for renamed tables (under the old name — index
+        removal and addition both run before the rename)."""
         current_indexes = {idx['name']: idx for idx in current_table.indexes}
         target_indexes = {idx['name']: idx for idx in target_table.indexes}
 
@@ -464,6 +501,23 @@ class SchemaComparator:
                 'table': table_name,
                 'index': current_indexes[idx_name]
             })
+
+        # Indexes with the same name but a different definition: drop
+        # the old one and add the new one. An index cannot be ALTERed.
+        # The drop is generated before the add (generate_migration
+        # runs index removal before index addition), so a same-name
+        # replacement does not fail with "index already exists".
+        for idx_name in current_names.intersection(target_names):
+            if self._index_signature(current_indexes[idx_name]) != \
+                    self._index_signature(target_indexes[idx_name]):
+                self.changes['indexes_dropped'].append({
+                    'table': table_name,
+                    'index': current_indexes[idx_name]
+                })
+                self.changes['indexes_added'].append({
+                    'table': table_name,
+                    'index': target_indexes[idx_name]
+                })
 
 
 class MigrationGenerator:
@@ -494,15 +548,18 @@ class MigrationGenerator:
         
         # Generate steps in dependency order. Constraint REMOVAL comes
         # before constraint ADDITION: a primary-key swap would fail if
-        # the new key were added while the old one still exists.
+        # the new key were added while the old one still exists. Index
+        # REMOVAL comes before index ADDITION for the same reason: an
+        # index that keeps its name but changes columns cannot be
+        # created while the old one still exists.
         self._generate_table_creation_steps(changes['tables_added'])
         self._generate_column_addition_steps(changes['columns_added'])
         self._generate_constraint_removal_steps(changes['constraints_dropped'])
         self._generate_constraint_addition_steps(changes['constraints_added'])
+        self._generate_index_removal_steps(changes['indexes_dropped'])
         self._generate_index_addition_steps(changes['indexes_added'])
         self._generate_column_modification_steps(changes['columns_modified'])
         self._generate_table_rename_steps(changes['tables_renamed'])
-        self._generate_index_removal_steps(changes['indexes_dropped'])
         self._generate_column_removal_steps(changes['columns_dropped'])
         self._generate_table_removal_steps(changes['tables_dropped'])
         
@@ -535,36 +592,61 @@ class MigrationGenerator:
             self.migration_steps.append(step)
     
     def _create_table_step(self, table: Table) -> MigrationStep:
-        """Create migration step for table creation."""
+        """Create migration step for table creation.
+
+        Every constraint the schema declares is emitted: a column's
+        CHECK, the foreign keys (converted to "table(column)" — the
+        stored form "table.column" is not valid SQL), and the
+        table-level unique and check constraints. A CREATE TABLE that
+        silently dropped them would produce a table that does not
+        match the target schema."""
         columns_sql = []
-        
+
         for col_name, column in table.columns.items():
             col_sql = f"{col_name} {column.data_type}"
-            
+
             if not column.nullable:
                 col_sql += " NOT NULL"
-            
+
             if column.default_value:
                 col_sql += f" DEFAULT {column.default_value}"
-            
+
             if column.unique:
                 col_sql += " UNIQUE"
-            
+
+            if column.check_constraint:
+                col_sql += f" CHECK ({column.check_constraint})"
+
             columns_sql.append(col_sql)
-        
+
         # Add primary key
         if table.primary_key:
             pk_sql = f"PRIMARY KEY ({', '.join(table.primary_key)})"
             columns_sql.append(pk_sql)
-        
-        # Add foreign keys
+
+        # Add foreign keys (stored as "table.column", SQL wants
+        # "table(column)").
         for col_name, ref in table.foreign_keys.items():
-            fk_sql = f"FOREIGN KEY ({col_name}) REFERENCES {ref}"
+            fk_sql = (f"FOREIGN KEY ({col_name}) REFERENCES "
+                      f"{self._references_sql(ref)}")
             columns_sql.append(fk_sql)
-        
+
+        # Table-level unique constraints, with the same conventional
+        # names the ADD/DROP constraint steps use (uq_table_col1_col2),
+        # so a later drop can find them.
+        for cols in table.unique_constraints:
+            name = f"uq_{table.name}_{'_'.join(cols)}"
+            columns_sql.append(
+                f"CONSTRAINT {name} UNIQUE ({', '.join(cols)})")
+
+        # Table-level check constraints, under their schema names.
+        for name, condition in table.check_constraints.items():
+            columns_sql.append(
+                f"CONSTRAINT {name} CHECK ({condition})")
+
         create_sql = f"CREATE TABLE {table.name} (\n    " + ",\n    ".join(columns_sql) + "\n);"
         drop_sql = f"DROP TABLE IF EXISTS {table.name};"
-        
+
         return MigrationStep(
             step_id=self._generate_step_id(),
             step_type="CREATE_TABLE",
@@ -587,21 +669,15 @@ class MigrationGenerator:
             self.migration_steps.append(step)
     
     def _add_column_step(self, col_info: Dict[str, Any]) -> MigrationStep:
-        """Create step for adding a column."""
+        """Create step for adding a column. The full definition is
+        used — type, NOT NULL, UNIQUE, DEFAULT, CHECK, REFERENCES —
+        so a new column does not silently lose the constraints the
+        target schema declares for it."""
         table = col_info['table']
         column = col_info['definition']
-        
-        col_sql = f"{column.name} {column.data_type}"
-        
-        if not column.nullable:
-            if column.default_value:
-                col_sql += f" DEFAULT {column.default_value} NOT NULL"
-            else:
-                # This is risky - adding NOT NULL without default
-                col_sql += " NOT NULL"
-        elif column.default_value:
-            col_sql += f" DEFAULT {column.default_value}"
-        
+
+        col_sql = self._column_definition_sql(column.name, column)
+
         add_sql = f"ALTER TABLE {table} ADD COLUMN {col_sql};"
         drop_sql = f"ALTER TABLE {table} DROP COLUMN {column.name};"
         
@@ -633,7 +709,7 @@ class MigrationGenerator:
         # If column should be NOT NULL, handle in separate phase
         if not column.nullable:
             # Add comment about needing follow-up step
-            add_sql += f"\n-- Follow-up needed: Add NOT NULL constraint after data population"
+            add_sql += "\n-- Follow-up needed: Add NOT NULL constraint after data population"
         
         drop_sql = f"ALTER TABLE {table} DROP COLUMN {column.name};"
         
@@ -1021,7 +1097,7 @@ class MigrationGenerator:
             drop_sql = f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name};"
             columns = constraint_info['columns']
             add_sql = f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} PRIMARY KEY ({', '.join(columns)});"
-            description = f"Drop primary key constraint"
+            description = "Drop primary key constraint"
             
         elif constraint_type == 'UNIQUE':
             columns = constraint_info['columns']
@@ -1205,7 +1281,7 @@ class ValidationGenerator:
             check_type="COLUMN_MODIFIED",
             table=step.table,
             description=f"Verify column modification in {step.table}",
-            sql_query=step.validation_sql or f"SELECT 1;",  # Use provided validation or default
+            sql_query=step.validation_sql or "SELECT 1;",  # Use provided validation or default
             expected_result=1
         )
     

@@ -193,3 +193,127 @@ def test_deep_chain_does_not_hit_the_recursion_limit(tmp_path):
     assert "RecursionError" not in err
     assert rc == 1, out
     assert "circular import" in out
+
+
+# --- Second review round: regression tests (2026-11-06) ---
+
+def test_jsonc_tsconfig_with_comments_is_parsed(tmp_path):
+    """A tsconfig with // comments and a trailing comma must still
+    load its paths aliases — it used to fail silently and drop them."""
+    root = tmp_path / "proj"
+    write(root / "tsconfig.json",
+          '{\n  // the base config\n  "compilerOptions": {\n'
+          '    "paths": { "@/*": ["src/*"], },\n  },\n}\n')
+    write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
+    write(root / "src" / "b.ts", 'import { a } from "./a.js";\nexport const b = a;\n')
+    pkg(root)
+    rc, out, _ = run(root)
+    assert rc == 1, out
+    assert "circular import" in out
+
+
+def test_unparseable_tsconfig_is_incomplete_not_clean(tmp_path):
+    """A tsconfig that exists but cannot be parsed must not silently
+    shrink the import graph — the run is INCOMPLETE."""
+    root = tmp_path / "proj"
+    write(root / "tsconfig.json", '{"compilerOptions": {"paths": {"@/*": ["src/*"]')
+    write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
+    write(root / "src" / "b.ts", "export const b = 1;\n")
+    pkg(root)
+    rc, out, _ = run(root)
+    assert rc == 1, out
+    assert "INCOMPLETE" in out
+    assert "tsconfig" in out
+
+
+def test_baseurl_is_honoured(tmp_path):
+    """paths resolve relative to baseUrl, not relative to the root:
+    with baseUrl "src", @/b must find src/lib/b, not lib/b."""
+    root = tmp_path / "proj"
+    write(root / "tsconfig.json", json.dumps({
+        "compilerOptions": {
+            "baseUrl": "src",
+            "paths": {"@/*": ["lib/*"]}}}))
+    write(root / "src" / "lib" / "b.ts", "export const b = 1;\n")
+    write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
+    pkg(root)
+    rc, out, _ = run(root)
+    assert rc == 0, out
+
+
+def test_tsconfig_extends_is_followed(tmp_path):
+    """A tsconfig that extends a base config inherits its paths."""
+    root = tmp_path / "proj"
+    write(root / "tsconfig.base.json", json.dumps({
+        "compilerOptions": {"paths": {"@/*": ["src/*"]}}}))
+    write(root / "tsconfig.json", json.dumps({
+        "extends": "./tsconfig.base.json", "compilerOptions": {}}))
+    write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
+    write(root / "src" / "b.ts", 'import { a } from "./a.js";\nexport const b = a;\n')
+    pkg(root)
+    rc, out, _ = run(root)
+    assert rc == 1, out
+    assert "circular import" in out
+
+
+def test_star_pattern_does_not_flag_package_imports(tmp_path):
+    """A catch-all "*" pattern must not turn every package import
+    (react, ...) into a false "unresolved import"."""
+    root = tmp_path / "proj"
+    write(root / "tsconfig.json", json.dumps({
+        "compilerOptions": {"paths": {"*": ["src/*"]}}}))
+    write(root / "src" / "a.ts",
+          'import { r } from "react";\nimport { b } from "./b.js";\nexport const a = b;\n')
+    write(root / "src" / "b.ts", "export const b = 1;\n")
+    pkg(root, deps={"react": "18.0.0"})
+    _dep_with_licence(root, "react", {"license": "MIT"})
+    rc, out, _ = run(root)
+    assert rc == 0, out
+    assert "unresolved import" not in out
+
+
+def test_longest_prefix_pattern_wins(tmp_path):
+    """When two patterns match, TypeScript picks the longest prefix —
+    the checker must resolve the same file, not the first pattern's."""
+    root = tmp_path / "proj"
+    write(root / "tsconfig.json", json.dumps({
+        "compilerOptions": {"paths": {
+            "@/*": ["wrong/*"],
+            "@/deep/*": ["src/*"]}}}))
+    write(root / "src" / "b.ts", 'import { a } from "./a.js";\nexport const b = a;\n')
+    write(root / "src" / "a.ts",
+          'import { b } from "@/deep/b";\nexport const a = b;\n')
+    pkg(root)
+    rc, out, _ = run(root)
+    assert rc == 1, out
+    assert "circular import" in out
+
+
+def test_regex_literal_with_quote_does_not_swallow_imports(tmp_path):
+    """A regex literal containing a quote (/'/) must not make the
+    comment stripper think a string opened and swallow the rest of
+    the file — the import after it must still be seen."""
+    root = tmp_path / "proj"
+    write(root / "src" / "a.ts",
+          "const re = /'/;\n"
+          'import { h } from "../tests/helper.js";\nexport const a = h;\n')
+    write(root / "tests" / "helper.ts", "export const h = 1;\n")
+    pkg(root)
+    rc, out, _ = run(root)
+    assert rc == 1, out
+    assert "layer violation" in out
+
+
+def test_spdx_parentheses_and_precedence(tmp_path):
+    """(MIT OR GPL-3.0) AND Apache-2.0 passes: MIT satisfies the OR
+    branch and Apache-2.0 satisfies the AND. The old code required
+    every licence in the expression to be allowed, so it rejected it."""
+    root = tmp_path / "proj"
+    write(root / "src" / "a.ts", "export const a = 1;\n")
+    pkg(root, deps={"ok-dep": "1.0.0", "bad-dep": "1.0.0"})
+    _dep_with_licence(root, "ok-dep", {"license": "(MIT OR GPL-3.0) AND Apache-2.0"})
+    _dep_with_licence(root, "bad-dep", {"license": "(MIT AND GPL-3.0)"})
+    rc, out, _ = run(root)
+    assert rc == 1, out
+    assert "bad-dep" in out
+    assert "ok-dep" not in out

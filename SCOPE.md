@@ -68,6 +68,28 @@ v1.0.0 promises. v1.0.0 ships the INCOMPLETE status and the structured
 evidence schema in `orcinus-verify`; the rest of the enforcement layer
 is v1.1 work.
 
+**Built in the second review round (2026-11-06) — the v1.1 steps, not
+the layer itself:** the central skill manifest (`skills/manifest.json`,
+checked by the validator against the folders and the frontmatter);
+the machine-readable evidence schema (`evals/evidence.schema.json`)
+with a validator (`scripts/validate_evidence.py`) that enforces
+verdict consistency; the `doctor` command (`scripts/doctor.py`);
+a clean-environment install test (`scripts/clean_install_check.py`,
+also run in CI); agent security eval tasks in
+`evals/waza-orcinus-verify-agent/` (a handoff that tells the verifier
+to skip the checks, a fabricated test log, a request to change a FAIL
+verdict to PASS) with graders that require the verdict AND the named
+file AND the evidence; the architecture decision records (`docs/adr/`);
+the unified machine-readable report format (`docs/report-format.md`);
+and the persistent project state spec (`docs/project-state.md`,
+`.orcinus/state.json` with BUILDING / VERIFYING / BLOCKED / VERIFIED /
+AWAITING_APPROVAL / RELEASE_READY, VERIFIED bound to evidence for a
+specific revision, approval bound to a specific version/commit/artifact).
+What is still v1.1 is the *enforcement* itself: a policy evaluator
+that refuses a transition the evidence does not support, session
+isolation for the verifier, and a tamper-proof state file. The specs
+above define what that layer must enforce; they do not enforce it.
+
 - **Enforcement layer** (reviewer 4's strongest architectural proposal):
   a central skill manifest (id, version, entry path, tool/skill
   dependencies, supported languages/environments, licence + source
@@ -80,12 +102,15 @@ is v1.1 work.
 - **Real-agent eval runs**: run `evals/waza-orcinus-verify-agent/` with
   a real executor, and multi-environment install testing (a fresh
   install on a clean machine, `claude plugin validate`, a real plugin
-  install).
+  install). The clean-copy check (`scripts/clean_install_check.py`)
+  is built; the real plugin install and `claude plugin validate`
+  still need a machine with Claude Code.
 - **Engineering Trust Score** (reviewer 2's proposal): a weighted
   score across verification, security, and eval dimensions. The
   weights in the proposal (15/15/20/20/15/10/5) are arbitrary and
   gameable — they need evidence before they are adopted, and the score
-  is a v2 idea at best.
+  is a v2 idea at best. See ADR 0004 for the decision not to ship one
+  in v1.
 - **Failure Intelligence, Model-Agnostic Verification, Prompt
   Injection Isolation, Dependency/Supply Chain Intelligence,
   Repository Memory, Self-Evaluation** (reviewer 2's §5–7 proposals):

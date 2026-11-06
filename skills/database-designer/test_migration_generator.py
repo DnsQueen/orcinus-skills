@@ -183,3 +183,115 @@ def test_no_change_produces_no_modify_step():
     target = {"t": table({"v": col("VARCHAR(50)")})}
     _, plan = compare_and_generate(current, target)
     assert step_sql(plan, "MODIFY_COLUMN") == []
+
+
+# --- Second review round: regression tests (2026-11-06) ---
+
+def test_same_name_index_change_is_detected():
+    """An index that keeps its name but changes columns must be
+    detected: comparing only the name set missed it entirely."""
+    current = {"orders": table(
+        {"id": col("INTEGER"), "user_id": col("INTEGER"),
+         "created_at": col("TEXT")},
+        indexes=[{"name": "idx_orders_search", "columns": ["user_id"]}] )}
+    target = {"orders": table(
+        {"id": col("INTEGER"), "user_id": col("INTEGER"),
+         "created_at": col("TEXT")},
+        indexes=[{"name": "idx_orders_search", "columns": ["created_at"]}] )}
+    changes, plan = compare_and_generate(current, target)
+    assert len(changes["indexes_dropped"]) == 1
+    assert len(changes["indexes_added"]) == 1
+    assert any("DROP INDEX idx_orders_search" in s.sql_forward
+               for s in step_sql(plan, "DROP_INDEX"))
+    assert any("created_at" in s.sql_forward
+               for s in step_sql(plan, "ADD_INDEX"))
+
+
+def test_rename_with_column_drop_uses_new_name():
+    """A renamed table that also loses a column: the DROP COLUMN runs
+    AFTER the rename, so it must name the NEW table — the old code
+    recorded it under the old name and produced SQL against a table
+    that no longer existed."""
+    current = {"orders": table(
+        {"id": col("INTEGER"), "user_id": col("INTEGER"),
+         "amount": col("NUMERIC"), "note": col("TEXT")},
+        primary_key=["id"])}
+    target = {"purchases": table(
+        {"id": col("INTEGER"), "user_id": col("INTEGER"),
+         "amount": col("NUMERIC")},
+        primary_key=["id"])}
+    changes, plan = compare_and_generate(current, target)
+    assert len(changes["tables_renamed"]) == 1
+    drops = step_sql(plan, "DROP_COLUMN")
+    assert len(drops) == 1
+    assert "ALTER TABLE purchases DROP COLUMN note" in drops[0].sql_forward
+    # And the drop really comes after the rename in execution order.
+    order = [s.step_type for s in plan.steps]
+    assert order.index("RENAME_TABLE") < order.index("DROP_COLUMN")
+
+
+def test_create_table_fk_uses_table_column_syntax():
+    """A foreign key stored as "users.id" must become
+    REFERENCES users(id) in CREATE TABLE — "users.id" is invalid SQL."""
+    target = {"books": table(
+        {"id": col("INTEGER"),
+         "author_id": col("INTEGER", foreign_key="authors.id")},
+        primary_key=["id"]),
+        "authors": table({"id": col("INTEGER")}, primary_key=["id"])}
+    _, plan = compare_and_generate({}, target)
+    creates = [s for s in step_sql(plan, "CREATE_TABLE") if s.table == "books"]
+    assert len(creates) == 1
+    assert "REFERENCES authors(id)" in creates[0].sql_forward
+    assert "REFERENCES authors.id" not in creates[0].sql_forward
+
+
+def test_create_table_emits_table_level_constraints():
+    """Table-level unique and check constraints must appear in the
+    CREATE TABLE — they used to be silently dropped."""
+    target = {"t": table(
+        {"a": col("TEXT"), "b": col("TEXT"), "v": col("NUMERIC")},
+        unique_constraints=[["a", "b"]],
+        check_constraints={"ck_t_v": "v > 0"})}
+    _, plan = compare_and_generate({}, target)
+    sql = step_sql(plan, "CREATE_TABLE")[0].sql_forward
+    assert "CONSTRAINT uq_t_a_b UNIQUE (a, b)" in sql
+    assert "CONSTRAINT ck_t_v CHECK (v > 0)" in sql
+
+
+def test_add_column_keeps_constraints():
+    """A new column's UNIQUE, foreign key and CHECK must survive into
+    the ADD COLUMN — they used to be dropped."""
+    current = {"users": table({"id": col("INTEGER")}, primary_key=["id"])}
+    target = {"users": table(
+        {"id": col("INTEGER"),
+         "email": col("TEXT", unique=True),
+         "status": col("TEXT", check_constraint="status IN ('a', 'b')"),
+         "group_id": col("INTEGER", foreign_key="groups.id")},
+        primary_key=["id"]),
+        "groups": table({"id": col("INTEGER")}, primary_key=["id"])}
+    _, plan = compare_and_generate(current, target)
+    adds = {s.description: s.sql_forward for s in step_sql(plan, "ADD_COLUMN")}
+    email_sql = [v for k, v in adds.items() if "email" in k][0]
+    assert "UNIQUE" in email_sql
+    status_sql = [v for k, v in adds.items() if "status" in k][0]
+    assert "CHECK (status IN ('a', 'b'))" in status_sql
+    group_sql = [v for k, v in adds.items() if "group_id" in k][0]
+    assert "REFERENCES groups(id)" in group_sql
+
+
+def test_new_table_indexes_are_created():
+    """An index declared on a NEW table must be created: the CREATE
+    TABLE step does not emit indexes, and _compare_indexes only
+    looked at tables present in both schemas — so the index was
+    silently lost. Found by the SQLite integration tests."""
+    target = {"t": table(
+        {"id": col("INTEGER"), "email": col("TEXT")},
+        primary_key=["id"],
+        indexes=[{"name": "idx_t_email", "columns": ["email"]}] )}
+    _, plan = compare_and_generate({}, target)
+    adds = step_sql(plan, "ADD_INDEX")
+    assert len(adds) == 1
+    assert "CREATE INDEX idx_t_email ON t (email)" in adds[0].sql_forward
+    # And it runs after the CREATE TABLE.
+    order = [s.step_type for s in plan.steps]
+    assert order.index("CREATE_TABLE") < order.index("ADD_INDEX")

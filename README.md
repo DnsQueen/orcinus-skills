@@ -77,6 +77,13 @@ Then invoke `/orcinus` in your agent and keep working. ORCINUS detects the stage
 - `skills/codebase-knowledge-builder` — study an unfamiliar codebase and produce a source-cited, revision-specific knowledge artifact for onboarding. Injected verbatim (OthmanAdi/codebase-knowledge-builder, MIT).
 - `skills/issue-triage` — manage a GitHub issue backlog in 3 phases: audit, opt-in deep analysis, validated actions. Injected verbatim (florianbruniaux/claude-code-plugins, MIT). Pass the language explicitly (`en`) — the skill defaults to French.
 - `docs/MAP.md` — the full 0–100 map: every micro-step, its best proven source, its licence, and its integration method (copy / rewrite / bundle / write from scratch).
+- `skills/manifest.json` — the single source of truth for the skill inventory: name, licence, stages, source, and status per skill. The validator checks it against the folders and the frontmatter.
+- `evals/evidence.schema.json` — the machine-readable form of the evidence bundle orcinus-verify returns. Validate a bundle with `python3 scripts/validate_evidence.py <bundle.json>`.
+- `scripts/doctor.py` — check whether this machine can run the ORCINUS gates (python, pytest, ruff, git, node, waza) and say exactly which ones it cannot.
+- `scripts/clean_install_check.py` — prove the repo works from a clean copy, not just in the author's working tree (also run in CI).
+- `docs/adr/` — architecture decision records for ORCINUS's own decisions (one install, verification-first, verbatim-with-attribution, no Trust Score in v1).
+- `docs/report-format.md` — the unified machine-readable report format all checkers converge to.
+- `docs/project-state.md` — the persistent project state spec (`.orcinus/state.json`): BUILDING / VERIFYING / BLOCKED / VERIFIED / AWAITING_APPROVAL / RELEASE_READY, each bound to a revision and an evidence bundle.
 - `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v1 does and does not do.
 
 Later sub-skills (idea, architecture, coding, security, eval) are listed in `docs/MAP.md` with their source and status. They are added one at a time, each proven on a demo repo before it ships. No stage is empty in the map, but not every sub-skill is fully built in v1.

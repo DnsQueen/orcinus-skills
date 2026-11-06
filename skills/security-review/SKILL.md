@@ -26,7 +26,7 @@ Read the git diff. List every file changed. Mark every file that touches auth, s
 ### 2. Secrets
 
 - Is `.env` or any secret file tracked? Is a secret in the diff or in git history for the changed files? If yes, that is a blocking finding.
-- Run a thin pattern scan over the changed files for key-shaped values, case-insensitive: private-key headers, `AKIA`, `ghp_`, `sk-`, and `password` / `token` / `secret` / `api_key` assigned to a value of 8 or more characters (for example, `grep -r -n -i -E "BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{10,}|(password|passwd|token|secret|api[_-]?key)\s*=\s*['\"][^'\"]{8,}['\"]"`). Case matters: a case-sensitive scan misses `API_KEY`. Record every match. Each match is a finding until it is proven to be a test fixture with a clearly fake value — and a "fake" label alone does not prove it; the value must be unusable (for example, a placeholder like `YOUR_KEY_HERE`).
+- Run a thin pattern scan over the changed files for key-shaped values, case-insensitive: private-key headers, `AKIA`, `ghp_`, `gho_`, `ghs_`, `github_pat_`, `sk-`, `sk_live_`, `sk_test_`, `xox[baprs]-`, `AIza`, JWTs (`eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`), and `password` / `token` / `secret` / `api_key` assigned (with `=` or `:` — JSON/YAML use a colon) to a value of 8 or more characters (for example, `grep -r -n -i -E "BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{10,}|sk_live_[A-Za-z0-9]{10,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{35}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|(password|passwd|token|secret|api[_-]?key)[\"']?\s*[:=]\s*['\"][^'\"]{8,}['\"]"`). Case matters: a case-sensitive scan misses `API_KEY`. Record every match. Each match is a finding until it is proven to be a test fixture with a clearly fake value — and a "fake" label alone does not prove it; the value must be unusable (for example, a placeholder like `YOUR_KEY_HERE`).
 - If Gitleaks is installed, run `gitleaks detect` and record the output. If it is not installed, record "not run — gitleaks not installed" and do not claim the secrets check passed.
 
 ### 3. Injection
@@ -51,7 +51,7 @@ Read the diff for: weak crypto, disabled TLS verification, overly broad permissi
 
 ### 6. Permissions and data
 
-For each new capability: who can call it, is auth checked before the action, what data does it access, and is that the least it needs? An endpoint or function without an auth check is a blocking finding.
+For each new capability: who can call it, is auth checked before the action, what data does it access, and is that the least it needs? An endpoint or function without an auth check is a blocking finding — unless the endpoint is intentionally public and the intent is documented: health and readiness probes (`/livez`, `/readyz`), the login endpoint itself, and any endpoint the project documents as public are not findings, but each one must be listed in the report as intentionally public with its reason. An undocumented public endpoint is still a finding.
 
 ## Verdict
 

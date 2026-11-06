@@ -70,7 +70,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Performance budgets | addyosmani/agent-skills: performance-optimization | MIT | copy | built |
 | Health / monitoring | ericrisco/rsc-harness: monitoring | MIT | copied verbatim (6 files, frontmatter adapted to spec), licence verified from primary LICENSE, commit 111532c; the outside view (probes, SLO burn, on-call) — complements monitoring-observability (the telemetry side) | built |
 
-## F — Debugging / Refactor (50–79)
+## F — Debugging / Refactor (50–79, cross-cutting)
 
 | Need | Best source | Licence | Integration | Status |
 |---|---|---|---|---|

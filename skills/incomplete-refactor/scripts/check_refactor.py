@@ -4,6 +4,7 @@
 Usage:
     python3 check_refactor.py --root . --old budgetWarning,oldName \
         [--removed src/budget-old.ts] [--allow CHANGELOG.md,docs/migration.md]
+        [--allow-empty]
 
 Exit 0: clean (no leftovers, and the scan covered everything).
 Exit 1: leftovers found, or the scan was incomplete, or the arguments
@@ -16,8 +17,10 @@ Rules:
 - The files scanned are the ones git tracks plus untracked files that
   are not ignored (``git ls-files --cached --others --exclude-standard``),
   so .gitignore is respected automatically. When the root is not a git
-  repository (or git is unavailable), the script walks the tree and
-  skips generated directories and lockfiles (see SKIP_DIRS/SKIP_FILES).
+  repository (or git is unavailable), the script walks the tree.
+  In both modes, generated directories and lockfiles are skipped
+  (see SKIP_DIRS/SKIP_FILES) — a lockfile that merely names an old
+  package must not be a false positive.
 - --allow lists files by relative path that may mention an old name on
   purpose, e.g. a CHANGELOG entry. It matches the relative path only —
   never a bare basename — so allowing README.md does not exempt every
@@ -28,7 +31,9 @@ Rules:
 - The summary always reports how many files were checked, skipped
   (non-UTF-8), binary, and unreadable. A scan that skipped a file it
   could not read, or that could not read a file, is INCOMPLETE — never
-  clean.
+  clean. A scan that checked zero files is INCOMPLETE too, unless
+  --allow-empty is given explicitly (an empty project is not proof
+  that a refactor is complete).
 """
 
 import argparse
@@ -53,6 +58,16 @@ def is_test_path(path):
     return (".test." in name or ".spec." in name
             or name.startswith("test_") or name.startswith("test-")
             or "_test." in name)
+
+
+def _is_skipped(rel):
+    """Whether a relative path is a generated directory or a lockfile
+    that must never be scanned, in either file-listing mode. A lockfile
+    that merely names an old package is not evidence of a leftover."""
+    parts = rel.replace(os.sep, "/").split("/")
+    if any(p in SKIP_DIRS for p in parts[:-1]):
+        return True
+    return parts[-1] in SKIP_FILES
 
 
 def _git_files(root):
@@ -92,6 +107,9 @@ def main():
                         help="comma-separated paths that must not exist")
     parser.add_argument("--allow", default="",
                         help="comma-separated files (relative path) allowed to mention an old name")
+    parser.add_argument("--allow-empty", action="store_true",
+                        help="allow a clean result when zero files were checked "
+                             "(default: zero coverage is INCOMPLETE)")
     args = parser.parse_args()
 
     root = os.path.abspath(args.root)
@@ -124,6 +142,11 @@ def main():
     used_git = files is not None
     if files is None:
         files = _walk_files(root)
+    else:
+        # The skip rules apply in git mode too: a tracked lockfile
+        # (package-lock.json names its packages) must not be scanned,
+        # and neither must a tracked file under a generated directory.
+        files = [f for f in files if not _is_skipped(f)]
     for rel in files:
         if rel in allowed:
             continue
@@ -174,6 +197,12 @@ def main():
         # A scan that did not cover everything is INCOMPLETE, never clean.
         print(f"INCOMPLETE: no leftovers found, but the scan did not cover "
               f"everything ({summary})")
+        return 1
+
+    if checked == 0 and not args.allow_empty:
+        # Zero files checked is not proof that the refactor is complete.
+        print(f"INCOMPLETE: no files were checked ({summary}) — use "
+              f"--allow-empty to accept an empty scan explicitly")
         return 1
 
     print("clean: no leftovers (%d old identifier(s), %d removed path(s) checked; %s)"

@@ -30,7 +30,7 @@ Read the git diff. List every file changed. Flag any file outside the requested 
 
 ### 3. Did the test fail first?
 
-For any behaviour change, there must be a test that failed before the fix and passes after it. Prove it mechanically: check out (or stash) the code as it was before the fix, run the new test, and record that it fails; then restore the fix and run it again, and record that it passes. If the test cannot be run on the pre-fix code (for example it imports a new symbol), run it against a version with the fix reverted at the smallest possible scope and record that instead — and say which scope you used. If there is no such test, that is a finding. If the test was added after the code and never shown failing, treat it as unproven.
+For any behaviour change, there must be a test that failed before the fix and passes after it. Prove it mechanically: create a separate worktree with `git worktree add <dir> <base>` and run the new test there on the pre-fix code — a worktree leaves the user's working tree untouched. Never `git stash` or `git checkout` the fix away on a dirty working tree to prove the red: that can destroy uncommitted work. Record that the test fails in the worktree; then run it again in the working tree and record that it passes; then remove the worktree (`git worktree remove <dir>`). If the test cannot be run on the pre-fix code (for example it imports a new symbol), run it against a version with the fix reverted at the smallest possible scope and record that instead — and say which scope you used. If there is no such test, that is a finding. If the test was added after the code and never shown failing, treat it as unproven.
 
 ### 4. Run the checks
 
@@ -78,7 +78,7 @@ Give one verdict only:
 
 ## Evidence bundle
 
-Always return, in this form:
+Always return, in this form (the machine-readable form is `evals/evidence.schema.json`; validate a bundle with `python3 scripts/validate_evidence.py <bundle.json>` — a bundle is only valid when the validator exits 0):
 
 - Requirement and acceptance criteria (as you understood them).
 - Files changed.

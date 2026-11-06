@@ -8,6 +8,7 @@ Every idea is a file in <store>/ named YYYYMMDD-HHMMSS-slug.md:
     created: 2026-11-06T00:30:00+03:30
     source: Niloufar
     status: raw
+    raw_length: 24
     ---
 
     # Raw idea (verbatim)
@@ -17,6 +18,21 @@ Every idea is a file in <store>/ named YYYYMMDD-HHMMSS-slug.md:
     ## History
 
     - 2026-11-06T00:30:00+03:30: captured (status raw)
+
+The slug in the id is ASCII only (a-z, 0-9, hyphen). The raw text may
+be in any language — Persian, Arabic, emoji — but the slug is only an
+identifier, so it is built from the ASCII words of the text (or "idea"
+when there are none). This keeps filenames portable across filesystems
+(no NFC/NFD normalisation surprises on macOS/Windows) while the raw
+text itself is preserved verbatim.
+
+`raw_length` is the length, in characters, of the raw idea text as
+stored (line endings normalised to LF on capture). It makes the raw
+section unambiguous: an idea that itself contains a line reading
+"## History" must not be mistaken for the History section. When the
+field is present, the raw text is read by exact length; when it is
+absent (files written before this field existed), the reader falls
+back to the marker search.
 
 Statuses: raw -> calibrated -> scoped, or any -> dropped. A dropped idea
 is never deleted; dropping only changes the status and records the
@@ -32,14 +48,21 @@ did not intend):
   separator, "..", or any other character is rejected.
 - A capture creates the file exclusively (open with mode "x"), so two
   concurrent captures cannot overwrite each other.
-- A status change writes to a temporary file in the same directory and
-  atomically replaces the idea file, so an interruption cannot leave a
-  half-written file or lose History.
+- A status change takes a lock file (created with O_EXCL) for the
+  whole read-modify-write, then writes to a temporary file in the same
+  directory and atomically replaces the idea file. The lock prevents a
+  lost update when two processes change the same idea at once; the
+  atomic replace prevents a half-written file.
+- Listing and searching resolve every file and require it to stay
+  inside the store, so a symlink planted in the store cannot make the
+  tool read a file outside it. A file whose frontmatter id does not
+  match its filename is reported as malformed.
 - The raw text is stored exactly as given (only the emptiness check
-  strips whitespace). The source, the note and the reason must not
-  contain a newline — a newline in the source would inject a new
-  frontmatter field, and a newline in a note or reason would break the
-  single-line History entry.
+  strips whitespace, and CRLF line endings are normalised to LF so the
+  stored length is unambiguous). The source, the note and the reason
+  must not contain a newline — a newline in the source would inject a
+  new frontmatter field, and a newline in a note or reason would break
+  the single-line History entry.
 - A file that cannot be parsed is reported to stderr, never silently
   skipped. Line endings are normalized (CRLF is accepted).
 - Search matches only the raw idea text, not the frontmatter or the
@@ -87,7 +110,11 @@ def now_iso() -> str:
 
 
 def slugify(text: str) -> str:
-    words = re.findall(r"[A-Za-z0-9\u0600-\u06FF]+", text.lower())
+    """An ASCII-only slug for the id. The raw text may be any language,
+    but the slug is only an identifier: it is built from the ASCII
+    words of the text, so a Persian-only idea gets the slug "idea"
+    (and a timestamp suffix if two collide in the same second)."""
+    words = re.findall(r"[a-z0-9]+", text.lower())
     slug = "-".join(words[:5])[:40].strip("-")
     return slug or "idea"
 
@@ -130,12 +157,33 @@ def read_frontmatter(path: Path) -> dict:
 
 def raw_text_of(text: str) -> str:
     """The raw idea text only — between the verbatim marker and History.
-    Returns "" when the markers are absent (a malformed file)."""
+    Returns "" when the markers are absent (a malformed file).
+
+    When the frontmatter carries raw_length, exactly that many
+    characters after the marker are returned, so an idea that itself
+    contains a line reading "## History" is not truncated. Without
+    raw_length (files written before that field existed), the text runs
+    to the first History marker."""
     text = text.replace("\r\n", "\n")
     start = text.find(RAW_MARKER)
     if start < 0:
         return ""
     start += len(RAW_MARKER)
+    length = None
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end >= 0:
+            for line in text[4:end].splitlines():
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    if key.strip() == "raw_length":
+                        try:
+                            length = int(value.strip())
+                        except ValueError:
+                            length = None
+                        break
+    if length is not None and length >= 0:
+        return text[start : start + length]
     end = text.find(HISTORY_MARKER, start)
     if end < 0:
         return text[start:]
@@ -186,21 +234,30 @@ def cmd_capture(args) -> int:
     now = datetime.now().astimezone()
     stamp = now.strftime("%Y%m%d-%H%M%S")
     created = now.isoformat(timespec="seconds")
-    base = f"{stamp}-{slugify(args.text)}"
+    # The slug is ASCII only, so a Persian (or emoji-only) idea gets a
+    # valid id; the raw text itself is preserved verbatim. Line endings
+    # are normalised to LF so raw_length is unambiguous.
+    text = args.text.replace("\r\n", "\n")
+    base = f"{stamp}-{slugify(text)}"
     # Store the idea exactly as given — only the emptiness check strips.
     n = 1
     while True:
         idea_id = base if n == 1 else f"{base}-{n}"
-        path = idea_path(store, idea_id)
+        try:
+            path = idea_path(store, idea_id)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
         body = (
             f"---\n"
             f"id: {idea_id}\n"
             f"created: {created}\n"
             f"source: {args.source}\n"
             f"status: raw\n"
+            f"raw_length: {len(text)}\n"
             f"---\n\n"
             f"# Raw idea (verbatim)\n\n"
-            f"{args.text}\n\n"
+            f"{text}\n\n"
             f"## History\n\n"
             f"- {created}: captured (status raw)\n"
         )
@@ -218,16 +275,34 @@ def cmd_capture(args) -> int:
 
 def _all_ideas(store: Path) -> tuple[list[tuple[str, dict, Path]], list[str]]:
     """All parseable ideas, plus a list of malformed files (reported, not
-    silently skipped)."""
+    silently skipped). A file is only read when its resolved path stays
+    inside the store, so a symlink planted in the store cannot make the
+    tool read a file outside it; a file whose frontmatter id does not
+    match its filename is malformed."""
     if not store.is_dir():
         return [], []
+    store_resolved = store.resolve()
     ideas: list[tuple[str, dict, Path]] = []
     malformed: list[str] = []
     for path in sorted(store.glob("*.md")):
         try:
+            resolved = path.resolve()
+        except OSError as e:
+            malformed.append(f"{path.name}: cannot resolve ({e})")
+            continue
+        if not resolved.is_relative_to(store_resolved):
+            malformed.append(f"{path.name}: escapes the store (symlink)")
+            continue
+        try:
             fields = read_frontmatter(path)
         except (ValueError, OSError) as e:
             malformed.append(f"{path.name}: {e}")
+            continue
+        if fields.get("id", path.stem) != path.stem:
+            malformed.append(
+                f"{path.name}: frontmatter id {fields.get('id')!r} "
+                f"does not match the filename"
+            )
             continue
         ideas.append((fields.get("id", path.stem), fields, path))
     return ideas, malformed
@@ -281,6 +356,38 @@ def cmd_show(args) -> int:
     return 0
 
 
+def _acquire_lock(path: Path, timeout_s: float = 2.0):
+    """A lock file for one idea, created with O_EXCL so two processes
+    cannot hold it at once. Returns (fd, lock_path), or (None, None)
+    when the lock is already held after the timeout. The caller must
+    release it (close + unlink) in a finally block."""
+    import time
+
+    lock_path = path.parent / f".{path.name}.lock"
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            return fd, lock_path
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                return None, None
+            time.sleep(0.1)
+        except OSError:
+            return None, None
+
+
+def _release_lock(fd, lock_path) -> None:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.unlink(lock_path)
+    except OSError:
+        pass
+
+
 def _set_status(store: Path, idea_id: str, new_status: str, note: str) -> int:
     try:
         path = idea_path(store, idea_id)
@@ -290,6 +397,24 @@ def _set_status(store: Path, idea_id: str, new_status: str, note: str) -> int:
     if not path.is_file():
         print(f"error: no idea with id {idea_id}", file=sys.stderr)
         return 1
+    # Lock the whole read-modify-write: without it, two concurrent
+    # status changes read the same version and the second one's write
+    # silently drops the first one's History entry (a lost update).
+    # The atomic replace alone only prevents a half-written file.
+    fd, lock_path = _acquire_lock(path)
+    if fd is None:
+        print(
+            f"error: {idea_id} is being changed by another process",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        return _set_status_locked(path, idea_id, new_status, note)
+    finally:
+        _release_lock(fd, lock_path)
+
+
+def _set_status_locked(path: Path, idea_id: str, new_status: str, note: str) -> int:
     try:
         fields = read_frontmatter(path)
     except (ValueError, OSError) as e:

@@ -1,0 +1,404 @@
+{
+  "version": 1,
+  "generated_by": "scripts/validate_repo.py checks this file against the repo; regenerate by hand when a skill is added, removed, or re-staged.",
+  "skills": {
+    "accessibility": {
+      "name": "accessibility",
+      "description": "Audit a web UI for accessibility with the ultra11y engine (RGAA 4.1.2 on a WCAG 2.2 AA core, 102 static checks), fix wha",
+      "license": "MIT",
+      "stages": [
+        "20-39"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": "b245094b7528f8624cfbf84d00ee05422aeac24e",
+      "status": "built"
+    },
+    "api-and-interface-design": {
+      "name": "api-and-interface-design",
+      "description": "Guides stable API and interface design. Use when designing APIs, module boundaries, or any public interface. Use when cr",
+      "license": "MIT",
+      "stages": [
+        "20-39"
+      ],
+      "source": "https://github.com/addyosmani/agent-skills",
+      "upstream_commit": "301b02b12bff98e4688e6984af6556802322bbde",
+      "status": "built"
+    },
+    "architecture": {
+      "name": "architecture",
+      "description": "Define a project's architecture before any code is written — stack choice as a decision record, file tree and invariants",
+      "license": "MIT",
+      "stages": [
+        "10-19"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "ask-questions-if-underspecified": {
+      "name": "ask-questions-if-underspecified",
+      "description": "Clarify requirements before implementing. Use when serious doubts arise. Only invoke via the orcinus router.",
+      "license": "MIT",
+      "stages": [
+        "80-100"
+      ],
+      "source": "https://github.com/sickn33/antigravity-awesome-skills",
+      "upstream_commit": "739c841480587361c3cb2047f5b34cdca69a0623",
+      "status": "built"
+    },
+    "breaking-change": {
+      "name": "breaking-change",
+      "description": "Detect breaking changes between two OpenAPI specs before shipping, so a change that breaks consumers never ships under t",
+      "license": "MIT",
+      "stages": [
+        "20-39"
+      ],
+      "source": "oasdiff/oasdiff",
+      "upstream_commit": null,
+      "status": "built",
+      "tool_version": "oasdiff v1.35.0"
+    },
+    "build": {
+      "name": "build",
+      "description": "Build one slice at a time, test first, with the four checks and independent verification before commit. Use when a scaff",
+      "license": "MIT",
+      "stages": [
+        "20-39"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "codebase-knowledge-builder": {
+      "name": "codebase-knowledge-builder",
+      "description": "Study unfamiliar codebases and produce evidence-backed knowledge artifacts. Use for repository orientation, architecture",
+      "license": "MIT",
+      "stages": [
+        "80-100"
+      ],
+      "source": "OthmanAdi/codebase-knowledge-builder,",
+      "upstream_commit": "b01f40c5aef4eb8f6c52c664fe19b33e661c7abd",
+      "status": "built"
+    },
+    "database-designer": {
+      "name": "database-designer",
+      "description": "\"Design a database schema: tables, relationships, indexes, normalization, SQL vs NoSQL, migration plans. Use whenever th",
+      "license": "MIT",
+      "stages": [
+        "20-39"
+      ],
+      "source": "https://github.com/alirezarezvani/claude-skills",
+      "upstream_commit": "8f082544116fc0d014188e521ca40304cdfc86b0",
+      "status": "built"
+    },
+    "diagnosing-bugs": {
+      "name": "diagnosing-bugs",
+      "description": "Diagnosis loop for hard bugs and performance regressions. Use when the user says \"diagnose\"/\"debug this\", or reports som",
+      "license": "MIT",
+      "stages": [
+        "50-79"
+      ],
+      "source": "https://github.com/mattpocock/skills",
+      "upstream_commit": "4ae2317ddb22b046e26455e4f9c9b3aaaf62212d",
+      "status": "built"
+    },
+    "finalize": {
+      "name": "finalize",
+      "description": "Prepare a release, cut it, and hand it over — docs, release notes, CI gates, rollback plan, and monitoring — without pub",
+      "license": "MIT",
+      "stages": [
+        "80-100"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "frontend-architecture": {
+      "name": "frontend-architecture",
+      "description": "A portable, framework-agnostic architecture style for any React or React Native frontend. Organizes apps into feature mo",
+      "license": "MIT",
+      "stages": [
+        "20-39"
+      ],
+      "source": "https://github.com/stareezy-1/frontend-architecture-skill",
+      "upstream_commit": "d7f0c53dcd0c2c43f455bd5ce88aa6797c585fe0",
+      "status": "built"
+    },
+    "frontend-data-contracts": {
+      "name": "frontend-data-contracts",
+      "description": "A portable, framework-agnostic discipline for type safety at the network edge of any React or React Native app. Establis",
+      "license": "MIT",
+      "stages": [
+        "20-39"
+      ],
+      "source": "https://github.com/stareezy-1/frontend-architecture-skill",
+      "upstream_commit": "d7f0c53dcd0c2c43f455bd5ce88aa6797c585fe0",
+      "status": "built"
+    },
+    "frontend-optimistic-mutations": {
+      "name": "frontend-optimistic-mutations",
+      "description": "A portable, framework-agnostic discipline for the write path of any React or React Native app using a query/cache layer.",
+      "license": "MIT",
+      "stages": [
+        "20-39"
+      ],
+      "source": "https://github.com/stareezy-1/frontend-architecture-skill",
+      "upstream_commit": "d7f0c53dcd0c2c43f455bd5ce88aa6797c585fe0",
+      "status": "built"
+    },
+    "handoff": {
+      "name": "handoff",
+      "description": "Write a compact handoff file so a fresh session resumes the task — state, decisions, next steps, and pointers, never fil",
+      "license": "MIT",
+      "stages": [
+        "80-100"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": "01b57fb09af3f86450ea5e85a654c0b1e271c3a9",
+      "status": "built"
+    },
+    "i18n": {
+      "name": "i18n",
+      "description": "Internationalizes a project across language tags and negotiation, dates/times/time zones/calendars, numbers and currency",
+      "license": "MIT",
+      "stages": [
+        "20-39"
+      ],
+      "source": "https://github.com/Marvellbrazil/my-agentic-skills",
+      "upstream_commit": "42203fde5eb692ba254e058168ee1af75855fcb4",
+      "status": "built"
+    },
+    "idea-calibrate": {
+      "name": "idea-calibrate",
+      "description": "Turn a raw idea into a calibrated, testable v1 plan before any code. Use when you have only an idea, a rough brief, or a",
+      "license": "MIT",
+      "stages": [
+        "0-9"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "idea-capture": {
+      "name": "idea-capture",
+      "description": "Capture a raw idea the moment it arrives and keep it in a durable store, so it survives between sessions. Use whenever a",
+      "license": "MIT",
+      "stages": [
+        "0-9"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "incomplete-refactor": {
+      "name": "incomplete-refactor",
+      "description": "Detect an incomplete refactor — old names still referenced, removed files still present, stale tests still calling the o",
+      "license": "MIT",
+      "stages": [
+        "50-79"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "independent-review": {
+      "name": "independent-review",
+      "description": "Review a change independently before it merges, with six focused reviewers reading the diff — not the author's summary. ",
+      "license": "MIT",
+      "stages": [
+        "40-59"
+      ],
+      "source": "anthropics/claude-plugins-official,",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "issue-triage": {
+      "name": "issue-triage",
+      "description": "\"3-phase issue backlog management with audit, deep analysis, and validated triage actions. Use when triaging GitHub issu",
+      "license": "MIT",
+      "stages": [
+        "80-100"
+      ],
+      "source": "florianbruniaux/claude-code-plugins,",
+      "upstream_commit": "f207f2fb8dd284d0b9671ddeb685e026ed158621",
+      "status": "built"
+    },
+    "mcp-builder": {
+      "name": "mcp-builder",
+      "description": "Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external services",
+      "license": "Apache-2.0",
+      "stages": [
+        "20-39"
+      ],
+      "source": "anthropics/skills,",
+      "upstream_commit": "ca45fc496a3436251f191354091d557da31c15b5",
+      "status": "built"
+    },
+    "monitoring": {
+      "name": "monitoring",
+      "description": "\"Use when setting up uptime and health monitoring, alerts, or on-call basics for a service already in production, so you",
+      "license": "MIT",
+      "stages": [
+        "50-79"
+      ],
+      "source": "ericrisco/rsc-harness,",
+      "upstream_commit": "111532ccebb759dd89c76f87cf80252e4d23872e",
+      "status": "built"
+    },
+    "monitoring-observability": {
+      "name": "monitoring-observability",
+      "description": "Monitoring and observability patterns for Prometheus metrics, Grafana dashboards, Langfuse v4 LLM tracing (as_type, scor",
+      "license": "MIT",
+      "stages": [
+        "80-100"
+      ],
+      "source": "https://github.com/yonatangross/orchestkit",
+      "upstream_commit": "016aefaf62a31bb27e58106c22a13d3e4140ad62",
+      "status": "built"
+    },
+    "mutation-testing": {
+      "name": "mutation-testing",
+      "description": "Check whether the tests actually catch bugs by mutating the code and seeing if the tests fail. Use after a slice passes ",
+      "license": "MIT",
+      "stages": [
+        "40-59"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "mutation-testing-python": {
+      "name": "mutation-testing-python",
+      "description": "Check whether Python tests actually catch bugs by mutating the code and seeing if the tests fail. Use after a Python sli",
+      "license": "MIT",
+      "stages": [
+        "40-59"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "orcinus": {
+      "name": "orcinus",
+      "description": "One integrated companion for building software with a coding agent, from raw idea to publish. Use when starting, continu",
+      "license": "MIT",
+      "stages": [
+        "0-100"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "orcinus-verify": {
+      "name": "orcinus-verify",
+      "description": "Independently verify a code change before any claim of done. Use after any implementation, bugfix, or refactor, before m",
+      "license": "MIT",
+      "stages": [
+        "40-59"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "performance-optimization": {
+      "name": "performance-optimization",
+      "description": "Optimizes application performance across frontend, backend, queries, and databases. Use when performance requirements ex",
+      "license": "MIT",
+      "stages": [
+        "50-79"
+      ],
+      "source": "https://github.com/addyosmani/agent-skills",
+      "upstream_commit": "301b02b12bff98e4688e6984af6556802322bbde",
+      "status": "built"
+    },
+    "refactor": {
+      "name": "refactor",
+      "description": ">",
+      "license": "MIT",
+      "stages": [
+        "50-79"
+      ],
+      "source": "MuhiminOsim/code-refactoring-skill,",
+      "upstream_commit": "90fa64058b0f74f7bcf0990856bc5423f10c7455",
+      "status": "built"
+    },
+    "registry-publish": {
+      "name": "registry-publish",
+      "description": "Publish a package to a registry safely — prepare, check, dry-run, confirm, publish, then verify the published artifact a",
+      "license": "MIT",
+      "stages": [
+        "80-100"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "scaffold": {
+      "name": "scaffold",
+      "description": "Set up a new project so build, lint, typecheck, and test all run from day one. Use when a calibrated idea is confirmed a",
+      "license": "MIT",
+      "stages": [
+        "10-19"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "security-review": {
+      "name": "security-review",
+      "description": "Review a change for secrets, injection, supply-chain, and unsafe patterns before merge. Use after any implementation, be",
+      "license": "MIT",
+      "stages": [
+        "50-79"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "skill-creator": {
+      "name": "skill-creator",
+      "description": "Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a sk",
+      "license": "Apache-2.0",
+      "stages": [
+        "10-19"
+      ],
+      "source": "https://github.com/anthropics/skills",
+      "upstream_commit": "ca45fc496a3436251f191354091d557da31c15b5",
+      "status": "built"
+    },
+    "visual-regression": {
+      "name": "visual-regression",
+      "description": "Catch unintended visual changes by comparing screenshots against a baseline. Use after any change to a web UI, before ca",
+      "license": "MIT",
+      "stages": [
+        "40-59",
+        "80-100"
+      ],
+      "source": "from-scratch",
+      "upstream_commit": null,
+      "status": "built"
+    },
+    "waza": {
+      "name": "waza",
+      "description": "\"**WORKFLOW SKILL** - Evaluate AI agent skills using structured benchmarks with YAML specs, fixture isolation, and plugg",
+      "license": "MIT",
+      "stages": [
+        "40-59"
+      ],
+      "source": "microsoft/waza,",
+      "upstream_commit": "f5789f75fa00924411734d07fd4012ba80e2154c",
+      "status": "built"
+    },
+    "webapp-testing": {
+      "name": "webapp-testing",
+      "description": "Toolkit for interacting with and testing local web applications using Playwright. Supports verifying frontend functional",
+      "license": "Apache-2.0",
+      "stages": [
+        "40-59"
+      ],
+      "source": "https://github.com/anthropics/skills",
+      "upstream_commit": "ca45fc496a3436251f191354091d557da31c15b5",
+      "status": "built"
+    }
+  }
+}

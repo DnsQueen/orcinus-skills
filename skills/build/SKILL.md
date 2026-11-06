@@ -31,7 +31,7 @@ Write one test at the seam, with expected values as literals from the spec. Run 
 
 ### 3. Green: implement the minimum
 
-Write the smallest code that makes the test pass. No speculative features, no extra files, no "for later" code. Follow ponytail: the smallest complete change. If the code needs a design decision the brief does not answer, ask the user instead of guessing.
+Write the smallest code that makes the test pass. No speculative features, no extra files, no "for later" code. The smallest complete change — the ponytail rule, applied from build's own loop (ponytail itself is external-optional, not in this repo; see the router's rules.md). If the code needs a design decision the brief does not answer, ask the user instead of guessing.
 
 ### 4. Run the four checks
 
@@ -47,6 +47,8 @@ All four must pass. If any fails, fix only the cause and re-run all four from th
 ### 5. Check the tests themselves (mutation)
 
 After the slice passes its tests, check the tests themselves with mutation-testing before calling it done. Run it on the slice's changed files (or the whole suite for a small project). If a mutant survives, the test suite has a gap — strengthen the test (never weaken it) and re-run. A slice is not done while its tests can be fooled.
+
+Mutation tooling ships only for JavaScript/TypeScript (mutation-testing, Stryker) and Python (mutation-testing-python, mutmut). For any other language, the slice is INCOMPLETE with a recorded reason — name the language, state that no mutation tool is bundled for it, and record what was checked instead (for example, the new tests were each shown to fail when their assertion is inverted, or when the code they cover is reverted). Do not claim the tests are strong when no mutation run proved it. If the project is small or the slice is trivial, run mutation on the changed files only (Lite mode) instead of the whole suite — Stryker is slow, and a full run on every slice is not the point.
 
 ### 6. Verify independently
 
@@ -66,4 +68,4 @@ Not a plan for the whole project. Not a place to add features the brief did not 
 
 ## Sources
 
-Method, in our own words, inspired by: tdd (mattpocock/skills, MIT, installed) for the red-green loop, seams, and anti-patterns; ponytail (installed, coding default) for the smallest complete change; planning-and-task-breakdown (addyosmani/agent-skills, MIT) for cutting slices; clean-code (wondelai/skills, MIT) for readable code. No text was copied from those projects.
+Method, in our own words, inspired by: tdd (mattpocock/skills, MIT, external-optional — not in this repo; build's own test-first loop is the fallback, see the router's rules.md) for the red-green loop, seams, and anti-patterns; ponytail (external-optional, not in this repo — the "smallest complete change" rule is applied from build's own loop) for the smallest complete change; planning-and-task-breakdown (addyosmani/agent-skills, MIT) for cutting slices; clean-code (wondelai/skills, MIT) for readable code. No text was copied from those projects.

@@ -34,3 +34,4 @@ graders:
       assertions:
         - "\"FAIL\" in output"
         - "\"summary.ts\" in output"
+        - "\"Math.floor\" in output or \"floor\" in output.lower()"

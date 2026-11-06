@@ -13,12 +13,19 @@ Checks:
   3. The frontmatter license agrees with ATTRIBUTION.md and with
      LICENSE.txt (when they exist).
   4. THIRD_PARTY_NOTICES.md lists every skill that bundles upstream
-     content, with a license that agrees with the frontmatter.
+     content, with a license that agrees with the frontmatter. The
+     table's first column is parsed exactly — a substring match would
+     let a missing row hide behind a longer name (monitoring inside
+     monitoring-observability).
   5. The glossary bundled in skills/orcinus/references/ is identical
      to the canonical GLOSSARY.md at the repo root.
-  6. The stage ranges in the router agree with docs/MAP.md.
+  6. The stage ranges in the router agree with docs/MAP.md, including
+     Idea and Finalize, and the router's linear stages do not overlap.
   7. .claude-plugin/plugin.json and marketplace.json are valid JSON
-     with the required fields, and the plugin's skills/ exists.
+     with the required fields, and the plugin's skills/ exists. The
+     skill counts stated in plugin.json ("Router + N focused
+     sub-skills") and README.md ("all N skills") must match the
+     actual number of skill folders.
   8. Relative paths mentioned in README.md, SCOPE.md and docs/MAP.md
      (skills/..., docs/..., evals/..., examples/...) exist.
 
@@ -28,7 +35,6 @@ otherwise. Dates in this repo are Asia/Tehran local time unless a
 file says UTC.
 """
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -206,18 +212,52 @@ def check_attribution_pairs():
                      f"not explain the split")
 
 
+def _resolve_inside(relative):
+    """Resolve a repo-relative path and require it to stay inside ROOT.
+    Returns the resolved Path, or None when it escapes. (str.lstrip
+    is not a prefix strip: "../outside".lstrip("./") is "outside", so
+    a path escaping the repo would have passed as valid.)"""
+    target = (ROOT / relative).resolve()
+    return target if target.is_relative_to(ROOT) else None
+
+
+def _notices_table_names(text):
+    """The skill names in the first column of the THIRD_PARTY_NOTICES
+    table, as an exact set. A substring check would let a missing row
+    hide behind a longer name (monitoring inside
+    monitoring-observability), so the table is parsed, not searched."""
+    names = set()
+    in_table = False
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if not cells:
+            continue
+        if cells[0].lower() == "skill":
+            in_table = True
+            continue
+        if in_table and set(cells[0]) <= set("-: "):
+            continue  # the |---|---| separator row
+        if in_table and cells[0]:
+            names.add(cells[0])
+    return names
+
+
 def check_third_party_notices():
     manifest = ROOT / "THIRD_PARTY_NOTICES.md"
     if not manifest.is_file():
         fail("THIRD_PARTY_NOTICES.md is missing")
         return
     text = manifest.read_text(encoding="utf-8")
+    listed = _notices_table_names(text)
     # Every skill that has an ATTRIBUTION.md must be listed.
     for skill_dir in sorted((ROOT / "skills").iterdir()):
         if not skill_dir.is_dir():
             continue
         if (skill_dir / "ATTRIBUTION.md").is_file():
-            if skill_dir.name not in text:
+            if skill_dir.name not in listed:
                 fail(f"THIRD_PARTY_NOTICES.md does not list "
                      f"{skill_dir.name} (it has an ATTRIBUTION.md)")
     # Every skill listed must exist and its license must agree with the
@@ -270,9 +310,10 @@ def check_glossary_copy():
 
 
 def _stage_ranges(text):
-    """Extract {stage: (low, high)} from 'Name (low–high)' mentions."""
+    """Extract {stage: (low, high)} from 'Name (low–high)' mentions.
+    Stage names may contain a hyphen ("Finalize / Post-publish")."""
     out = {}
-    for m in re.finditer(r"([A-Za-z /]+?)\s*\((\d+)\s*[–-]\s*(\d+)[^)]*\)", text):
+    for m in re.finditer(r"([A-Za-z /-]+?)\s*\((\d+)\s*[–-]\s*(\d+)[^)]*\)", text):
         out[m.group(1).strip()] = (int(m.group(2)), int(m.group(3)))
     return out
 
@@ -288,13 +329,19 @@ def check_stage_ranges():
     # Canonical mapping: router stage name -> (MAP section name, how they
     # must relate). A top-level stage must equal the MAP section; a
     # sub-stage (Scaffold, Build) must lie inside the MAP section.
+    # Security and Debugging are cross-cutting: they share the 50–79
+    # band by design (they can apply at any linear stage), so they are
+    # checked for equality with the MAP but are not part of the
+    # non-overlap check below.
     mapping = {
+        "Idea": ("Idea", "equal"),
         "Architecture": ("Architecture / Setup", "equal"),
         "Scaffold": ("Coding", "inside"),
         "Build": ("Coding", "inside"),
         "Verify": ("Testing / Verification", "equal"),
         "Security": ("Security / Health", "equal"),
         "Debugging": ("Debugging / Refactor", "equal"),
+        "Finalize": ("Finalize / Post-publish", "equal"),
     }
     for router_name, (map_name, relation) in mapping.items():
         r = router_ranges.get(router_name)
@@ -310,6 +357,18 @@ def check_stage_ranges():
             fail(f"stage range mismatch: router {router_name} is "
                  f"{r[0]}–{r[1]}, which is not inside MAP {map_name} "
                  f"{m[0]}–{m[1]}")
+    # The linear stages must not overlap: a stage detected from
+    # evidence must name one stage, not two.
+    linear = ["Idea", "Architecture", "Scaffold", "Build", "Verify", "Finalize"]
+    prev = None
+    for name in linear:
+        r = router_ranges.get(name)
+        if r is None:
+            continue
+        if prev is not None and r[0] <= prev[1]:
+            fail(f"linear stage ranges overlap: {name} starts at "
+                 f"{r[0]} but the previous stage ends at {prev[1]}")
+        prev = r
 
 
 def check_plugin_manifests():
@@ -337,8 +396,10 @@ def check_plugin_manifests():
         except json.JSONDecodeError:
             data = {}
         for skill_path in data.get("skills", []):
-            if not (ROOT / skill_path.lstrip("./")).is_dir():
-                fail(f"plugin.json lists skills path {skill_path!r}, which does not exist")
+            target = _resolve_inside(skill_path)
+            if target is None or not target.is_dir():
+                fail(f"plugin.json lists skills path {skill_path!r}, which does not exist"
+                     + (" (it escapes the repo)" if target is None else ""))
     if marketplace.is_file():
         try:
             data = json.loads(marketplace.read_text(encoding="utf-8"))
@@ -346,9 +407,113 @@ def check_plugin_manifests():
             data = {}
         for entry in data.get("plugins", []):
             source = entry.get("source", "")
-            if source.startswith("./") and not (ROOT / source.lstrip("./")).is_dir():
-                fail(f"marketplace.json plugin {entry.get('name')!r} has "
-                     f"source {source!r}, which does not exist")
+            if source.startswith("./"):
+                target = _resolve_inside(source)
+                if target is None or not target.is_dir():
+                    fail(f"marketplace.json plugin {entry.get('name')!r} has "
+                         f"source {source!r}, which does not exist"
+                         + (" (it escapes the repo)" if target is None else ""))
+
+
+def check_skill_counts():
+    """The skill counts stated in plugin.json and README.md must match
+    the actual number of skill folders. A stale number is a real
+    inconsistency (plugin.json once said "Router + 34" for 36 folders)."""
+    skills = [d for d in sorted((ROOT / "skills").iterdir()) if d.is_dir()]
+    count = len(skills)
+    plugin = ROOT / ".claude-plugin" / "plugin.json"
+    if plugin.is_file():
+        try:
+            data = json.loads(plugin.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            data = {}
+        m = re.search(r"Router \+ (\d+) focused sub-skills",
+                      data.get("description", ""))
+        if m is None:
+            fail("plugin.json description does not state the sub-skill "
+                 "count as 'Router + N focused sub-skills'")
+        elif int(m.group(1)) != count - 1:
+            fail(f"plugin.json says 'Router + {m.group(1)} focused "
+                 f"sub-skills' but there are {count} skill folders "
+                 f"(router + {count - 1})")
+    readme = ROOT / "README.md"
+    if readme.is_file():
+        text = readme.read_text(encoding="utf-8")
+        m = re.search(r"all (\d+) skills", text)
+        if m is None:
+            fail("README.md does not state the skill count as 'all N skills'")
+        elif int(m.group(1)) != count:
+            fail(f"README.md says 'all {m.group(1)} skills' but there "
+                 f"are {count} skill folders")
+
+
+def check_manifest():
+    """skills/manifest.json is the single source of truth for the skill
+    inventory: name, licence, stages, source, and status per skill.
+    It must agree with the actual skill folders and with each skill's
+    frontmatter, so a skill added, removed, or re-licensed without
+    updating the manifest fails the build."""
+    path = ROOT / "skills" / "manifest.json"
+    if not path.is_file():
+        fail("skills/manifest.json is missing")
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        fail(f"skills/manifest.json is not valid JSON: {e}")
+        return
+    entries = data.get("skills")
+    if not isinstance(entries, dict):
+        fail("skills/manifest.json has no 'skills' object")
+        return
+    dirs = {d.name for d in (ROOT / "skills").iterdir() if d.is_dir()}
+    for name in sorted(dirs - set(entries)):
+        fail(f"skill folder skills/{name} is not in skills/manifest.json")
+    for name in sorted(set(entries) - dirs):
+        fail(f"skills/manifest.json lists {name}, but there is no "
+             f"skills/{name} folder")
+    valid_stages = {"0-9", "10-19", "20-39", "40-59", "50-79",
+                    "80-100", "0-100"}
+    for name in sorted(set(entries) & dirs):
+        entry = entries[name]
+        if not isinstance(entry, dict):
+            fail(f"skills/manifest.json entry for {name} is not an object")
+            continue
+        fm, _err = parse_frontmatter(ROOT / "skills" / name / "SKILL.md")
+        lic = fm.get("license") if fm else None
+        if entry.get("license") != lic:
+            fail(f"skills/manifest.json says {name} is licensed "
+                 f"{entry.get('license')!r}, but its SKILL.md frontmatter "
+                 f"says {lic!r}")
+        stages = entry.get("stages")
+        if not isinstance(stages, list) or not stages:
+            fail(f"skills/manifest.json entry for {name} has no stages")
+        else:
+            for s in stages:
+                if s not in valid_stages:
+                    fail(f"skills/manifest.json entry for {name} has "
+                         f"unknown stage {s!r}")
+        if entry.get("status") not in ("built", "external-optional", "todo"):
+            fail(f"skills/manifest.json entry for {name} has unknown "
+                 f"status {entry.get('status')!r}")
+        if not entry.get("source"):
+            fail(f"skills/manifest.json entry for {name} has no source")
+
+
+def check_json_files():
+    """Every JSON file the repo owns must parse. A broken manifest or
+    evidence schema is a silent gate failure: the validator would
+    crash (or skip) instead of checking."""
+    for rel in ("skills/manifest.json", "evals/evidence.schema.json",
+                ".claude-plugin/plugin.json",
+                ".claude-plugin/marketplace.json"):
+        path = ROOT / rel
+        if not path.is_file():
+            continue
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as e:
+            fail(f"{rel} is not valid JSON: {e}")
 
 
 def check_relative_paths():
@@ -371,6 +536,9 @@ def main():
     check_glossary_copy()
     check_stage_ranges()
     check_plugin_manifests()
+    check_skill_counts()
+    check_manifest()
+    check_json_files()
     check_relative_paths()
     for w in warnings:
         print(f"warning: {w}")

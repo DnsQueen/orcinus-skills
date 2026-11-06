@@ -16,7 +16,7 @@
   "skills/database-designer/expected_outputs/migration_sample.txt": "bb34e3bf0728810756a184c0f1bd4e1ad61ee5adda2efcbce668f6d1dcadeee9",
   "skills/database-designer/expected_outputs/schema_analysis_sample.txt": "97335e832292f3687d9e0f576eee50e8b55dc184376cd457ae56578c4802c987",
   "skills/database-designer/index_optimizer.py": "0c73e6724d02eae6d48a9dd2a626e06e7d551a3fcae3ab5f13a044384b2db485",
-  "skills/database-designer/migration_generator.py": "33e557422720265a1d8071f11cc264de471b9b3c1128753cac86700e0d7e8303",
+  "skills/database-designer/migration_generator.py": "4640d939d6ca82b235b56e811c5363103ddacbec5ecaf7fd83c2fe13d685a426",
   "skills/database-designer/references/database-design-reference.md": "b189de7137b7a1acd9408f3324ca5fa0e1a1bbdc53bf82f2eeda0911239f0370",
   "skills/database-designer/references/database_selection_decision_tree.md": "18d1a914c6097e6e7e8fd38da4e5847c24191e24063efb3d39f83526079f20ee",
   "skills/database-designer/references/index_strategy_patterns.md": "8d85e83b63c7977ac1cbfd70b2d42ac6fbdbfbeb9219d1dee98f0fafdafaabe8",
