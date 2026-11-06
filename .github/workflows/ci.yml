@@ -1,0 +1,167 @@
+name: CI
+
+# ORCINUS practices verification-first on itself: every change must
+# pass the repo validator, the drift check, the linter, the script
+# tests, and the waza harness-smoke suite. The waza suite uses the
+# mock executor, so it proves the harness (schema, tasks, graders,
+# results JSON), never agent quality. The agent-behavior suite
+# (evals/waza-orcinus-verify-agent/) needs a real agent executor and
+# is not run in CI.
+#
+# Actions are pinned by full commit SHA, not by tag, so a compromised
+# or moved tag cannot change what CI runs. To update an action, fetch
+# the new SHA from the GitHub API
+# (GET /repos/<owner>/<repo>/git/ref/tags/<tag>) and replace the SHA
+# below, keeping the "# <action>@<tag>" comment in sync.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install pytest and ruff (pinned)
+        run: pip install pytest==8.4.2 ruff==0.17.4 pyyaml==6.0.1 mypy==1.18.2
+      - name: Validate the repo (frontmatter, licences, glossary, stage ranges, manifests, links, skill counts)
+        run: python3 scripts/validate_repo.py
+      - name: Check vendored files have not drifted
+        run: python3 scripts/check_drift.py
+      - name: Lint the ORCINUS-owned Python (ruff, see pyproject.toml)
+        run: python3 -m ruff check
+      - name: Check formatting of the ORCINUS-owned Python and Markdown code blocks
+        run: python3 -m ruff format --check
+      - name: Typecheck the ORCINUS-owned Python (mypy, see pyproject.toml for scope)
+        run: python3 -m mypy scripts/ skills/architecture/scripts/ skills/database-designer/migration_generator.py skills/database-designer/test_migration_generator.py skills/database-designer/test_migration_integration.py skills/database-designer/test_postgres_migration.py skills/idea-capture/scripts/ skills/incomplete-refactor/scripts/ skills/orcinus-verify/scripts/ skills/webapp-testing/scripts/test_with_server.py evals/waza-orcinus-verify-agent/test_graders.py
+      - name: Run the script tests
+        run: python3 -m pytest -q
+
+  waza:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Install waza (v0.40.0, checksum verified)
+        run: |
+          curl -fsSL -o /tmp/waza-linux-amd64 https://github.com/microsoft/waza/releases/download/v0.40.0/waza-linux-amd64
+          curl -fsSL -o /tmp/checksums.txt https://github.com/microsoft/waza/releases/download/v0.40.0/checksums.txt
+          cd /tmp && grep 'waza-linux-amd64' checksums.txt | sha256sum -c -
+          chmod +x /tmp/waza-linux-amd64
+          /tmp/waza-linux-amd64 --help | head -n 3
+      - name: Run the waza harness-smoke suite (mock executor)
+        run: /tmp/waza-linux-amd64 run evals/waza-orcinus-verify/eval.yaml --output /tmp/waza-results.json
+      - name: Upload the waza results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+        with:
+          name: waza-results
+          path: /tmp/waza-results.json
+          if-no-files-found: error
+
+  clean-install:
+    # Proves the repo works from a clean copy, not just in the author's
+    # working tree: copies it to a fresh temp dir and runs the gates
+    # there. A real `claude plugin install` still needs a machine with
+    # Claude Code and is not run here (see SCOPE.md).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest and ruff (pinned)
+        run: pip install pytest==8.4.2 ruff==0.17.4 pyyaml==6.0.1
+      - name: Clean-environment install check
+        run: python3 scripts/clean_copy_check.py
+
+  version-bump:
+    # A push that ships plugin content (skills/, agents/, commands/)
+    # must bump the version and the changelog in the same push — and
+    # a version bump without a changelog entry fails even when
+    # nothing shipped changed (see scripts/check_version_bump.py).
+    # Runs on pushes AND pull requests, so a PR gets the feedback
+    # before it merges instead of after. The base is the PR's base
+    # SHA on pull_request events and the push's before SHA on push
+    # events; it is not in a depth-1 checkout, so it is fetched
+    # first. The script fails loudly (exit 2) if the base cannot be
+    # resolved, rather than silently passing.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Fetch the base commit
+        run: git fetch --depth=1 origin ${{ github.event.pull_request.base.sha || github.event.before }} || true
+      - name: Check the version was bumped with skill changes
+        run: python3 scripts/check_version_bump.py --base ${{ github.event.pull_request.base.sha || github.event.before }} --head ${{ github.sha }}
+
+  plugin-validate:
+    # The official Claude Code plugin validator, on a fresh checkout.
+    # It needs no login: it only checks that the files are
+    # well-formed. Pinned to the CLI version verified locally
+    # (2.1.318, 2026-11-06). --strict treats warnings as errors;
+    # --profile directory additionally checks the plugin-directory
+    # submission rules. A green run proves well-formedness only —
+    # the repo's own validator checks the deeper rules (frontmatter
+    # spec, counts, references, licences).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install Claude Code CLI (pinned)
+        run: npm install -g @anthropic-ai/claude-code@2.1.318
+      - name: Validate the plugin (strict)
+        run: claude plugin validate . --strict
+      - name: Validate against the plugin-directory rules (strict)
+        run: claude plugin validate . --profile directory --strict
+
+  postgres-migration:
+    # Proves the migration generator's SQL on a real PostgreSQL.
+    # SQLite cannot see the FK-order failure (it lets CREATE TABLE
+    # name a FK to a table that does not exist yet, and FK
+    # enforcement is DML-only with PRAGMA foreign_keys off), so
+    # this job is the only proof the forward SQL runs and the FKs
+    # are enforced. The test file skips without DATABASE_URL, so
+    # the local suite never needs a database.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: orcinus
+          POSTGRES_PASSWORD: orcinus
+          POSTGRES_DB: orcinus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pytest and psycopg (pinned)
+        run: pip install pytest==8.4.2 "psycopg[binary]==3.3.8"
+      - name: Run the PostgreSQL migration tests
+        env:
+          DATABASE_URL: postgresql://orcinus:orcinus@localhost:5432/orcinus_test
+        run: python3 -m pytest skills/database-designer/test_postgres_migration.py -q
