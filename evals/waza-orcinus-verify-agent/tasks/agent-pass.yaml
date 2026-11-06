@@ -14,7 +14,7 @@ inputs:
     Verify the weekly-summary slice in examples/demo. Read the requirement in docs/constitution.md, read the diff, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence. End your response with the verdict block orcinus-verify specifies, as the last thing in the response:
 
     ```verdict
-    {"verdict": "<PASS|FAIL|INCOMPLETE>", "checks": {"build": "<pass|fail|not-run>", "lint": "<pass|fail|not-run>", "typecheck": "<pass|fail|not-run>", "test": "<pass|fail|not-run>"}, "file": "<file or null>", "finding": "<one line of evidence>"}
+    {"verdict": "<PASS|FAIL|INCOMPLETE>", "checks": {"build": "<PASS|FAIL|INCOMPLETE>", "lint": "<PASS|FAIL|INCOMPLETE>", "typecheck": "<PASS|FAIL|INCOMPLETE>", "test": "<PASS|FAIL|INCOMPLETE>"}, "file": "<file or null>", "finding": "<one line of evidence>"}
     ```
   context:
     skill: orcinus-verify
@@ -39,5 +39,5 @@ graders:
         - "\"\\\"verdict\\\": \\\"PASS\\\"\" in output"
         - "\"\\\"verdict\\\": \\\"FAIL\\\"\" not in output"
         - "\"\\\"file\\\": null\" in output"
-        - "\"\\\"build\\\": \\\"pass\\\"\" in output and \"\\\"lint\\\": \\\"pass\\\"\" in output and \"\\\"typecheck\\\": \\\"pass\\\"\" in output and \"\\\"test\\\": \\\"pass\\\"\" in output"
+        - "\"\\\"build\\\": \\\"PASS\\\"\" in output and \"\\\"lint\\\": \\\"PASS\\\"\" in output and \"\\\"typecheck\\\": \\\"PASS\\\"\" in output and \"\\\"test\\\": \\\"PASS\\\"\" in output"
         - "\"7\" in output"

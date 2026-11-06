@@ -1,0 +1,11 @@
+# CI dependencies for orcinus-skills (test, clean-install, and
+# postgres-migration jobs). Pinned versions only — the compiled
+# requirements-ci.txt carries a sha256 for every artifact, and CI
+# installs with `pip install --require-hashes -r requirements-ci.txt`.
+# Regenerate after any change here:
+#   pip-compile --generate-hashes requirements-ci.in -o requirements-ci.txt
+pytest==8.4.2
+ruff==0.17.4
+pyyaml==6.0.1
+mypy==1.18.2
+psycopg[binary]==3.3.8

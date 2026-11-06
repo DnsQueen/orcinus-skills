@@ -62,6 +62,10 @@
 - Rebuilding what ponytail and tdd already do well. ORCINUS routes to them where they fit and focuses new work on the gaps: independent verification, security, and eval. (diagnosing-bugs was external-optional in v0.9.0's first draft and is now bundled — see the debugging skill above.)
 
 
+## Change notices for modified Apache-2.0 files
+
+A file copied from an Apache-2.0 upstream and then modified must carry its change notice in the file itself (Apache-2.0 §4(b)). ORCINUS writes the notice as an HTML comment right after the frontmatter (Markdown) or a `#` comment at the top (scripts) — invisible in rendering, so the rendered body stays verbatim, and never in the frontmatter, which the frontmatter spec check would reject as an unknown field. The modified files are listed in `scripts/validate_repo.py` (`MODIFIED_APACHE_FILES`); the repo validator checks each one carries the notice. The wording "verbatim body, ORCINUS frontmatter" is the precise claim: the body is verbatim upstream, the frontmatter is ORCINUS's (adapted to the Agent Skills spec, `user-invocable: false`, and the ORCINUS router-only note appended to the description). A "description verbatim" claim next to that appended sentence is false; every ATTRIBUTION.md records the append.
+
 ## v1.1 (planned, not v0.9 blockers)
 
 These came from four independent external reviews (2026-11-06). They are

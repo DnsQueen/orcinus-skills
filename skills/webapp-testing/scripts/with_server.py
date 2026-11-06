@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — stdout/stderr are drained in background threads, readiness is an HTTP check with a liveness check, cleanup signals the whole process group, and the test command has a timeout. The rest is verbatim; see ATTRIBUTION.md.
 """
 Start one or more servers, wait for them to be ready, run a command, then clean up.
 

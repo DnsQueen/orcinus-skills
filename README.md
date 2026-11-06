@@ -4,11 +4,21 @@ One integrated nervous system for building software with a coding agent, from ra
 
 ORCINUS is not a dump of 2,000 skills to pick from. You install one unit, inject it into your agent, and it routes you through the whole lifecycle. The user never picks a sub-skill mid-work.
 
+ORCINUS is a guided workflow, not an enforcement layer: it tells the agent what to do and what to verify, and records the evidence. It cannot force the agent to follow it — the human at the gates and CI are the backstop.
+
+## Quick start
+
+1. Install: `/plugin marketplace add DnsQueen/orcinus-skills`, then `/plugin install orcinus-skills@orcinus` (Claude Code), or `npx skills@latest add DnsQueen/orcinus-skills` (any agent).
+2. Invoke the router: `/orcinus` (or `/orcinus-skills:orcinus` for the plugin install).
+3. Say what you want to build; ORCINUS names the stage and routes to the skill for it.
+4. Confirm the two major gates: idea → code, code → done.
+5. Done means verified: failing test first, then build + lint + typecheck + tests pass, with the evidence bundle.
+
 ## What it is
 
 - **One entry:** `orcinus`. The router detects the stage from evidence (no repo yet, code without tests, failing checks, ready to release) and routes to a focused sub-skill.
 - **One companion:** idea → architecture → scaffolding → step-by-step coding → testing → security → debugging → verification → finalize → publish.
-- **Verification-first:** a feature is not done because the agent says so. It is done when the evidence says so: failing test first, then build + lint + typecheck + tests pass, with no weakened tests.
+- **Verification-first:** a feature is not done because the agent says so. It is done when the evidence says so: failing test first, then build + lint + typecheck + tests pass, with no weakened tests. The verifier is a separate skill invocation that reads code and evidence, not the implementer's summary — same agent session, not a separate process.
 
 ## Install
 
@@ -30,13 +40,12 @@ before publishing a change to them.
 Agent Skills (generic) — one unit, all 36 skills, no mid-work fetch:
 
 ```bash
-npx skills@latest add DnsQueen/orcinus-skills --all
+npx skills@latest add DnsQueen/orcinus-skills
 ```
 
-`--all` is `--skill '*' --agent '*' -y`: it installs every skill to
-every agent without prompting. Without it the CLI lets you pick
-individual skills, which breaks the one-install rule — ORCINUS routes
-internally, the user never picks a sub-skill mid-work.
+The CLI asks which agent to install into and which skills to install. Pick your agent, then the ORCINUS skills — all 36 is the one-install system, the router is the entry point and loads sub-skills on demand. The user never picks a sub-skill mid-work.
+
+To install every skill to every agent without prompting (for example in CI), add `--all` (`--skill '*' --agent '*' -y`).
 
 Hermes (Nous Research) — tap + bundle. The repo is a Hermes tap
 already: its skills live under `skills/`, which is the tap's default
@@ -144,42 +153,49 @@ After that, keep working. ORCINUS detects the stage; you confirm each major gate
 
 ## What v0.9 contains
 
-- `skills/orcinus` — the router. One entry, stage detection, gates, shared language.
-- `skills/orcinus-verify` — the flagship. Independent verification and evidence before any claim of done.
-- `skills/idea-calibrate` — turn a raw idea into a calibrated, testable v1 plan before any code, with an eval scenario in `evals/idea-calibrate-01.md`.
-- `skills/scaffold` — set up a project so build, lint, typecheck, and test all pass from day one, with an eval scenario in `evals/scaffold-01.md` (proven on the demo project in `examples/demo/`).
-- `skills/build` — build one slice at a time, test first, with the four checks and independent verification before commit, with an eval scenario in `evals/build-01.md` (proven on the demo project in `examples/demo/`).
-- `skills/security-review` — review a change for secrets, injection, supply-chain, and unsafe patterns before merge, with an eval scenario in `evals/security-review-01.md` (proven on the demo project and on a planted fake secret).
-- `skills/finalize` — prepare a release, cut it, and hand it over — docs, release notes, CI gates, rollback plan, and monitoring — without publishing anything the user has not approved, with an eval scenario in `evals/finalize-01.md` (proven as a dry-run release on the demo project in `examples/demo/`). It uses ready tools as-is: release-please, Waza, handoff, and `monitoring-observability`.
-- `skills/monitoring-observability` — monitoring and observability patterns for Prometheus, Grafana, Langfuse LLM tracing, and drift detection, copied verbatim from a ready-made skill (OrchestKit, MIT, see its `ATTRIBUTION.md`), not rewritten. It is a reference skill, loaded by `finalize` when a project uses those stacks.
-- `skills/ask-questions-if-underspecified` — clarify requirements before implementing, copied verbatim from a ready-made skill (sickn33/antigravity-awesome-skills, MIT, see its `ATTRIBUTION.md`), not rewritten. The router loads it whenever a request is underspecified, before any implementation.
-- `skills/webapp-testing` — test local web applications in a real browser with Playwright, copied verbatim from a ready-made skill (Anthropic, Apache-2.0, see its `ATTRIBUTION.md`), not rewritten. The router loads it whenever the project has a web UI.
-- `skills/mutation-testing` — check whether the tests actually catch bugs by mutating the code and seeing if the tests fail, using Stryker as-is (Apache-2.0). JavaScript/TypeScript only.
-- `skills/visual-regression` — catch unintended visual changes by comparing screenshots against a baseline, using Playwright as-is (Apache-2.0). Web UI only; needs a browser.
-- `skills/performance-optimization` — measure before optimizing, fix only the measured bottleneck, re-measure, and revert if the result is within noise or worse. Copied verbatim from addyosmani/agent-skills (MIT).
-- `skills/api-and-interface-design` — stable API and interface design: contract first, one error format, validation at the boundary, additive changes, pagination, idempotency. Copied verbatim from addyosmani/agent-skills (MIT).
-- `skills/breaking-change` — detect breaking changes between two OpenAPI specs before shipping, using oasdiff as-is (Apache-2.0). A gate that cannot fail is not a gate: always run with `--fail-on ERR`.
-- `skills/incomplete-refactor` — detect an incomplete refactor (old names still referenced, removed files still present, stale tests) with a checker script, written from scratch. A green suite does not prove the old thing is gone.
-- `skills/registry-publish` — publish a package to a registry safely: prepare, check, dry-run, confirm, publish, then verify the published artifact installs and runs. Written from scratch (release-please does not publish to registries). npm first.
-- `skills/i18n` — internationalize a project across language tags, dates/times, numbers/currency, RTL, pluralization, collation, and localization testing. Injected verbatim (Marvellbrazil/my-agentic-skills, MIT).
-- `skills/accessibility` — audit a web UI for accessibility and fix what is found, using the ultra11y engine as-is (RGAA 4.1.2 on a WCAG 2.2 AA core). Own-words wrapper: the upstream `SKILL.md` is 522 lines, over the spec's 500-line guidance, so it was not copied verbatim; the engine is bundled as-is.
-- `skills/architecture` — define a project's architecture before any code: stack choice as an ADR, file tree and invariants, public contract, layer rules, codebase map (repomix as-is), and dependency licences, enforced by a checker script. Written from scratch (spec-kit and repomix are tools, not skills).
-- `skills/database-designer` — design a database schema, optimize indexes against real query patterns, and generate migrations (including zero-downtime expand-contract). Injected verbatim (alirezarezvani/claude-skills, MIT) with ORCINUS fixes to the migration generator (see its ATTRIBUTION.md) — the upstream generator failed on any schema change, and external reviews found four more defects in it.
-- `skills/skill-creator` — create, modify, and improve skills, and measure skill performance (draft, test prompts, evaluate, iterate). Injected verbatim (anthropics/skills, Apache-2.0). Its Claude-Code-only eval scripts do not run here; the repo's own eval pattern is used instead.
-- `skills/frontend-architecture` — a portable architecture style for React/React Native frontends: feature modules, a strict server-state vs UI-state split, barrel-only imports, and component-promotion rules. Injected verbatim (stareezy-1/frontend-architecture-skill, MIT).
-- `skills/frontend-optimistic-mutations` — the write path: the fixed optimistic lifecycle (cancel → snapshot → patch → roll back verbatim → invalidate), idempotency keys generated once at form init, and multi-cache coherence. Injected verbatim (stareezy-1/frontend-architecture-skill, MIT).
-- `skills/frontend-data-contracts` — type safety at the network edge: one typed API client as the only fetch boundary, parse-don't-validate, one envelope, one normalized ApiError, branded IDs. Injected verbatim (stareezy-1/frontend-architecture-skill, MIT).
-- `skills/mutation-testing-python` — check whether Python tests actually catch bugs by mutating the code (mutmut as-is, BSD-3-Clause). Written from scratch (the same discipline as mutation-testing, for Python).
-- `skills/idea-capture` — a durable store for fleeting raw ideas: one Markdown file per idea in the project's `ideas/` directory, verbatim, never edited, never deleted. Written from scratch (with a script).
-- `skills/monitoring` — the outside view of a shipped service: uptime probes, `/livez` split from `/readyz`, SLO burn-rate alerts, on-call escalation, status page. Injected verbatim (ericrisco/rsc-harness, MIT).
-- `skills/independent-review` — review a change independently before it merges: six focused reviewers read the diff, never the author's summary, with confidence ≥ 80. Own-words method; the six reviewer agents and the `review-pr` command bundled as-is (anthropics/claude-plugins-official, Apache-2.0).
-- `skills/waza` — evaluate agent skills with structured benchmarks: author an eval.yaml with tasks and graders, run it with the official `waza` CLI, read the results JSON, and gate on the score. Injected verbatim (microsoft/waza, MIT); the runnable suite `evals/waza-orcinus-verify/` grades the flagship skill. The ~200 MB binary is installed from the release page, not kept in this repo.
-- `skills/refactor` — safe, behavior-preserving code refactoring for any language: detect smells, plan atomic steps, run tests after each step, revert on failure. Injected verbatim (MuhiminOsim/code-refactoring-skill, MIT, 12 stars).
-- `skills/diagnosing-bugs` — a phased loop for hard bugs and performance regressions: build a tight, red-capable feedback loop that has actually been run at least once, before any hypothesis. Injected verbatim (mattpocock/skills, MIT, see its `ATTRIBUTION.md`).
-- `skills/mcp-builder` — build high-quality MCP servers (TypeScript SDK v2 or Python FastMCP): research, implement, review and test, then evaluate with 10 verifiable questions. Injected verbatim (anthropics/skills, Apache-2.0).
-- `skills/handoff` — write a compact handoff file so a fresh session resumes the task, and load one to resume from it. A merge of two MIT handoff methods (mattpocock + dariohansson), written in own words.
-- `skills/codebase-knowledge-builder` — study an unfamiliar codebase and produce a source-cited, revision-specific knowledge artifact for onboarding. Injected verbatim (OthmanAdi/codebase-knowledge-builder, MIT).
-- `skills/issue-triage` — manage a GitHub issue backlog in 3 phases: audit, opt-in deep analysis, validated actions. Injected verbatim (florianbruniaux/claude-code-plugins, MIT). Pass the language explicitly (`en`) — the skill defaults to French.
+<!-- BEGIN GENERATED SKILL TABLE — do not edit by hand; run scripts/generate_readme_table.py -->
+| Skill | Stages | Licence | Integration | Source |
+|---|---|---|---|---|
+| [accessibility](skills/accessibility) | 20-39 | MIT | wrapper | [maxgfr/ultra11y](https://github.com/maxgfr/ultra11y) |
+| [api-and-interface-design](skills/api-and-interface-design) | 20-39 | MIT | verbatim | [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) |
+| [architecture](skills/architecture) | 10-19 | MIT | from-scratch | from-scratch |
+| [ask-questions-if-underspecified](skills/ask-questions-if-underspecified) | 0-100 | MIT | verbatim | [sickn33/antigravity-awesome-skills](https://github.com/sickn33/antigravity-awesome-skills) |
+| [breaking-change](skills/breaking-change) | 20-39 | MIT | from-scratch | from-scratch |
+| [build](skills/build) | 20-39 | MIT | from-scratch | from-scratch |
+| [codebase-knowledge-builder](skills/codebase-knowledge-builder) | 0-100 | MIT | verbatim | [OthmanAdi/codebase-knowledge-builder](https://github.com/OthmanAdi/codebase-knowledge-builder) |
+| [database-designer](skills/database-designer) | 20-39 | MIT | verbatim | [alirezarezvani/claude-skills](https://github.com/alirezarezvani/claude-skills) |
+| [diagnosing-bugs](skills/diagnosing-bugs) | 50-79 | MIT | verbatim | [mattpocock/skills](https://github.com/mattpocock/skills) |
+| [finalize](skills/finalize) | 80-100 | MIT | from-scratch | from-scratch |
+| [frontend-architecture](skills/frontend-architecture) | 20-39 | MIT | verbatim | [stareezy-1/frontend-architecture-skill](https://github.com/stareezy-1/frontend-architecture-skill) |
+| [frontend-data-contracts](skills/frontend-data-contracts) | 20-39 | MIT | verbatim | [stareezy-1/frontend-architecture-skill](https://github.com/stareezy-1/frontend-architecture-skill) |
+| [frontend-optimistic-mutations](skills/frontend-optimistic-mutations) | 20-39 | MIT | verbatim | [stareezy-1/frontend-architecture-skill](https://github.com/stareezy-1/frontend-architecture-skill) |
+| [handoff](skills/handoff) | 0-100 | MIT | merged | [dariohansson/claude-handoff](https://github.com/dariohansson/claude-handoff) |
+| [i18n](skills/i18n) | 20-39 | MIT | verbatim | [Marvellbrazil/my-agentic-skills](https://github.com/Marvellbrazil/my-agentic-skills) |
+| [idea-calibrate](skills/idea-calibrate) | 0-9 | MIT | from-scratch | from-scratch |
+| [idea-capture](skills/idea-capture) | 0-9 | MIT | from-scratch | from-scratch |
+| [incomplete-refactor](skills/incomplete-refactor) | 50-79 | MIT | from-scratch | from-scratch |
+| [independent-review](skills/independent-review) | 40-59 | MIT AND Apache-2.0 | wrapper | [anthropics/claude-plugins-official](https://github.com/anthropics/claude-plugins-official) |
+| [issue-triage](skills/issue-triage) | 80-100 | MIT | verbatim | [florianbruniaux/claude-code-plugins](https://github.com/florianbruniaux/claude-code-plugins) |
+| [mcp-builder](skills/mcp-builder) | 20-39 | Apache-2.0 | verbatim | [anthropics/skills](https://github.com/anthropics/skills) |
+| [monitoring](skills/monitoring) | 80-100 | MIT | verbatim | [ericrisco/rsc-harness](https://github.com/ericrisco/rsc-harness) |
+| [monitoring-observability](skills/monitoring-observability) | 80-100 | MIT | verbatim | [yonatangross/orchestkit](https://github.com/yonatangross/orchestkit) |
+| [mutation-testing](skills/mutation-testing) | 40-59 | MIT | from-scratch | from-scratch |
+| [mutation-testing-python](skills/mutation-testing-python) | 40-59 | MIT | from-scratch | from-scratch |
+| [orcinus](skills/orcinus) | 0-100 | MIT | from-scratch | from-scratch |
+| [orcinus-verify](skills/orcinus-verify) | 40-59 | MIT | from-scratch | from-scratch |
+| [performance-optimization](skills/performance-optimization) | 50-79 | MIT | verbatim | [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) |
+| [refactor](skills/refactor) | 50-79 | MIT | verbatim | [MuhiminOsim/code-refactoring-skill](https://github.com/MuhiminOsim/code-refactoring-skill) |
+| [registry-publish](skills/registry-publish) | 80-100 | MIT | from-scratch | from-scratch |
+| [scaffold](skills/scaffold) | 20-39 | MIT | from-scratch | from-scratch |
+| [security-review](skills/security-review) | 50-79 | MIT | from-scratch | from-scratch |
+| [skill-creator](skills/skill-creator) | 10-19 | Apache-2.0 | verbatim | [anthropics/skills](https://github.com/anthropics/skills) |
+| [visual-regression](skills/visual-regression) | 40-59, 80-100 | MIT | from-scratch | from-scratch |
+| [waza](skills/waza) | 40-59 | MIT | verbatim | [microsoft/waza](https://github.com/microsoft/waza) |
+| [webapp-testing](skills/webapp-testing) | 40-59 | Apache-2.0 | verbatim | [anthropics/skills](https://github.com/anthropics/skills) |
+<!-- END GENERATED SKILL TABLE -->
+
+"verbatim" means the body is verbatim upstream with ORCINUS frontmatter (see SCOPE.md). Each skill's eval scenario (where one exists) is in `evals/`; provenance and licence per skill are in that skill's `ATTRIBUTION.md` and in `docs/MAP.md`.
+
 - `docs/MAP.md` — the full 0–100 map: every micro-step, its best proven source, its licence, and its integration method (copy / rewrite / bundle / write from scratch).
 - `skills/manifest.json` — the single source of truth for the skill inventory: name, licence, stages, source, and status per skill. The validator checks it against the folders and the frontmatter.
 - `skills/orcinus-verify/references/evidence.schema.json` — the machine-readable form of the evidence bundle orcinus-verify returns. Validate a bundle with `python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json>`.
@@ -191,7 +207,6 @@ After that, keep working. ORCINUS detects the stage; you confirm each major gate
 - `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v0.9 does and does not do.
 
 Later sub-skills (idea, architecture, coding, security, eval) are listed in `docs/MAP.md` with their source and status. They are added one at a time, each proven on a demo repo before it ships. No stage is empty in the map, but not every sub-skill is fully built in v0.9.
-
 ## Boundaries (non-negotiable)
 
 - No auto-merge. A human decides the merge.
@@ -219,4 +234,6 @@ Sources that shaped v0.9 include Anthropic (Effective Harnesses, Agent Skills, c
 
 ## Status
 
-v0.9 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + security-review + finalize + monitoring-observability (injected verbatim) + ask-questions-if-underspecified (injected verbatim) + webapp-testing (injected verbatim) + mutation-testing + visual-regression + performance-optimization (injected verbatim) + api-and-interface-design (injected verbatim) + breaking-change + incomplete-refactor + registry-publish + i18n (injected verbatim) + accessibility (ultra11y engine as-is) + architecture + database-designer (injected verbatim, migration generator fixed — see its ATTRIBUTION.md) + skill-creator (injected verbatim) + frontend-architecture (injected verbatim) + frontend-optimistic-mutations (injected verbatim) + frontend-data-contracts (injected verbatim) + mutation-testing-python (written from scratch, mutmut as-is) + idea-capture (written from scratch, with a script) + monitoring (injected verbatim) + independent-review (own-words method, reviewers bundled as-is) + waza (injected verbatim, official CLI as-is) + refactor (injected verbatim) + mcp-builder (injected verbatim) + handoff (merged, own words) + codebase-knowledge-builder (injected verbatim) + issue-triage (injected verbatim) + diagnosing-bugs (injected verbatim) + map. The rest is built in order, with eval scenarios, not by dumping skills. Where a ready skill answers a need, it is used as-is — never rewritten — except where the licence or a real defect forced a change, and then the change is recorded in that skill's `ATTRIBUTION.md`: `accessibility` is an own-words wrapper around the ultra11y engine (bundled byte-identical), and `database-designer` has one minimal fix to its migration generator (upstream `json.dumps` on Column dataclasses failed on any schema change).
+v0.9 foundation: the router, the verifier, and 34 focused sub-skills — all listed above, all with a scored eval. The map (`docs/MAP.md`) covers every micro-step, so no stage is empty, but not every sub-skill is fully built; the rest are built in order, each proven before it ships.
+
+Where a ready skill answers a need, it is used as-is — never rewritten — except where the licence or a real defect forced a change, and then the change is recorded in that skill's `ATTRIBUTION.md`. Two examples: `accessibility` is an own-words wrapper around the ultra11y engine (bundled byte-identical), and `database-designer` has fixes to its migration generator (upstream `json.dumps` on Column dataclasses failed on any schema change).

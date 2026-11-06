@@ -3,6 +3,78 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.2] — 2026-11-06
+
+The fifth review round (reviewers 3 and 4 re-reviewed 0.9.1): every
+concrete claim was verified by running the code, and every confirmed
+bug is fixed here, each with a red-first regression test. No new
+skills; this release closes the holes the previous round's fixes left
+in the checking machinery itself.
+
+### Fixed
+
+- Migration generator: a foreign key to a column (or unique) added by
+  the same migration is deferred to a late-FK phase — a new table with
+  an FK to a new column on an existing table no longer fails on
+  PostgreSQL (proven on real PostgreSQL 16); the same deferral
+  applies to a new column's own FK and to the zero-downtime path. The
+  rollback test now executes the generated `sql_rollback` and compares
+  the schema, instead of proving only transactional rollback.
+- Content digest: `git ls-tree -r -z` with byte-exact parsing, so a
+  non-ASCII filename can no longer escape the `.orcinus/` and
+  `docs/verification/` exclusions; the digest format is versioned
+  (v2; v1 digests on non-ASCII trees are not comparable).
+- Version-bump gate: changed files are read with `git diff -z`, so a
+  non-ASCII filename can no longer bypass the bump; `scripts/` counts
+  as shipped content; the version must now INCREASE past the base and
+  past the latest release tag, so a downgrade or a re-release fails;
+  the CI fetch no longer hides its error behind `|| true`, and the
+  release tags are fetched for the tag check.
+- Evidence contract (schema v3): every check that ran must carry its
+  output — an artifact file with its sha256, or inline text — so a
+  PASS with no reviewable output is rejected, and an artifact whose
+  hash does not match its file is rejected; a bundle with no checks at
+  all is valid only as INCOMPLETE with a `stop_reason`; the verdict
+  block and the bundle now share one vocabulary (PASS/FAIL/INCOMPLETE).
+- Router self-containment: the status table and the project-state spec
+  travel with the router skill (generated from `docs/MAP.md` and
+  `docs/project-state.md`, checked by the validator), so a standalone
+  install — which has no `docs/` — still has the decision table and
+  the state spec, and the router never reads the user's own
+  `docs/MAP.md`.
+- Clean-copy check: a timed-out gate, a corrupt manifest, and a
+  timed-out `git archive` fail their step with a FAIL line and a
+  controlled exit code, never a traceback; the check now runs the
+  same seven gates as CI (`ruff format --check` and `mypy` added) and
+  CI runs it in release mode; CI installs Python packages with
+  `--require-hashes` from `requirements-ci.txt` (13 pins, 191 hashes)
+  and the Claude Code CLI with `npm ci` from `package-lock.json`.
+- Drift check: the `test_*.py` exclusion is an explicit allowlist of
+  the four ORCINUS-authored test files (verified absent from upstream
+  at the pinned commits); `agents/` and `commands/` are glob-scanned,
+  so a new file under either directory is reported unrecorded.
+- Licences and wording: the ATTRIBUTION "description verbatim" claims
+  are corrected — the ORCINUS router-only note appended to 35 of 36
+  descriptions is now recorded in every one, and the wording is
+  "verbatim body, ORCINUS frontmatter"; every modified Apache-2.0
+  file carries its change notice in the file itself (Apache-2.0
+  §4(b)), checked by the validator; the i18n description no longer
+  tells the user to type `/i18n`; the router description now triggers
+  on the user asking for the ORCINUS lifecycle; the validator checks
+  that coarse stage ranges contain the router's fine ranges, and
+  accessibility is documented as cross-cutting with a pre-ship gate.
+- Idea-capture lock: the lock file records the holder PID, so a lock
+  left by a dead process is recognised as stale, removed with a note,
+  and the change succeeds; a live holder still blocks with a truthful
+  error naming its PID; a lock with no readable PID is never stolen.
+- README: the skill list is a table generated from `manifest.json`
+  (checked by the validator); a 5-line quick start; the default
+  Agent Skills install is the interactive pick, not `--all`; the fake
+  key in the security-review eval is replaced by a generate-at-test-time
+  instruction; ORCINUS is presented as a guided workflow, and the
+  verifier's independence is reported with its level (same agent
+  session, not a separate process).
+
 ## [0.9.1] — 2026-11-06
 
 The fourth review round (reviewers 3 and 4 re-reviewed 0.9.0): every

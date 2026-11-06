@@ -53,6 +53,28 @@ Checks:
      a stale name would fail silently at runtime, and a bundle loads
      everything it lists at once, so listing sub-skills would dump
      the whole collection into one message.
+ 13. The Supported versions table in SECURITY.md must say Yes for the
+     major.minor of the version in .claude-plugin/plugin.json.
+ 14. The router's bundled resources are current: the state spec in
+     skills/orcinus/references/project-state.md is a byte-identical
+     copy of docs/project-state.md, and the status table in
+     skills/orcinus/references/skill-status.md is exactly what
+     scripts/generate_router_resources.py produces from docs/MAP.md —
+     so a standalone install, which has no docs/, still has the
+     status table and the state spec.
+ 15. Stage containment: each fine router stage's primary skill
+     contains that stage in its stages.json range, and every coarse
+     stages.json range starts and ends on a router stage boundary —
+     so the manifest and the router agree about when a skill applies.
+ 16. Every modified Apache-2.0 file carries its ORCINUS change
+     notice in the file itself (Apache-2.0 §4(b)).
+ 17. No sub-skill description tells the user to type /<skill>:
+     sub-skills are user-invocable: false, so the instruction is a
+     dead end.
+ 18. The skill table in README.md is exactly what
+     scripts/generate_readme_table.py produces from
+     skills/manifest.json — a hand-edited table drifts from the
+     inventory silently.
 
 A check that cannot run (missing file it needs) is reported as a
 failure, never silently skipped — except where the check itself says
@@ -60,6 +82,7 @@ otherwise. Dates in this repo are Asia/Tehran local time unless a
 file says UTC.
 """
 
+import importlib.util
 import json
 import re
 import sys
@@ -784,6 +807,80 @@ def check_glossary_copy():
         )
 
 
+def _load_router_generator():
+    """Load scripts/generate_router_resources.py as a module, or None
+    when the script is missing (the caller reports that as a failure)."""
+    return _load_script_module("generate_router_resources")
+
+
+def _load_readme_table_generator():
+    """Load scripts/generate_readme_table.py as a module, or None
+    when the script is missing (the caller reports that as a failure)."""
+    return _load_script_module("generate_readme_table")
+
+
+def _load_script_module(name):
+    """Load a scripts/<name>.py file as a module, or None."""
+    path = ROOT / "scripts" / f"{name}.py"
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_router_resources():
+    """The router's bundled resources are current: the state spec is a
+    byte-identical copy of docs/project-state.md, and the status table
+    is exactly what the generator produces from docs/MAP.md. In a
+    standalone install docs/ does not exist, so a stale or missing
+    copy misclassifies skills or loses the state spec."""
+    map_file = ROOT / "docs" / "MAP.md"
+    state_file = ROOT / "docs" / "project-state.md"
+    bundled_state = ROOT / "skills" / "orcinus" / "references" / "project-state.md"
+    bundled_status = ROOT / "skills" / "orcinus" / "references" / "skill-status.md"
+    if not map_file.is_file():
+        fail("docs/MAP.md is missing")
+        return
+    if not state_file.is_file():
+        fail("docs/project-state.md is missing")
+        return
+    generator = _load_router_generator()
+    if generator is None:
+        fail(
+            "scripts/generate_router_resources.py is missing — the "
+            "router's bundled resources cannot be checked"
+        )
+        return
+    if not bundled_state.is_file():
+        fail(
+            "skills/orcinus/references/project-state.md is missing — "
+            "the router's state spec must travel with the skill"
+        )
+    elif bundled_state.read_bytes() != state_file.read_bytes():
+        fail(
+            "skills/orcinus/references/project-state.md differs from "
+            "docs/project-state.md — re-run "
+            "scripts/generate_router_resources.py"
+        )
+    if not bundled_status.is_file():
+        fail(
+            "skills/orcinus/references/skill-status.md is missing — "
+            "the router's status table must travel with the skill"
+        )
+    else:
+        expected = generator.generate_skill_status(map_file.read_text(encoding="utf-8"))
+        if bundled_status.read_text(encoding="utf-8") != expected:
+            fail(
+                "skills/orcinus/references/skill-status.md is stale — "
+                "re-run scripts/generate_router_resources.py after "
+                "changing docs/MAP.md"
+            )
+
+
 def _stage_ranges(text):
     """Extract {stage: (low, high)} from 'Name (low–high)' mentions.
     Stage names may contain a hyphen ("Finalize / Post-publish")."""
@@ -850,6 +947,186 @@ def check_stage_ranges():
                 f"{r[0]} but the previous stage ends at {prev[1]}"
             )
         prev = r
+
+
+# The fine stage of the router each primary skill serves: the skill's
+# coarse stages.json range must contain that fine range. Cross-cutting
+# skills (skill-creator, accessibility) are staged by their audit band,
+# not by a linear stage, so they are covered by the boundary rule below
+# instead of this mapping.
+STAGE_PRIMARY_SKILLS = {
+    "Idea": ["idea-capture", "idea-calibrate"],
+    "Architecture": ["architecture"],
+    "Scaffold": ["scaffold"],
+    "Build": ["build"],
+    "Verify": ["orcinus-verify"],
+    "Security": ["security-review"],
+    "Debugging": ["diagnosing-bugs", "refactor", "incomplete-refactor"],
+    "Finalize": ["finalize"],
+}
+
+
+def _parse_range(text):
+    """Parse a 'low-high' range string into (low, high), or None."""
+    m = re.fullmatch(r"(\d+)-(\d+)", text.strip())
+    if m is None:
+        return None
+    return (int(m.group(1)), int(m.group(2)))
+
+
+def check_stage_containment():
+    """Every coarse stages.json range is built from the router's fine
+    ranges: each fine stage's primary skill contains that stage, and
+    every coarse range starts and ends on a fine-range boundary. A
+    coarse range that no longer contains its fine stage (or starts
+    mid-stage) means the router and the manifest disagree about when
+    a skill applies."""
+    router = ROOT / "skills" / "orcinus" / "SKILL.md"
+    stages_file = ROOT / "skills" / "stages.json"
+    if not router.is_file():
+        fail("router SKILL.md is missing")
+        return
+    if not stages_file.is_file():
+        fail("skills/stages.json is missing")
+        return
+    router_ranges = _stage_ranges(router.read_text(encoding="utf-8"))
+    try:
+        stages = json.loads(stages_file.read_text(encoding="utf-8"))["stages"]
+    except (json.JSONDecodeError, KeyError) as e:
+        fail(f"skills/stages.json is not readable: {e}")
+        return
+    # Primary containment: the fine range must sit inside the skill's
+    # coarse range.
+    for stage, skills in STAGE_PRIMARY_SKILLS.items():
+        fine = router_ranges.get(stage)
+        if fine is None:
+            fail(f"router does not define a range for {stage}")
+            continue
+        for skill in skills:
+            coarse = stages.get(skill)
+            if coarse is None:
+                fail(f"skills/stages.json has no range for {skill}")
+                continue
+            ranges = [_parse_range(r) for r in coarse]
+            if any(r is None for r in ranges):
+                fail(f"skills/stages.json range for {skill} is not 'low-high': {coarse}")
+                continue
+            if not any(lo <= fine[0] and fine[1] <= hi for lo, hi in ranges):
+                fail(
+                    f"stage range mismatch: router {stage} is "
+                    f"{fine[0]}–{fine[1]} but {skill} is staged {coarse}"
+                )
+    # Boundary alignment: a coarse range must start and end on a
+    # fine-range boundary, so it is a union of fine ranges, never a
+    # range that starts or ends mid-stage.
+    lows = {r[0] for r in router_ranges.values()}
+    highs = {r[1] for r in router_ranges.values()}
+    for skill in sorted(stages):
+        for text in stages[skill]:
+            parsed = _parse_range(text)
+            if parsed is None:
+                fail(f"skills/stages.json range for {skill} is not 'low-high': {text!r}")
+                continue
+            if parsed[0] not in lows or parsed[1] not in highs:
+                fail(
+                    f"skills/stages.json range for {skill} is {text}, "
+                    f"which does not start and end on a router stage boundary"
+                )
+
+
+# Files modified from an Apache-2.0 upstream, which must carry their
+# change notice in the file itself (Apache-2.0 §4(b)). The list is the
+# recorded set: a new modification must be added here with its notice.
+# The notice is an HTML comment (Markdown) or a # comment (Python),
+# placed right after the frontmatter (or at the top of the script):
+# it is invisible in rendering, so the rendered body stays verbatim,
+# and it does not touch the frontmatter, which the frontmatter spec
+# check would reject as an unknown field.
+MODIFIED_APACHE_FILES = [
+    "skills/mcp-builder/SKILL.md",
+    "skills/skill-creator/SKILL.md",
+    "skills/webapp-testing/SKILL.md",
+    "skills/webapp-testing/scripts/with_server.py",
+    "agents/analyzer.md",
+    "agents/comparator.md",
+    "agents/grader.md",
+]
+
+
+def check_apache_change_notices():
+    """Every modified Apache-2.0 file carries its ORCINUS change
+    notice in the file itself."""
+    for rel in MODIFIED_APACHE_FILES:
+        path = ROOT / rel
+        if not path.is_file():
+            fail(f"{rel} is missing")
+            continue
+        if "ORCINUS change notice" not in path.read_text(encoding="utf-8"):
+            fail(
+                f"{rel} is a modified Apache-2.0 file without its "
+                f"ORCINUS change notice (Apache-2.0 §4(b))"
+            )
+
+
+SLASH_COMMAND_RE = re.compile(r"(?<![A-Za-z0-9])/[a-z][a-z0-9-]*")
+
+
+def check_no_slash_invocation():
+    """A sub-skill's description must not tell the user to type
+    /<skill>: sub-skills are user-invocable: false, so no slash
+    command can invoke them, and the instruction is a dead end."""
+    skills_dir = ROOT / "skills"
+    if not skills_dir.is_dir():
+        fail("skills/ directory is missing")
+        return
+    for skill_dir in sorted(skills_dir.iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        skill = skill_dir / "SKILL.md"
+        if not skill.is_file():
+            continue
+        fields, err = parse_frontmatter(skill)
+        if err:
+            continue  # the frontmatter check reports it
+        if fields.get("user-invocable") is not False:
+            continue  # the router may name slash commands; sub-skills may not
+        desc = fields.get("description")
+        if not isinstance(desc, str):
+            continue
+        m = SLASH_COMMAND_RE.search(desc)
+        if m:
+            fail(
+                f"{skill_dir.name}/SKILL.md: description tells the user to "
+                f"type {m.group(0)!r}, but sub-skills are not user-invocable"
+            )
+
+
+def check_readme_skill_table():
+    """The skill table in README.md is exactly what the generator
+    produces from skills/manifest.json — a hand-edited table drifts
+    from the inventory silently."""
+    readme = ROOT / "README.md"
+    manifest_file = ROOT / "skills" / "manifest.json"
+    if not readme.is_file():
+        fail("README.md is missing")
+        return
+    if not manifest_file.is_file():
+        fail("skills/manifest.json is missing")
+        return
+    generator = _load_readme_table_generator()
+    if generator is None:
+        fail(
+            "scripts/generate_readme_table.py is missing — the README skill table cannot be checked"
+        )
+        return
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        current = generator.table_section(readme.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, ValueError) as e:
+        fail(f"README skill table cannot be read: {e}")
+        return
+    if current != generator.build_skill_table(manifest):
+        fail("README skill table is stale — run scripts/generate_readme_table.py")
 
 
 def check_plugin_manifests():
@@ -1526,7 +1803,12 @@ def main():
     check_attribution_pairs()
     check_third_party_notices()
     check_glossary_copy()
+    check_router_resources()
     check_stage_ranges()
+    check_stage_containment()
+    check_apache_change_notices()
+    check_no_slash_invocation()
+    check_readme_skill_table()
     check_plugin_manifests()
     check_skill_counts()
     check_manifest()

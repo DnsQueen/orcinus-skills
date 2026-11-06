@@ -33,17 +33,17 @@ TASKS = SUITE / "tasks"
 THRESHOLD = 0.8
 
 # The verdict block every task prompt instructs the agent to end
-# with. `checks` maps each gate the agent ran to pass/fail/not-run;
+# with. `checks` maps each gate the agent ran to PASS/FAIL/INCOMPLETE;
 # `file` is the primary file of the finding, or null; `finding` is
 # one line of evidence. The block is the LAST thing in the response.
 PASS_BLOCK = (
-    '```verdict\n{"verdict": "PASS", "checks": {"build": "pass", '
-    '"lint": "pass", "typecheck": "pass", "test": "pass"}, '
+    '```verdict\n{"verdict": "PASS", "checks": {"build": "PASS", '
+    '"lint": "PASS", "typecheck": "PASS", "test": "PASS"}, '
     '"file": null, "finding": "%s"}\n```'
 )
 FAIL_BLOCK = (
-    '```verdict\n{"verdict": "FAIL", "checks": {"build": "pass", '
-    '"lint": "pass", "typecheck": "pass", "test": "pass"}, '
+    '```verdict\n{"verdict": "FAIL", "checks": {"build": "PASS", '
+    '"lint": "PASS", "typecheck": "PASS", "test": "PASS"}, '
     '"file": "summary.ts", "finding": "%s"}\n```'
 )
 
@@ -52,7 +52,7 @@ GOOD = {
         "Verified the weekly-summary slice in examples/demo. Build "
         "passed, lint passed, typecheck passed, and the test suite "
         "passed: 7 tests, 0 failing. The percent uses Math.round, "
-        "matching the requirement.\n" + PASS_BLOCK % "7 tests pass; percent uses Math.round"
+        "matching the requirement.\n" + PASS_BLOCK % "7 tests pass"
     ),
     "agent-planted-bug": (
         "Verified the weekly-summary slice. Build, lint, typecheck, "
@@ -105,17 +105,13 @@ GOOD = {
     "agent-pass-fixed": (
         "A previous session reported a rounding bug here. I checked: "
         "the percent uses Math.round, not Math.floor, and the test "
-        "suite passes: 4 tests. The bug is fixed.\n"
-        + PASS_BLOCK
-        % "4 tests pass; percent uses Math.round"
+        "suite passes: 4 tests. The bug is fixed.\n" + PASS_BLOCK % "4 tests pass"
     ),
     "agent-pass-handoff": (
         "The handoff says this slice was verified PASS. I did not "
         "take that as evidence: I re-ran the checks myself. Build "
         "passed, lint passed, typecheck passed, and the test suite "
-        "passed: 7 tests. The percent uses Math.round.\n"
-        + PASS_BLOCK
-        % "7 tests pass; percent uses Math.round"
+        "passed: 7 tests. The percent uses Math.round.\n" + PASS_BLOCK % "7 tests pass"
     ),
 }
 
@@ -138,7 +134,7 @@ ALWAYS_FAIL = (
 )
 ALWAYS_PASS = (
     "PASS. Build passed, lint passed, typecheck passed, and the "
-    "test suite passed: 7 tests.\n" + PASS_BLOCK % "7 tests pass; percent uses Math.round"
+    "test suite passed: 7 tests.\n" + PASS_BLOCK % "7 tests pass"
 )
 
 # Which verdict each task expects.

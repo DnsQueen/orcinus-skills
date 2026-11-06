@@ -63,18 +63,29 @@ VENDORED_SKILLS = [
 # upstream provenance is recorded in the owning skill's
 # ATTRIBUTION.md; the skill-creator agents additionally carry
 # ORCINUS-added frontmatter (name + description), recorded there.
-VENDORED_ROOT_FILES = [
-    "agents/analyzer.md",
-    "agents/code-reviewer.md",
-    "agents/code-simplifier.md",
-    "agents/comment-analyzer.md",
-    "agents/comparator.md",
-    "agents/grader.md",
-    "agents/pr-test-analyzer.md",
-    "agents/silent-failure-hunter.md",
-    "agents/type-design-analyzer.md",
-    "commands/review-pr.md",
-]
+# build_manifest() glob-scans agents/ and commands/ instead of
+# listing them: a hardcoded list made a new file under either
+# directory invisible. A new file is reported unrecorded until it
+# is either recorded in the manifest (vendored) or listed in
+# ORCINUS_ROOT_FILES (ORCINUS-authored).
+ORCINUS_ROOT_FILES: set[str] = set()
+
+# Test files inside a vendored skill that are ORCINUS-authored, not
+# vendored. An explicit allowlist, not a name heuristic: a file
+# named test_*.py that is NOT listed here is treated as vendored,
+# so a new upstream test file (or a misplaced ORCINUS file) cannot
+# slip past the check unrecorded. Verified against upstream at the
+# pinned commits named in each skill's ATTRIBUTION.md (2026-11-06):
+# - database-designer (alirezarezvani/claude-skills @ 8f08254):
+#   upstream has no test files at all.
+# - webapp-testing (anthropics/skills @ ca45fc4): upstream has no
+#   test files at all.
+ORCINUS_TEST_FILES = {
+    "skills/database-designer/test_migration_generator.py",
+    "skills/database-designer/test_migration_integration.py",
+    "skills/database-designer/test_postgres_migration.py",
+    "skills/webapp-testing/scripts/test_with_server.py",
+}
 
 # Files inside a vendored skill that are ORCINUS-authored, not vendored.
 EXCLUDED_NAMES = {"ATTRIBUTION.md", "LICENSE.txt"}
@@ -95,8 +106,9 @@ def _is_vendored(path: Path) -> bool:
         return False
     if any(part in EXCLUDED_DIRS for part in parts):
         return False
-    # ORCINUS-authored test files inside a vendored skill.
-    if parts[-1].startswith("test_") and path.suffix == ".py":
+    # ORCINUS-authored test files inside a vendored skill (explicit
+    # allowlist — a test_*.py that is not listed is vendored).
+    if rel.as_posix() in ORCINUS_TEST_FILES:
         return False
     return True
 
@@ -114,19 +126,26 @@ def build_manifest() -> dict:
         for path in sorted(skill_dir.rglob("*")):
             if path.is_file() and _is_vendored(path):
                 manifest[str(path.relative_to(ROOT))] = _sha256(path)
-    for rel in VENDORED_ROOT_FILES:
-        path = ROOT / rel
-        if path.is_file():
+    for root_dir in ("agents", "commands"):
+        dir_path = ROOT / root_dir
+        if not dir_path.is_dir():
+            continue
+        for path in sorted(dir_path.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = str(path.relative_to(ROOT))
+            if rel in ORCINUS_ROOT_FILES:
+                continue
             manifest[rel] = _sha256(path)
     return manifest
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--update", action="store_true", help="regenerate the manifest from the current files"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.update:
         manifest = build_manifest()
         MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -163,4 +182,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(sys.argv[1:]))

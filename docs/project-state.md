@@ -50,18 +50,31 @@ the human approves transitions that need approval.
 
 VERIFIED is bound to what was verified — the content of the project
 — not to the identity of the commit that happened to hold it. The
-content digest is sha256 over the sorted `git ls-tree -r` listing of
-the revision's tree, excluding the two places where recording
+content digest is sha256 over the sorted `git ls-tree -r -z` listing
+of the revision's tree, excluding the two places where recording
 verification itself writes:
 
-1. Run `git ls-tree -r <rev>`; each line is
-   `<mode> SP <type> SP <sha> TAB <path>`.
-2. Drop lines whose path is under `.orcinus/` or `docs/verification/`
-   (exact directory prefixes, with the slash — a file named
-   `.orcinus-notes.txt` still counts).
-3. Sort the remaining lines by path.
-4. Join with "\n" (no trailing newline), UTF-8, sha256 hex.
+1. Run `git ls-tree -r -z <rev>` and read the output as bytes;
+   each record is `<mode> SP <type> SP <sha> TAB <path>`,
+   records separated by NUL. The -z matters: without it git quotes
+   non-ASCII paths (core.quotePath=true, the default), so one tree
+   could hash two ways and a quoted `.orcinus/` path escaped the
+   exclusion below.
+2. Drop records whose path is under `.orcinus/` or
+   `docs/verification/` (exact directory prefixes, with the slash
+   — a file named `.orcinus-notes.txt` still counts).
+3. Sort the remaining records by path bytes.
+4. Join with b"\n" (no trailing newline), sha256 hex.
    The digest is recorded as `sha256:<hex>`.
+
+Format version 2 (round 5): version 1 hashed git's text display
+(`ls-tree -r`, no -z), which quotes non-ASCII paths — so a tree
+with a Persian filename had a different digest under
+core.quotePath=true than under false, and quoted state/evidence
+paths were not excluded. Digests computed by v1 on trees with
+non-ASCII paths are NOT comparable with v2 digests; on ASCII-only
+trees v1 and v2 agree byte for byte, so nothing already recorded
+there changes.
 
 Reference implementation: `scripts/content_digest.py` (standard
 library only; `python3 scripts/content_digest.py [repo] [rev]`).

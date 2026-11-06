@@ -243,3 +243,103 @@ def test_changelog_only_without_shipped_change_passes(tmp_path):
     )
     rc, out = _run(repo, base, _head(repo))
     assert rc == 0, out
+
+
+def test_non_ascii_skill_filename_without_bump_fails(tmp_path):
+    """R3 #1 (round 5): git quotes a non-ASCII path in --name-only
+    output (core.quotePath=true, the default), so the old check saw
+    '\"skills/\\330\\...' and the startswith('skills/') filter
+    missed a shipped file — a new Persian-named skill passed with
+    no bump and no changelog."""
+    repo = _repo(tmp_path)
+    base = _head(repo)
+    _commit(
+        repo,
+        {"skills/ایده-تازه/SKILL.md": "---\nname: idea\n---\n\nBody.\n"},
+        "persian skill name",
+    )
+    rc, out = _run(repo, base, _head(repo))
+    assert rc == 1, out
+    assert "version" in out.lower()
+
+
+def test_scripts_change_without_bump_fails(tmp_path):
+    """R4 F6 (round 5): scripts/ is shipped plugin content — the
+    plugin installs the whole repo, so the root scripts are present
+    there — but the old SHIPPED_PREFIXES did not include it, so a
+    change to e.g. scripts/content_digest.py passed with no bump."""
+    repo = _repo(tmp_path)
+    base = _head(repo)
+    _commit(repo, {"scripts/content_digest.py": "# changed\n"}, "scripts change")
+    rc, out = _run(repo, base, _head(repo))
+    assert rc == 1, out
+    assert "version" in out.lower()
+
+
+def test_version_downgrade_fails(tmp_path):
+    """R3 #5 (round 5): the old check only saw that the version
+    CHANGED, so a downgrade 0.9.1 -> 0.9.0 with a changelog entry
+    passed. After the first release a release must INCREASE the
+    version."""
+    repo = _repo(tmp_path)
+    _commit(
+        repo,
+        {
+            ".claude-plugin/plugin.json": json.dumps({"name": "x", "version": "0.9.1"}),
+            "CHANGELOG.md": "# Changelog\n\n## [0.9.1] — 2026-11-06\n\nFix.\n\n## [0.9.0] — 2026-11-06\n\nFirst.\n",
+        },
+        "release 0.9.1",
+    )
+    base = _head(repo)
+    _commit(
+        repo,
+        {
+            "skills/other/SKILL.md": "---\nname: other\n---\n\nNew.\n",
+            ".claude-plugin/plugin.json": json.dumps({"name": "x", "version": "0.9.0"}),
+            "CHANGELOG.md": "# Changelog\n\n## [0.9.0] — 2026-11-06\n\nDowngrade.\n\n## [0.9.1] — 2026-11-06\n\nFix.\n\n## [0.9.0] — 2026-11-06\n\nFirst.\n",
+        },
+        "downgrade to 0.9.0",
+    )
+    rc, out = _run(repo, base, _head(repo))
+    assert rc == 1, out
+    assert "0.9.1" in out and "0.9.0" in out
+
+
+def test_version_not_greater_than_latest_tag_fails(tmp_path):
+    """R3 #5 (round 5), tag half: a bump to 0.9.1 passes the
+    base comparison (0.9.0 -> 0.9.1) but 0.9.1 is already
+    released (tag v0.9.1 exists), so it must fail."""
+    repo = _repo(tmp_path)
+    _git(repo, "tag", "v0.9.1")
+    base = _head(repo)
+    _commit(
+        repo,
+        {
+            "skills/other/SKILL.md": "---\nname: other\n---\n\nNew.\n",
+            ".claude-plugin/plugin.json": json.dumps({"name": "x", "version": "0.9.1"}),
+            "CHANGELOG.md": "# Changelog\n\n## [0.9.1] — 2026-11-06\n\nFix.\n\n## [0.9.0] — 2026-11-06\n\nFirst.\n",
+        },
+        "bump to already-released 0.9.1",
+    )
+    rc, out = _run(repo, base, _head(repo))
+    assert rc == 1, out
+    assert "v0.9.1" in out
+
+
+def test_version_greater_than_latest_tag_passes(tmp_path):
+    """Control for the tag check: a bump past the latest release
+    tag passes."""
+    repo = _repo(tmp_path)
+    _git(repo, "tag", "v0.9.1")
+    base = _head(repo)
+    _commit(
+        repo,
+        {
+            "skills/other/SKILL.md": "---\nname: other\n---\n\nNew.\n",
+            ".claude-plugin/plugin.json": json.dumps({"name": "x", "version": "0.9.2"}),
+            "CHANGELOG.md": "# Changelog\n\n## [0.9.2] — 2026-11-06\n\nFix.\n\n## [0.9.0] — 2026-11-06\n\nFirst.\n",
+        },
+        "bump to 0.9.2",
+    )
+    rc, out = _run(repo, base, _head(repo))
+    assert rc == 0, out

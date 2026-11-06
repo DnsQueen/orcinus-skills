@@ -1,0 +1,1 @@
+{"description":"ORCINUS — one integrated companion for building software with a coding agent, from raw idea to publish. Dev tooling only: the Claude Code CLI, for `claude plugin validate` in CI.","devDependencies":{"@anthropic-ai/claude-code":"2.1.318"},"name":"orcinus-skills","private":true}

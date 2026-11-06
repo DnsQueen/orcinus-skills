@@ -562,3 +562,113 @@ def test_set_status_rewrites_only_the_frontmatter(tmp_path):
         "source: test\nstatus: calibrated\n---\n"
     )
     assert "an idea whose text says\nstatus: raw\non its own line" in content
+
+
+# --- Fifth review round (2026-11-06): lock recovery (F7) ---
+
+
+def _dead_pid():
+    """A PID that is certainly dead: a process that already exited."""
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    pid = proc.pid
+    proc.wait()
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return pid
+    raise AssertionError(f"PID {pid} was reused immediately")
+
+
+def _lock_path(store, idea_id):
+    return store / f".{idea_id}.md.lock"
+
+
+def test_stale_lock_from_dead_process_is_recovered(tmp_path):
+    """F7: a lock file left by a dead holder must not block promote
+    forever — the stale lock is recovered and the change succeeds."""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "stale lock idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    _lock_path(store, idea_id).write_text(f"{_dead_pid()}\n", encoding="utf-8")
+    rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
+    assert rc == 0, err
+    assert "stale lock" in err
+    assert list(store.glob(".*.lock")) == []
+    content = (store / f"{idea_id}.md").read_text(encoding="utf-8")
+    assert "status: calibrated" in content
+
+
+def test_live_holder_still_blocks_promote(tmp_path):
+    """A lock whose holder is alive still blocks promote — the
+    'another process' error is truthful, and the lock is not stolen."""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "live holder idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    lock = _lock_path(store, idea_id)
+    lock.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
+    assert rc == 1
+    assert "another process" in err
+    assert str(os.getpid()) in err
+    assert lock.is_file(), "a live holder's lock must not be removed"
+
+
+def test_lock_without_pid_is_not_stolen(tmp_path):
+    """A lock file with no readable PID (the old empty format, or a
+    torn write) is treated as held — fail-safe, never stolen."""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "no pid idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    lock = _lock_path(store, idea_id)
+    lock.write_text("", encoding="utf-8")
+    rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
+    assert rc == 1
+    assert "another process" in err
+    assert lock.is_file(), "a lock without a PID must not be removed"
+
+
+def test_killed_holder_recovery(tmp_path):
+    """F7, end to end: a holder SIGKILLed mid-change leaves a lock
+    file, but the next promote must succeed."""
+    import signal
+    import time
+
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "killed holder idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    idea_path = store / f"{idea_id}.md"
+    lock_path = _lock_path(store, idea_id)
+    scripts_dir = str(Path(__file__).resolve().parent)
+    holder_code = (
+        "import sys, time\n"
+        f"sys.path.insert(0, {scripts_dir!r})\n"
+        "from pathlib import Path\n"
+        "from capture import _acquire_lock\n"
+        f"fd, lock_path, _ = _acquire_lock(Path({str(idea_path)!r}))\n"
+        "assert fd is not None\n"
+        "time.sleep(30)\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", holder_code],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not lock_path.is_file() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert lock_path.is_file(), "the holder never acquired the lock"
+        proc.send_signal(signal.SIGKILL)
+        proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+    rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
+    assert rc == 0, err
+    assert list(store.glob(".*.lock")) == []

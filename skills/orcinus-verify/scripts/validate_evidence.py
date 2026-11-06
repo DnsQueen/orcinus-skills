@@ -26,9 +26,14 @@ Two layers, kept separate:
    typecheck, test) must be required or explicitly waived with a
    reason; silence is not a waiver. A PASS for a behaviour change
    (bug-fix, feature, refactor) additionally needs the test gate and
-   a fail-first proof. An honest FAIL or INCOMPLETE report is a valid
-   bundle: the fail-first and plan rules are PASS rules, never
-   validity rules — only a PASS must satisfy them.
+   a fail-first proof. Every check that ran (verdict PASS or FAIL)
+   must carry its output — an artifact file with its sha256, or
+   inline text — so a PASS with no reviewable output is rejected.
+   A bundle with no checks at all is valid only as INCOMPLETE, with
+   a stop_reason saying why the verification stopped. An honest FAIL
+   or INCOMPLETE report is a valid bundle: the fail-first and plan
+   rules are PASS rules, never validity rules — only a PASS must
+   satisfy them.
 
 Structural validation runs first. If it finds any problem, the
 semantic checks do not run at all: a malformed bundle produces a
@@ -48,9 +53,13 @@ install it is the skill folder itself).
 The validator does not prove the evidence is true — a bundle can
 claim a command passed while the command never ran. It proves the
 bundle is complete and self-consistent, so a missing check or a
-contradicted verdict cannot slip through as a PASS.
+contradicted verdict cannot slip through as a PASS. Since v3 every
+executed check must also carry its output, so a PASS with no
+reviewable output is rejected — but the output itself can still be
+fabricated, which is what the agent-behaviour eval measures.
 """
 
+import hashlib
 import json
 import re
 import sys
@@ -82,6 +91,7 @@ SUPPORTED_KEYWORDS = {
     "minimum",
     "maximum",
     "format",
+    "pattern",
     # Documentation-only keys, ignored by the interpreter.
     "description",
     "title",
@@ -179,6 +189,9 @@ def _validate(instance, schema, path, problems):
             problems.append(f"{path or 'value'} must be >= {schema['minimum']}")
         if "maximum" in schema and instance > schema["maximum"]:
             problems.append(f"{path or 'value'} must be <= {schema['maximum']}")
+    if isinstance(instance, str) and "pattern" in schema:
+        if not re.fullmatch(schema["pattern"], instance):
+            problems.append(f"{path or 'value'} must match {schema['pattern']!r}")
     if "format" in schema:
         if schema["format"] == "date-time":
             if not _is_iso8601(instance):
@@ -249,6 +262,7 @@ def expected_verdict(bundle):
         or (isinstance(unverified, list) and bool(unverified))
         or [c for c in checks if c.get("unverified_items")]
         or (isinstance(criteria, list) and not criteria)
+        or not checks
     )
     if blocking or failed:
         return "FAIL"
@@ -452,23 +466,99 @@ def check_time_order(bundle, problems):
 
 
 def check_artifacts(bundle, problems, bundle_dir):
-    """An artifact path that does not exist is not evidence. Paths
-    resolve relative to the bundle file (absolute paths resolve as
-    themselves). Skipped when the bundle directory is unknown (the
-    in-process API without a directory) — the CLI always passes it."""
-    if bundle_dir is None:
-        return
-    base = Path(bundle_dir)
+    """An artifact path that does not exist is not evidence, and an
+    artifact without its sha256 is a claim nobody can verify: the
+    file could have been replaced after the run. When the bundle
+    directory is known the recorded hash must match the file. The
+    sha256-presence rule needs no file, so it runs even when the
+    bundle directory is unknown (the in-process API without a
+    directory); the existence and match rules are skipped then —
+    the CLI always passes the directory."""
     for c in _checks(bundle):
-        for field in ("stdout_artifact", "stderr_artifact"):
+        for field, hash_field in (
+            ("stdout_artifact", "stdout_sha256"),
+            ("stderr_artifact", "stderr_sha256"),
+        ):
             artifact = c.get(field)
             if not isinstance(artifact, str) or not artifact:
                 continue
-            if not (base / artifact).is_file():
+            recorded = c.get(hash_field)
+            if not isinstance(recorded, str) or not recorded:
+                problems.append(
+                    f"check {c.get('name')!r} {field} {artifact!r} "
+                    f"has no {hash_field}: an artifact without its "
+                    f"sha256 cannot be verified"
+                )
+            if bundle_dir is None:
+                continue
+            path = Path(bundle_dir) / artifact
+            if not path.is_file():
                 problems.append(
                     f"check {c.get('name')!r} {field} {artifact!r} "
                     f"does not exist (relative to the bundle)"
                 )
+                continue
+            if isinstance(recorded, str) and recorded:
+                try:
+                    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                except OSError as e:
+                    problems.append(
+                        f"check {c.get('name')!r} {field} {artifact!r} cannot be read: {e}"
+                    )
+                    continue
+                if actual != recorded:
+                    problems.append(
+                        f"check {c.get('name')!r} {field} {artifact!r} "
+                        f"sha256 mismatch: the file changed since the "
+                        f"bundle was written"
+                    )
+
+
+def check_output_present(bundle, problems):
+    """Every check that ran must carry its output: an artifact file
+    or inline text. A PASS with no reviewable output is not
+    evidence (reviewer 4, F4). INCOMPLETE checks are exempt — a
+    check that could not run has no output to show, and claiming
+    INCOMPLETE to dodge the rule costs the PASS anyway."""
+    for c in _checks(bundle):
+        if c.get("verdict") not in ("PASS", "FAIL"):
+            continue
+        has_output = any(
+            isinstance(c.get(field), str) and c[field]
+            for field in (
+                "stdout_artifact",
+                "stderr_artifact",
+                "stdout_text",
+                "stderr_text",
+            )
+        )
+        if not has_output:
+            problems.append(
+                f"check {c.get('name')!r} has verdict {c.get('verdict')} "
+                f"but no output: record an artifact (with its sha256) "
+                f"or inline stdout_text/stderr_text"
+            )
+
+
+def check_empty_checks(bundle, problems):
+    """A bundle with no checks at all is an honest stop only as
+    INCOMPLETE with a recorded reason (reviewer 4, F5). Without
+    the reason it says nothing; as PASS it claims a verification
+    that never ran."""
+    checks = bundle.get("checks")
+    if not isinstance(checks, list) or checks:
+        return
+    if bundle.get("verdict") != "INCOMPLETE":
+        problems.append(
+            "checks is empty but the verdict is not INCOMPLETE: no "
+            "check ran, so the verification cannot be PASS or FAIL"
+        )
+    reason = bundle.get("stop_reason")
+    if not isinstance(reason, str) or not reason:
+        problems.append(
+            "checks is empty but there is no stop_reason: record why "
+            "the verification stopped before the first check"
+        )
 
 
 def check_dirty_files(bundle, problems):
@@ -495,6 +585,8 @@ def validate_bundle(bundle, schema, bundle_dir=None):
     check_acceptance_criteria(bundle, problems)
     check_time_order(bundle, problems)
     check_artifacts(bundle, problems, bundle_dir)
+    check_output_present(bundle, problems)
+    check_empty_checks(bundle, problems)
     check_dirty_files(bundle, problems)
     return problems
 

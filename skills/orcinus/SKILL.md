@@ -1,6 +1,6 @@
 ---
 name: orcinus
-description: One integrated companion for building software with a coding agent, from raw idea to publish. Use when starting, continuing, or finishing any software project, or when you need to know what stage you are in and what comes next.
+description: One integrated companion for building software with a coding agent, from raw idea to publish. Use when the user asks for the ORCINUS lifecycle — starting, continuing, or finishing a project through its stages — or asks what stage their project is in and what comes next.
 license: MIT
 ---
 
@@ -25,7 +25,7 @@ Read `references/GLOSSARY.md` (bundled with this skill; the canonical copy is th
 
 Use evidence in the repo and the conversation, not a guess.
 
-The linear stages run Idea → Architecture → Coding (Scaffold, Build) → Verify → Finalize. Security and Debugging are cross-cutting: they can apply at any linear stage (a slice can be in Build and need a security review, or in Verify and need debugging), so they share the 50–79 band by design rather than by accident. When a cross-cutting concern applies, route to it alongside the linear stage — do not treat the overlap as an ambiguity.
+The linear stages run Idea → Architecture → Coding (Scaffold, Build) → Verify → Finalize. Security and Debugging are cross-cutting: they can apply at any linear stage (a slice can be in Build and need a security review, or in Verify and need debugging), so they share the 50–79 band by design rather than by accident. Accessibility is cross-cutting the same way: the audit is staged at 20–39, where the UI work happens, but the gate applies before ship — route to it alongside the linear stage, not instead of it. When a cross-cutting concern applies, route to it alongside the linear stage — do not treat the overlap as an ambiguity.
 
 - **Idea (0–9):** no repo yet, or only a rough brief. No code to verify.
 - **Architecture (10–19):** an idea exists, but no tree, contract, or invariants yet.
@@ -83,7 +83,7 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 
 ## When a sub-skill is missing
 
-Check the skill's status in `docs/MAP.md` first — the table is the decision procedure:
+Check the skill's status in `references/skill-status.md` first — the table is the decision procedure. It travels with this skill (generated from the repo's MAP); never read the user's own MAP file — that is the user's file, not ORCINUS's — and in a skill-only install the repo's docs are not present at all:
 
 | The skill's status | What to do |
 |---|---|
@@ -107,7 +107,7 @@ Minor gates are checked by running the commands and reading their real output.
 
 - Do one slice at a time. A slice is one behaviour with one test.
 - End every session in a clean state: tests run, progress recorded, git status clean or committed with a clear message.
-- If context is getting long, write a handoff file with the handoff skill before continuing: what is done, what is next, what is blocked, and what must not be forgotten. The handoff file is the progress file — there is no second, separate progress file. Continuity has two records, and they are not the same thing: `.orcinus/state.json` is the durable record of the lifecycle stage (see `docs/project-state.md`); the handoff file is the session-transfer document for the next session.
+- If context is getting long, write a handoff file with the handoff skill before continuing: what is done, what is next, what is blocked, and what must not be forgotten. The handoff file is the progress file — there is no second, separate progress file. Continuity has two records, and they are not the same thing: `.orcinus/state.json` is the durable record of the lifecycle stage (see `references/project-state.md`, bundled with this skill); the handoff file is the session-transfer document for the next session.
 - If a check fails, report the exact command and output, fix only the cause, and re-run the full verification. After 3 failed loops, stop and hand back to the user.
 
 ## What ORCINUS is not

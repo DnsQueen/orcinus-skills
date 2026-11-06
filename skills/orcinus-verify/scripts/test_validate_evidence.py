@@ -25,7 +25,7 @@ def _problems(bundle):
 
 def _good_bundle():
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "revision": "abc1234",
         "working_tree_state": "clean",
         "requirement": "Fix the Persian capture crash.",
@@ -41,6 +41,7 @@ def _good_bundle():
                 "tool_version": "pytest 8.4.2",
                 "started_at": "2026-11-06T10:00:00Z",
                 "finished_at": "2026-11-06T10:00:12Z",
+                "stdout_text": "45 passed in 0.42s",
             },
             {
                 "name": "lint",
@@ -51,6 +52,7 @@ def _good_bundle():
                 "tool_version": "ruff 0.17.4",
                 "started_at": "2026-11-06T10:00:12Z",
                 "finished_at": "2026-11-06T10:00:13Z",
+                "stdout_text": "All checks passed!",
             },
         ],
         "findings": [],
@@ -444,7 +446,10 @@ def test_finding_without_severity_fails():
 
 def test_severity_less_finding_is_blocking():
     # Fail-closed: anything not explicitly "non-blocking" counts as
-    # blocking in the verdict computation itself.
+    # blocking in the verdict computation itself. The non-blocking
+    # case needs a passing check: since v3 an empty checks list
+    # means "stopped before the first check" and is INCOMPLETE,
+    # not PASS.
     assert (
         ve.expected_verdict(
             {"findings": [{"severity": "blocking"}], "checks": [], "unverified_items": []}
@@ -454,7 +459,11 @@ def test_severity_less_finding_is_blocking():
     assert ve.expected_verdict({"findings": [{}], "checks": [], "unverified_items": []}) == "FAIL"
     assert (
         ve.expected_verdict(
-            {"findings": [{"severity": "non-blocking"}], "checks": [], "unverified_items": []}
+            {
+                "findings": [{"severity": "non-blocking"}],
+                "checks": [{"verdict": "PASS"}],
+                "unverified_items": [],
+            }
         )
         == "PASS"
     )
@@ -489,11 +498,14 @@ def test_finished_before_started_fails():
 def test_missing_stdout_artifact_fails(tmp_path):
     # An artifact path that does not exist (relative to the bundle)
     # must fail: a claimed output nobody can read is not evidence.
+    # Since v3 the artifact also needs its sha256 recorded.
+    import hashlib
     import json
 
     b = _good_bundle()
     b["checks"][0]["stdout_artifact"] = "logs/pytest-stdout.log"
     b["checks"][0]["stderr_artifact"] = "logs/pytest-stderr.log"
+    b["checks"][0].pop("stdout_text", None)
     bundle = tmp_path / "bundle.json"
     bundle.write_text(json.dumps(b), encoding="utf-8")
     problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
@@ -502,6 +514,8 @@ def test_missing_stdout_artifact_fails(tmp_path):
     (tmp_path / "logs").mkdir()
     (tmp_path / "logs" / "pytest-stdout.log").write_text("ok")
     (tmp_path / "logs" / "pytest-stderr.log").write_text("")
+    b["checks"][0]["stdout_sha256"] = hashlib.sha256(b"ok").hexdigest()
+    b["checks"][0]["stderr_sha256"] = hashlib.sha256(b"").hexdigest()
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
 
@@ -573,9 +587,107 @@ def test_change_type_must_be_a_known_value():
 
 
 def test_old_schema_version_is_rejected():
-    # The v0.9.1 schema (version 2) adds required fields and rules;
-    # a v1 bundle must not silently pass under it.
+    # The v0.9.2 schema (version 3) adds required fields and rules;
+    # a v2 bundle must not silently pass under it.
     b = _good_bundle()
-    b["schema_version"] = 1
+    b["schema_version"] = 2
     problems = _problems(b)
     assert any("schema_version" in p for p in problems)
+
+
+def test_pass_check_without_any_output_fails():
+    # F4 (round 5): a PASS bundle whose checks carry no output at
+    # all — no artifact, no inline text — used to validate. The
+    # validator proved the bundle was complete and self-consistent,
+    # not that any check really ran.
+    b = _good_bundle()
+    for c in b["checks"]:
+        c.pop("stdout_text", None)
+        c.pop("stderr_text", None)
+        c.pop("stdout_artifact", None)
+        c.pop("stderr_artifact", None)
+    problems = _problems(b)
+    assert any("output" in p for p in problems)
+
+
+def test_artifact_without_sha256_fails(tmp_path):
+    # F4 / R3 #19: an artifact without its sha256 is a claim nobody
+    # can verify — the file could have been replaced after the run.
+    b = _good_bundle()
+    b["checks"][0]["stdout_artifact"] = "logs/pytest-stdout.log"
+    b["checks"][0].pop("stdout_text", None)
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "pytest-stdout.log").write_text("ok")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("sha256" in p for p in problems)
+
+
+def test_artifact_with_wrong_sha256_fails(tmp_path):
+    # The hash must match the file, or the artifact changed since
+    # the bundle was written.
+    b = _good_bundle()
+    b["checks"][0]["stdout_artifact"] = "logs/pytest-stdout.log"
+    b["checks"][0]["stdout_sha256"] = "0" * 64
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "pytest-stdout.log").write_text("ok")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("sha256" in p for p in problems)
+
+
+def test_artifact_with_correct_sha256_passes(tmp_path):
+    # Control for the two tests above: artifact + matching hash is
+    # valid evidence.
+    import hashlib
+
+    b = _good_bundle()
+    content = "2 passed in 0.12s\n"
+    b["checks"][0]["stdout_artifact"] = "logs/pytest-stdout.log"
+    b["checks"][0]["stdout_sha256"] = hashlib.sha256(content.encode()).hexdigest()
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "pytest-stdout.log").write_text(content)
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
+
+
+def test_sha256_must_be_hex():
+    # The schema pins the hash format: 64 lowercase hex chars.
+    b = _good_bundle()
+    b["checks"][0]["stdout_artifact"] = "logs/out.log"
+    b["checks"][0]["stdout_sha256"] = "not-a-hash"
+    problems = _problems(b)
+    assert any("sha256" in p for p in problems)
+
+
+def test_incomplete_with_no_checks_and_stop_reason_is_valid():
+    # F5 (round 5): the verifier stopped before the first check
+    # (no acceptance criteria) — the bundle records the stop with
+    # a reason instead of inventing a check. The old schema
+    # rejected checks: [] (minItems 1) and had no reason field, so
+    # the stop the SKILL.md promises could not be filed.
+    b = _good_bundle()
+    b["verdict"] = "INCOMPLETE"
+    b["acceptance_criteria"] = []
+    b["checks"] = []
+    b["stop_reason"] = "no acceptance criteria were given; stopped"
+    b["unverified_items"] = ["no acceptance criteria were given; stopped"]
+    assert _problems(b) == []
+
+
+def test_empty_checks_without_stop_reason_fails():
+    # An empty checks list with no recorded reason is not an
+    # honest stop — it is a bundle that says nothing.
+    b = _good_bundle()
+    b["verdict"] = "INCOMPLETE"
+    b["acceptance_criteria"] = []
+    b["checks"] = []
+    b["unverified_items"] = ["no acceptance criteria were given; stopped"]
+    problems = _problems(b)
+    assert any("stop_reason" in p for p in problems)
+
+
+def test_empty_checks_with_pass_verdict_fails():
+    # No checks can never be a PASS, even with a stop reason.
+    b = _good_bundle()
+    b["checks"] = []
+    b["stop_reason"] = "no acceptance criteria were given; stopped"
+    problems = _problems(b)
+    assert problems

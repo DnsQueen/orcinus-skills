@@ -374,25 +374,125 @@ def cmd_show(args) -> int:
     return 0
 
 
+def _read_lock_pid(lock_path):
+    """The PID recorded in a lock file, or None when it cannot be read
+    (empty file, torn write, non-numeric content, or the file is gone).
+    A missing PID means the lock cannot be proven stale, so the caller
+    must treat it as held."""
+    try:
+        text = lock_path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        pid = int(text)
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _pid_is_alive(pid):
+    """True when the process exists. A PermissionError means the
+    process exists but belongs to another user — alive, so the lock
+    is held. (A reused PID can make a stale lock look held; the cost
+    is a wait and an error, never a stolen lock.)"""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def _acquire_lock(path: Path, timeout_s: float = 2.0):
     """A lock file for one idea, created with O_EXCL so two processes
-    cannot hold it at once. Returns (fd, lock_path), or (None, None)
-    when the lock is already held after the timeout. The caller must
-    release it (close + unlink) in a finally block."""
+    cannot hold it at once. The holder's PID is written into the file
+    the moment it is created, so a later process can tell a live holder
+    from a dead one. Returns (fd, lock_path, holder_pid): fd is None
+    when the lock is already held after the timeout, and holder_pid is
+    then the live holder's PID when it could be read, else None. The
+    caller must release it (close + unlink) in a finally block.
+
+    Recovery: when the lock file names a dead process, the lock is
+    stale — it is removed with a note on stderr and acquisition is
+    retried. A lock file with no readable PID is treated as held
+    (fail-safe); a lock is never removed for age. After acquiring, the
+    file's inode is checked against the open fd: if another process
+    removed this lock and created its own in between, the acquisition
+    is discarded and retried, so a lock replaced before verification
+    is never mistaken for held.
+
+    Known limits: a holder killed between creating the lock file and
+    writing its PID leaves an empty lock file, which is treated as
+    held — the window is a single write syscall. Two processes
+    recovering the same stale lock at the same instant can still
+    interleave (one unlinks the other's just-created lock); the
+    window is the microseconds between reading the dead PID and
+    unlinking, and the consequence is a lost History entry, not a
+    corrupt file."""
     import time
 
     lock_path = path.parent / f".{path.name}.lock"
     deadline = time.monotonic() + timeout_s
+    holder_pid = None
     while True:
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            return fd, lock_path
         except FileExistsError:
+            pid = _read_lock_pid(lock_path)
+            if pid is not None and not _pid_is_alive(pid):
+                # Stale lock: the holder is gone. Remove it and retry.
+                try:
+                    os.unlink(lock_path)
+                except OSError:
+                    pass
+                else:
+                    print(
+                        f"note: stale lock {lock_path.name} removed "
+                        f"(holder process {pid} no longer exists)",
+                        file=sys.stderr,
+                    )
+                continue
+            if pid is not None:
+                holder_pid = pid
             if time.monotonic() >= deadline:
-                return None, None
+                return None, lock_path, holder_pid
             time.sleep(0.1)
+            continue
         except OSError:
-            return None, None
+            return None, lock_path, None
+        # We created the file: record our PID at once. If the write
+        # fails we never held the lock, so remove the file we made.
+        try:
+            os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
+            try:
+                os.fsync(fd)
+            except OSError:
+                pass
+        except OSError:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
+            return None, lock_path, None
+        # Verify the file we created is still the one at this path:
+        # another process recovering the same stale lock may have
+        # removed it and created its own in between.
+        try:
+            same = os.fstat(fd).st_ino == os.stat(lock_path).st_ino
+        except OSError:
+            same = False
+        if not same:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            continue
+        return fd, lock_path, None
 
 
 def _release_lock(fd, lock_path) -> None:
@@ -419,12 +519,18 @@ def _set_status(store: Path, idea_id: str, new_status: str, note: str) -> int:
     # status changes read the same version and the second one's write
     # silently drops the first one's History entry (a lost update).
     # The atomic replace alone only prevents a half-written file.
-    fd, lock_path = _acquire_lock(path)
+    fd, lock_path, holder_pid = _acquire_lock(path)
     if fd is None:
-        print(
-            f"error: {idea_id} is being changed by another process",
-            file=sys.stderr,
-        )
+        if holder_pid is not None:
+            print(
+                f"error: {idea_id} is being changed by another process (pid {holder_pid})",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"error: {idea_id} is being changed by another process",
+                file=sys.stderr,
+            )
         return 1
     try:
         return _set_status_locked(path, idea_id, new_status, note)

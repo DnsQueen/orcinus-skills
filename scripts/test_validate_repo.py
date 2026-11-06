@@ -1067,3 +1067,264 @@ def test_security_versions_missing_fails(tmp_path, monkeypatch):
     (root / "SECURITY.md").unlink()
     failures = _run_with_root(monkeypatch, root, vr.check_security_versions)
     assert failures, "a missing SECURITY.md must fail"
+
+
+# --- Round 5, T5: router self-containment (R3 #7 / F3) ---
+
+
+def _router_resources_repo(tmp_path):
+    """A minimal repo with the router resources generated from its MAP."""
+    root = _minimal_repo(tmp_path)
+    (root / "scripts").mkdir()
+    repo_root = Path(__file__).resolve().parent.parent
+    (root / "scripts" / "generate_router_resources.py").write_bytes(
+        (repo_root / "scripts" / "generate_router_resources.py").read_bytes()
+    )
+    (root / "docs" / "project-state.md").write_text("# State\n", encoding="utf-8")
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import generate_router_resources as grr
+
+    grr.write_router_resources(root)
+    return root
+
+
+def test_router_resources_pass(tmp_path, monkeypatch):
+    root = _router_resources_repo(tmp_path)
+    assert _run_with_root(monkeypatch, root, vr.check_router_resources) == []
+
+
+def test_router_resources_stale_status_fails(tmp_path, monkeypatch):
+    # A MAP change without regenerating must fail: the bundled status
+    # table is the router's decision table in a standalone install,
+    # so a stale copy misclassifies skills.
+    root = _router_resources_repo(tmp_path)
+    map_file = root / "docs" / "MAP.md"
+    map_file.write_text(
+        map_file.read_text(encoding="utf-8") + "| New step | some-skill | MIT | copy | todo |\n",
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_router_resources)
+    assert any("skill-status.md" in f for f in failures)
+
+
+def test_router_resources_missing_status_fails(tmp_path, monkeypatch):
+    root = _router_resources_repo(tmp_path)
+    (root / "skills" / "orcinus" / "references" / "skill-status.md").unlink()
+    failures = _run_with_root(monkeypatch, root, vr.check_router_resources)
+    assert any("skill-status.md" in f for f in failures)
+
+
+def test_router_resources_missing_project_state_fails(tmp_path, monkeypatch):
+    root = _router_resources_repo(tmp_path)
+    (root / "skills" / "orcinus" / "references" / "project-state.md").unlink()
+    failures = _run_with_root(monkeypatch, root, vr.check_router_resources)
+    assert any("project-state.md" in f for f in failures)
+
+
+def test_router_resources_diverged_project_state_fails(tmp_path, monkeypatch):
+    # The bundled state spec must be a byte-identical copy of the
+    # canonical spec — a divergent copy makes two sessions disagree
+    # about what VERIFIED means.
+    root = _router_resources_repo(tmp_path)
+    bundled = root / "skills" / "orcinus" / "references" / "project-state.md"
+    bundled.write_text("# State\n\nEdited.\n", encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_router_resources)
+    assert any("project-state.md" in f for f in failures)
+
+
+def test_router_resources_missing_generator_fails(tmp_path, monkeypatch):
+    # The check cannot run without its generator — that is a failure,
+    # never a silent pass.
+    root = _minimal_repo(tmp_path)
+    (root / "docs" / "project-state.md").write_text("# State\n", encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_router_resources)
+    assert any("generate_router_resources.py" in f for f in failures)
+
+
+# --- Round 5, T8: licences + wording (R3 #8, #9, #10, #12, #13) ---
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+ROUTER_SENTENCE = "Only invoke via the orcinus router."
+
+
+def _manifest():
+    return json.loads((REPO_ROOT / "skills" / "manifest.json").read_text(encoding="utf-8"))
+
+
+def _frontmatter_description(skill):
+    fields, _ = vr.parse_frontmatter(REPO_ROOT / "skills" / skill / "SKILL.md")
+    return fields["description"]
+
+
+def test_router_description_is_narrow():
+    """The router must trigger on the user asking for the ORCINUS
+    lifecycle / stage — not on any coding conversation (R3 #13)."""
+    desc = _frontmatter_description("orcinus")
+    assert "ORCINUS lifecycle" in desc
+    assert "any software project" not in desc
+
+
+def test_i18n_description_has_no_slash_command():
+    """Sub-skills are user-invocable: false, so no description may
+    tell the user to type /<skill> (R3 #9)."""
+    desc = _frontmatter_description("i18n")
+    assert "/i18n" not in desc
+
+
+def test_no_slash_invocation_in_subskill_descriptions(tmp_path, monkeypatch):
+    """A sub-skill description that instructs a slash invocation
+    must fail the validator check."""
+    root = _minimal_repo(tmp_path)
+    assert _run_with_root(monkeypatch, root, vr.check_no_slash_invocation) == []
+    other = root / "skills" / "other" / "SKILL.md"
+    other.write_text(
+        other.read_text(encoding="utf-8").replace(
+            "description: Other.", "description: Other. Use when the user types /other."
+        ),
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_no_slash_invocation)
+    assert any("/other" in f for f in failures)
+
+
+def _stages_repo(tmp_path, stages):
+    root = _minimal_repo(tmp_path)
+    (root / "skills" / "stages.json").write_text(
+        json.dumps({"note": "test", "stages": stages}), encoding="utf-8"
+    )
+    return root
+
+
+def _write_stages(root, stages):
+    (root / "skills" / "stages.json").write_text(
+        json.dumps({"note": "test", "stages": stages}), encoding="utf-8"
+    )
+
+
+def test_stage_containment(tmp_path, monkeypatch):
+    """Every coarse stages.json range is built from the router's fine
+    ranges, and each fine stage's primary skill contains that stage
+    (R3 #10)."""
+    stages = {
+        "idea-capture": ["0-9"],
+        "idea-calibrate": ["0-9"],
+        "architecture": ["10-19"],
+        "scaffold": ["20-39"],
+        "build": ["20-39"],
+        "orcinus-verify": ["40-59"],
+        "security-review": ["50-79"],
+        "diagnosing-bugs": ["50-79"],
+        "refactor": ["50-79"],
+        "incomplete-refactor": ["50-79"],
+        "finalize": ["80-100"],
+    }
+    root = _stages_repo(tmp_path, stages)
+    assert _run_with_root(monkeypatch, root, vr.check_stage_containment) == []
+    # A coarse range that no longer contains its fine stage fails.
+    stages["build"] = ["20-29"]
+    _write_stages(root, stages)
+    failures = _run_with_root(monkeypatch, root, vr.check_stage_containment)
+    assert any("build" in f and "30–39" in f for f in failures)
+    # A coarse range that starts or ends mid-stage fails too.
+    stages["build"] = ["20-39"]
+    stages["scaffold"] = ["20-35"]
+    _write_stages(root, stages)
+    failures = _run_with_root(monkeypatch, root, vr.check_stage_containment)
+    assert any("scaffold" in f for f in failures)
+
+
+def test_stage_containment_passes_on_real_repo(monkeypatch):
+    monkeypatch.setattr(vr, "ROOT", REPO_ROOT)
+    vr.failures.clear()
+    vr.check_stage_containment()
+    assert list(vr.failures) == []
+
+
+def test_apache_change_notices():
+    """Every modified Apache-2.0 file carries its ORCINUS change
+    notice in the file itself (Apache-2.0 §4(b), R3 #8)."""
+    modified = [
+        "skills/mcp-builder/SKILL.md",
+        "skills/skill-creator/SKILL.md",
+        "skills/webapp-testing/SKILL.md",
+        "skills/webapp-testing/scripts/with_server.py",
+        "agents/analyzer.md",
+        "agents/comparator.md",
+        "agents/grader.md",
+    ]
+    for rel in modified:
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert "ORCINUS change notice" in text, f"{rel} has no change notice"
+
+
+def test_router_note_recorded_in_attribution():
+    """Every vendored description that carries the ORCINUS router
+    sentence must record the append in its ATTRIBUTION.md — a
+    'description verbatim' claim next to that sentence is false
+    (R3 #8)."""
+    manifest = _manifest()
+    for name, skill in sorted(manifest["skills"].items()):
+        if skill.get("integration") != "verbatim":
+            continue
+        if not skill["description"].endswith(ROUTER_SENTENCE):
+            continue
+        attribution = (REPO_ROOT / "skills" / name / "ATTRIBUTION.md").read_text(encoding="utf-8")
+        assert "router-only note" in attribution or "router sentence" in attribution, (
+            f"{name}/ATTRIBUTION.md does not record the router-sentence append"
+        )
+
+
+def test_orcinus_verify_uses_relative_validator_path():
+    """The validator is invoked by a path relative to the skill
+    folder, not ${CLAUDE_PLUGIN_ROOT} — the host may not substitute
+    the variable inside skill text (R3 #12)."""
+    text = (REPO_ROOT / "skills" / "orcinus-verify" / "SKILL.md").read_text(encoding="utf-8")
+    assert "python3 scripts/validate_evidence.py" in text
+    assert "${CLAUDE_PLUGIN_ROOT}/skills/orcinus-verify/scripts/validate_evidence.py" not in text
+
+
+# --- Round 5, T10: README skill table parity (R3 #20) ---
+
+
+def _readme_table_repo(tmp_path):
+    """A minimal repo whose README carries a generated skill table."""
+    root = _minimal_repo(tmp_path)
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import generate_readme_table as grt
+
+    (root / "scripts").mkdir(exist_ok=True)
+    repo_root = Path(__file__).resolve().parent.parent
+    (root / "scripts" / "generate_readme_table.py").write_bytes(
+        (repo_root / "scripts" / "generate_readme_table.py").read_bytes()
+    )
+    manifest = json.loads((root / "skills" / "manifest.json").read_text())
+    table = grt.build_skill_table(manifest)
+    (root / "README.md").write_text(
+        "# Test\n\n" + grt.BEGIN + "\n" + table + grt.END + "\n", encoding="utf-8"
+    )
+    return root
+
+
+def test_readme_skill_table_passes(tmp_path, monkeypatch):
+    root = _readme_table_repo(tmp_path)
+    assert _run_with_root(monkeypatch, root, vr.check_readme_skill_table) == []
+
+
+def test_readme_skill_table_stale_fails(tmp_path, monkeypatch):
+    root = _readme_table_repo(tmp_path)
+    readme = root / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace(
+            "| [orcinus](skills/orcinus) |", "| [orcinus](skills/orcinus) | 0-100 |"
+        ),
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_readme_skill_table)
+    assert any("skill table" in f for f in failures)
+
+
+def test_readme_skill_table_missing_markers_fails(tmp_path, monkeypatch):
+    root = _minimal_repo(tmp_path)
+    failures = _run_with_root(monkeypatch, root, vr.check_readme_skill_table)
+    assert any("skill table" in f for f in failures)

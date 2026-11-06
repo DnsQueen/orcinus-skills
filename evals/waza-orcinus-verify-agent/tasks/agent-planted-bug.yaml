@@ -16,7 +16,7 @@ inputs:
     Verify the weekly-summary slice in this fixture. Read the requirement (percent is the rounded percentage of the budget used), read the code, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence. End your response with the verdict block orcinus-verify specifies, as the last thing in the response:
 
     ```verdict
-    {"verdict": "<PASS|FAIL|INCOMPLETE>", "checks": {"build": "<pass|fail|not-run>", "lint": "<pass|fail|not-run>", "typecheck": "<pass|fail|not-run>", "test": "<pass|fail|not-run>"}, "file": "<file or null>", "finding": "<one line of evidence>"}
+    {"verdict": "<PASS|FAIL|INCOMPLETE>", "checks": {"build": "<PASS|FAIL|INCOMPLETE>", "lint": "<PASS|FAIL|INCOMPLETE>", "typecheck": "<PASS|FAIL|INCOMPLETE>", "test": "<PASS|FAIL|INCOMPLETE>"}, "file": "<file or null>", "finding": "<one line of evidence>"}
     ```
   context:
     skill: orcinus-verify
@@ -43,4 +43,4 @@ graders:
         - "\"\\\"verdict\\\": \\\"PASS\\\"\" not in output"
         - "\"\\\"file\\\": \\\"summary.ts\\\"\" in output"
         - "\"Math.floor\" in output or \"floor\" in output.lower()"
-        - "\"\\\"test\\\": \\\"pass\\\"\" in output"
+        - "\"\\\"test\\\": \\\"PASS\\\"\" in output"

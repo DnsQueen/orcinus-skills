@@ -27,7 +27,7 @@ These are the router's shared rules. The router (`../SKILL.md`) says to read thi
 
 ## Fallbacks for external-optional skills
 
-Some skills the MAP names are not in this repo (see `docs/MAP.md`, status `external-optional`). They are not required. When one is needed and is not installed, use the fallback below instead of claiming the step is covered:
+Some skills the status table names are not in this repo (see `references/skill-status.md`, status `external-optional`). They are not required. When one is needed and is not installed, use the fallback below instead of claiming the step is covered:
 
 - **egm-brainstorm / egm-draft, grill-me / grilling** (sharpen, brainstorm, grill): use `idea-calibrate`'s own questions. Ask the user the stage's questions directly; do not claim a grill ran.
 - **ponytail / tdd** (step-by-step implementation, unit/integration tests): use `build`'s own test-first loop — a failing test first, then the smallest complete change that passes it.

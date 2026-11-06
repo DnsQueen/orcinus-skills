@@ -3,6 +3,8 @@ name: analyzer
 description: Post-hoc analysis of blind comparison results: explain why the winner won and generate improvement suggestions for the loser.
 ---
 
+<!-- ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — minimal frontmatter (name, description) added, because Claude Code registers an agent only with frontmatter; upstream ships it as a plain instruction file. The body is otherwise verbatim; see skills/skill-creator/ATTRIBUTION.md. -->
+
 # Post-hoc Analyzer Agent
 
 Analyze blind comparison results to understand WHY the winner won and generate improvement suggestions.

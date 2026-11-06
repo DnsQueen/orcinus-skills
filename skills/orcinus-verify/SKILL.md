@@ -80,15 +80,15 @@ Give one verdict only:
 - **FAIL** — list each blocking finding with evidence, the exact command and output that proves it, and what must change. Do not fix the code yourself in this skill; hand the findings back to the implementer.
 - **INCOMPLETE** — a check could not run, or the evidence is missing. List what is unverified. An unrun check must not produce a PASS, and an incomplete scan must not produce a general PASS. INCOMPLETE is the only verdict when the evidence bundle is missing a required item. An honest INCOMPLETE is a valid bundle: if the red proof failed, or there are no acceptance criteria, file INCOMPLETE with the reason. Only PASS has the strict rules below.
 
-End every verification response with the verdict block below, as the last thing in the response. It is the machine-readable form of the verdict: `verdict` is the single verdict above; `checks` maps each gate you ran to `pass`, `fail`, or `not-run`; `file` is the primary file of the finding, or `null` when there is none; `finding` is one line of evidence. The prose verdict must agree with the block — do not state the opposite verdict anywhere in the response.
+End every verification response with the verdict block below, as the last thing in the response. It is the machine-readable form of the verdict: `verdict` is the single verdict above; `checks` maps each gate you ran to `PASS`, `FAIL`, or `INCOMPLETE` — the same vocabulary as the evidence bundle; `file` is the primary file of the finding, or `null` when there is none; `finding` is one line of evidence. The prose verdict must agree with the block — do not state the opposite verdict anywhere in the response.
 
 ```verdict
-{"verdict": "PASS", "checks": {"build": "pass", "lint": "pass", "typecheck": "pass", "test": "pass"}, "file": null, "finding": "7 tests pass; percent uses Math.round"}
+{"verdict": "PASS", "checks": {"build": "PASS", "lint": "PASS", "typecheck": "PASS", "test": "PASS"}, "file": null, "finding": "7 tests pass"}
 ```
 
 ## Evidence bundle
 
-Always return, in this form (the machine-readable form is `references/evidence.schema.json` in this skill folder; validate a bundle with `python3 ${CLAUDE_PLUGIN_ROOT}/skills/orcinus-verify/scripts/validate_evidence.py <bundle.json>` — in a standalone install the skill folder itself replaces `${CLAUDE_PLUGIN_ROOT}/skills/orcinus-verify` — a bundle is only valid when the validator exits 0):
+Always return, in this form (the machine-readable form is `references/evidence.schema.json` in this skill folder; validate a bundle with `python3 scripts/validate_evidence.py <bundle.json>` run from this skill's folder — in a plugin install that folder is `${CLAUDE_PLUGIN_ROOT}/skills/orcinus-verify`, in a standalone install it is the skill folder itself — a bundle is only valid when the validator exits 0):
 
 - Requirement and acceptance criteria (as you understood them).
 - Verification plan: change type, required gates, and not-applicable gates with reasons. The validator rejects a PASS whose plan is missing, whose required gates have no passing check, whose canonical gates are unaccounted for, or whose behaviour change has no test gate or fail-first proof.
@@ -103,12 +103,14 @@ Each command's evidence is structured, so a later reader can re-run it. Three fi
 
 - `command` — the exact command, and `cwd` — the directory it ran in.
 - `tool_version` — the version of the tool that ran it.
-- `exit_code`, `stdout_artifact`, `stderr_artifact` — the exit code and where the outputs are saved. Artifact paths, when given, must exist relative to the bundle file.
+- `exit_code` — the exit code, and the output: either an artifact file (`stdout_artifact` / `stderr_artifact`, with its `stdout_sha256` / `stderr_sha256` — the sha256 of the file, which the validator checks) or inline text (`stdout_text` / `stderr_text`). Every check that ran (verdict PASS or FAIL) must carry its output: a PASS with no reviewable output is not evidence. Artifact paths, when given, must exist relative to the bundle file.
 - `started_at`, `finished_at` — when it ran, as RFC 3339 with a timezone (`Z` or `+HH:MM`); `finished_at` must not precede `started_at`.
 - `verdict` — PASS, FAIL, or INCOMPLETE for that check.
 - `unverified_items` — what this check could not establish.
 
 If a check could not run, say which one, why, and what remains unverified. Never report it as passed.
+
+If verification stopped before the first check ran (for example there are no acceptance criteria), file the bundle with `checks: []`, verdict INCOMPLETE, and `stop_reason` saying why — never invent a check to fill the bundle.
 
 ## Failure loop
 

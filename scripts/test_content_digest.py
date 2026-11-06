@@ -102,3 +102,61 @@ def test_digest_of_non_repo_fails():
         except cd.ContentDigestError:
             return
         raise AssertionError("expected ContentDigestError for a non-repo")
+
+
+def _repo_with_persian_code(tmp_path):
+    """A repo whose tree contains a non-ASCII path: the case the
+    v1 digest got wrong (git quotes such paths unless -z is used)."""
+    repo = _repo(tmp_path)
+    (repo / "src" / "فایل.py").write_text("y = 1\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "persian filename")
+    return repo
+
+
+def test_digest_same_under_quotePath_true_and_false():
+    # R4 F2 / R3 #2 acceptance: one tree must have one digest,
+    # whatever core.quotePath the machine sets. The v1 digest
+    # hashed git's quoted display, so it changed with the setting.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        repo = _repo_with_persian_code(Path(d))
+        _git(repo, "config", "core.quotePath", "true")
+        quoted = cd.content_digest(repo)
+        _git(repo, "config", "core.quotePath", "false")
+        unquoted = cd.content_digest(repo)
+        assert quoted == unquoted
+
+
+def test_digest_excludes_non_ascii_state_and_evidence_files():
+    # R4 F2 acceptance: a Persian file under .orcinus/ or
+    # docs/verification/ must not change the digest — the quoted
+    # form used to escape the startswith exclusion.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        repo = _repo_with_persian_code(Path(d))
+        _git(repo, "config", "core.quotePath", "true")
+        before = cd.content_digest(repo)
+        (repo / ".orcinus").mkdir()
+        (repo / ".orcinus" / "یادداشت.json").write_text("{}", encoding="utf-8")
+        (repo / "docs" / "verification").mkdir(parents=True)
+        (repo / "docs" / "verification" / "نتیجه.json").write_text("{}", encoding="utf-8")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "persian state and evidence files")
+        assert cd.content_digest(repo) == before
+
+
+def test_digest_changes_for_non_ascii_code_file():
+    # The control for the two tests above: a Persian file under
+    # src/ (not excluded) must change the digest.
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        repo = _repo_with_persian_code(Path(d))
+        before = cd.content_digest(repo)
+        (repo / "src" / "جدید.py").write_text("z = 1\n", encoding="utf-8")
+        _git(repo, "add", ".")
+        _git(repo, "commit", "-qm", "another persian file")
+        assert cd.content_digest(repo) != before

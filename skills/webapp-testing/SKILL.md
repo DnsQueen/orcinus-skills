@@ -5,6 +5,8 @@ license: Apache-2.0
 user-invocable: false
 ---
 
+<!-- ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — frontmatter adapted to the Agent Skills spec (license, user-invocable) and the ORCINUS router-only note appended to the description. The body is otherwise verbatim; see ATTRIBUTION.md. -->
+
 # Web Application Testing
 
 To test local web applications, write native Python Playwright scripts.

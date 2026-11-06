@@ -21,13 +21,19 @@ How to check whether `security-review` works. Run it on the demo project (`/tmp/
 
 ## Case 2 — planted fake secret
 
-**Input:** a throwaway copy of the demo project (for example `/tmp/orcinus-demo-security-test`), with one added file `src/config.ts` containing a realistic-looking but fake key:
+**Input:** a throwaway copy of the demo project (for example `/tmp/orcinus-demo-security-test`), with one added file `src/config.ts` containing a realistic-looking but fake key. Generate the key fresh at test time and never commit it — for example:
 
-```ts
-export const API_KEY = "sk-test-fake-9f8e7d6c5b4a3f2e1d0c9b8a7";
+```sh
+openssl rand -hex 24
 ```
 
-This value is synthetic test data, not a real credential. The copy must never be committed, and must be deleted after the run.
+Put the generated value in the file as:
+
+```ts
+export const API_KEY = "<generated at test time>";
+```
+
+The generated value is synthetic test data, not a real credential. The copy must never be committed, and must be deleted after the run.
 
 **Pass criteria:**
 

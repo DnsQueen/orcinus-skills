@@ -1,5 +1,5 @@
 {
-  "note": "The coarse stage range each skill serves, in the manifest's vocabulary (0-9, 10-19, 20-39, 40-59, 50-79, 80-100, 0-100). A skill's range must contain the router's fine range for it (Scaffold 20-29 and Build 30-39 both sit inside 20-39). Cross-cutting skills that apply at any stage use 0-100. This file is the single machine-readable source: scripts/generate_manifest.py copies it into skills/manifest.json, and scripts/validate_repo.py checks the manifest against it. Do not edit the manifest's stages by hand.",
+  "note": "The coarse stage range each skill serves, in the manifest's vocabulary (0-9, 10-19, 20-39, 40-59, 50-79, 80-100, 0-100). A skill's range must contain the router's fine range for it (Scaffold 20-29 and Build 30-39 both sit inside 20-39). Cross-cutting skills that apply at any stage use 0-100. This file is the single machine-readable source: scripts/generate_manifest.py copies it into skills/manifest.json, and scripts/validate_repo.py checks the manifest against it. Do not edit the manifest's stages by hand. Accessibility is the cross-cutting exception: it is staged 20-39, where the UI work happens, but its gate applies before ship \u2014 see the router's cross-cutting note.",
   "stages": {
     "accessibility": [
       "20-39"

@@ -594,6 +594,12 @@ class MigrationGenerator:
         self.zero_downtime = zero_downtime
         self.migration_steps: List[MigrationStep] = []
         self.step_counter = 0
+        # Per-migration sets, computed in generate_migration (empty
+        # until then, so a direct call to a _generate_* helper does
+        # not crash on a missing attribute).
+        self._added_columns: Set[tuple] = set()
+        self._added_uniques: Set[tuple] = set()
+        self._late_fks: List[tuple] = []
 
         # Data type conversion safety
         self.safe_type_conversions = {
@@ -625,10 +631,36 @@ class MigrationGenerator:
         self.migration_steps = []
         self.step_counter = 0
 
+        # Which (table, column) pairs this migration itself adds, and
+        # which single-column uniques it establishes: an FK to one
+        # of those cannot be created inline in a CREATE TABLE (or in
+        # a new column's constraint step) — the referenced column or
+        # its unique does not exist yet when the table is created
+        # (reviewer 4, F1, round 5). Those FKs are deferred to the
+        # late-FK phase, after column addition, constraint addition
+        # and column modification. Reset per call: a reused
+        # generator must not carry one migration's sets into the
+        # next (the same class of bug as the comparator reuse).
+        self._added_columns = {(c["table"], c["definition"].name) for c in changes["columns_added"]}
+        self._added_uniques = {
+            (c["table"], c["definition"].name)
+            for c in changes["columns_added"]
+            if c["definition"].unique
+        }
+        self._added_uniques |= {
+            (c["table"], c["columns"][0])
+            for c in changes["constraints_added"]
+            if c["constraint_type"] in ("UNIQUE", "PRIMARY_KEY") and len(c["columns"]) == 1
+        }
+        self._late_fks = []
+
         # Generate steps in dependency order. Table creation is in
         # FK dependency order (see _generate_table_creation_steps);
-        # a cycle's FKs are deferred to ADD CONSTRAINT steps.
-        # Constraint REMOVAL comes
+        # a cycle's FKs are deferred to ADD CONSTRAINT steps, and
+        # FKs to a column (or unique) this migration adds are
+        # deferred further, to the late-FK phase after column
+        # modification — the referenced column and its unique only
+        # exist then. Constraint REMOVAL comes
         # before constraint ADDITION: a primary-key swap would fail if
         # the new key were added while the old one still exists. Index
         # REMOVAL comes before index ADDITION for the same reason: an
@@ -641,6 +673,7 @@ class MigrationGenerator:
         self._generate_index_removal_steps(changes["indexes_dropped"])
         self._generate_index_addition_steps(changes["indexes_added"])
         self._generate_column_modification_steps(changes["columns_modified"])
+        self._generate_late_fk_steps()
         self._generate_table_rename_steps(changes["tables_renamed"])
         self._generate_column_removal_steps(changes["columns_dropped"])
         self._generate_table_removal_steps(changes["tables_dropped"])
@@ -666,6 +699,38 @@ class MigrationGenerator:
         self.step_counter += 1
         return f"step_{self.step_counter:03d}"
 
+    def _fk_is_ready(self, ref: str) -> bool:
+        """An FK reference 'table.column' is ready to be created
+        when this migration does not itself add the referenced
+        column or establish its uniqueness. A referenced column
+        that is added here, or whose unique is added here, does
+        not exist yet at CREATE TABLE time (reviewer 4, F1)."""
+        ref_table, ref_col = ref.split(".", 1)
+        return (ref_table, ref_col) not in self._added_columns and (
+            ref_table,
+            ref_col,
+        ) not in self._added_uniques
+
+    def _generate_late_fk_steps(self):
+        """FKs deferred because their referenced column (or its
+        unique) is added by this same migration: the column and
+        its unique are created by the column-addition, constraint-
+        addition and column-modification phases, so these ADD
+        CONSTRAINT steps run after all of them. Each names both
+        tables it depends on. Order is deterministic (table,
+        column, reference)."""
+        for table_name, col_name, ref in sorted(self._late_fks):
+            step = self._add_constraint_step(
+                {
+                    "table": table_name,
+                    "constraint_type": "FOREIGN_KEY",
+                    "columns": [col_name],
+                    "references": ref,
+                }
+            )
+            step.dependencies = sorted({table_name, ref.split(".", 1)[0]})
+            self.migration_steps.append(step)
+
     def _generate_table_creation_steps(self, tables_added: List[Dict[str, Any]]):
         """Generate steps for creating new tables, in FK dependency
         order: a table is created after every table its FKs
@@ -673,8 +738,12 @@ class MigrationGenerator:
         does not exist yet. A foreign-key cycle has no valid inline
         order, so the cyclic FKs are deferred to post-create ADD
         CONSTRAINT steps — the tables are still created, and the FKs
-        still exist. Each creation step names the tables it depends
-        on (its inline FK targets created in this migration)."""
+        still exist. An FK to a column (or unique) this migration
+        adds to an existing table is deferred further, to the
+        late-FK phase: the referenced column does not exist yet
+        when the table is created. Each creation step names the
+        tables it depends on (its inline FK targets created in
+        this migration)."""
         by_name = {info["definition"].name: info["definition"] for info in tables_added}
         order, cyclic = _topological_table_order(by_name)
         deferred: Dict[str, Set[str]] = {}
@@ -682,6 +751,14 @@ class MigrationGenerator:
             for col_name, ref in by_name[name].foreign_keys.items():
                 if ref.split(".", 1)[0] in cyclic:
                     deferred.setdefault(name, set()).add(col_name)
+        late: Dict[str, Set[str]] = {}
+        for name, table in by_name.items():
+            for col_name, ref in table.foreign_keys.items():
+                if ref.split(".", 1)[0] in by_name:
+                    continue  # topo/cycle logic owns FKs to new tables
+                if not self._fk_is_ready(ref):
+                    late.setdefault(name, set()).add(col_name)
+                    self._late_fks.append((name, col_name, ref))
         for name in order + sorted(cyclic):
             table = by_name[name]
             dependencies = sorted(
@@ -689,7 +766,7 @@ class MigrationGenerator:
             )
             step = self._create_table_step(
                 table,
-                deferred_fks=frozenset(deferred.get(name, ())),
+                deferred_fks=frozenset(deferred.get(name, set()) | late.get(name, set())),
                 dependencies=dependencies,
             )
             self.migration_steps.append(step)
@@ -885,8 +962,19 @@ class MigrationGenerator:
         if column.default_value is not None:
             actions.append(f"ALTER COLUMN {column.name} SET DEFAULT {column.default_value}")
             rollback_actions.append(f"ALTER COLUMN {column.name} DROP DEFAULT")
-        actions.extend(self._column_constraint_actions(table, column.name, column))
-        for action in self._column_constraint_actions(table, column.name, column):
+        # An FK to a column (or unique) this migration adds cannot
+        # be applied here: the follow-up runs in the column-addition
+        # phase, before the referenced column and its unique exist
+        # (same defect class as F1). It goes to the late-FK phase
+        # instead; the other constraints still apply here.
+        fk_ready = column.foreign_key is None or self._fk_is_ready(column.foreign_key)
+        if column.foreign_key and not fk_ready:
+            self._late_fks.append((table, column.name, column.foreign_key))
+        constraint_actions = self._column_constraint_actions(
+            table, column.name, column, include_fk=fk_ready
+        )
+        actions.extend(constraint_actions)
+        for action in constraint_actions:
             name = action.split(" ", 3)[2]
             rollback_actions.append(f"DROP CONSTRAINT {name}")
         if not actions:
@@ -928,14 +1016,19 @@ class MigrationGenerator:
             sql += f" DEFAULT {column.default_value}"
         return sql
 
-    def _column_constraint_actions(self, table: str, name: str, column: Column) -> List[str]:
+    def _column_constraint_actions(
+        self, table: str, name: str, column: Column, include_fk: bool = True
+    ) -> List[str]:
         """The named ADD CONSTRAINT actions for one column's unique,
         foreign key and check — the names the modify/drop steps
-        assume (uq_table_column, fk_table_column, ck_table_column)."""
+        assume (uq_table_column, fk_table_column, ck_table_column).
+        include_fk=False omits the FK action: the zero-downtime
+        follow-up uses it when the FK goes to the late-FK phase
+        instead (its referenced column does not exist yet)."""
         actions = []
         if column.unique:
             actions.append(f"ADD CONSTRAINT uq_{table}_{name} UNIQUE ({name})")
-        if column.foreign_key:
+        if column.foreign_key and include_fk:
             actions.append(
                 f"ADD CONSTRAINT fk_{table}_{name} FOREIGN KEY ({name}) "
                 f"REFERENCES {self._references_sql(column.foreign_key)}"
@@ -947,7 +1040,11 @@ class MigrationGenerator:
     def _column_constraint_steps(self, col_info: Dict[str, Any]) -> List[MigrationStep]:
         """One ADD_CONSTRAINT step per constraint a new column
         declares, using the same machinery (and names) as a
-        table-level constraint addition."""
+        table-level constraint addition. A column FK to a column
+        (or unique) this migration adds is NOT emitted here: the
+        referenced column does not exist yet when this column's
+        steps run, so it is recorded for the late-FK phase instead
+        (same defect class as F1, for a new column's own FK)."""
         table = col_info["table"]
         column = col_info["definition"]
         steps = []
@@ -958,16 +1055,19 @@ class MigrationGenerator:
                 )
             )
         if column.foreign_key:
-            steps.append(
-                self._add_constraint_step(
-                    {
-                        "table": table,
-                        "constraint_type": "FOREIGN_KEY",
-                        "columns": [column.name],
-                        "references": column.foreign_key,
-                    }
+            if self._fk_is_ready(column.foreign_key):
+                steps.append(
+                    self._add_constraint_step(
+                        {
+                            "table": table,
+                            "constraint_type": "FOREIGN_KEY",
+                            "columns": [column.name],
+                            "references": column.foreign_key,
+                        }
+                    )
                 )
-            )
+            else:
+                self._late_fks.append((table, column.name, column.foreign_key))
         if column.check_constraint:
             steps.append(
                 self._add_constraint_step(

@@ -806,3 +806,168 @@ def test_create_table_step_lists_fk_dependencies():
     assert by_table["authors"].dependencies == []
     assert by_table["books"].dependencies == ["authors"]
     assert by_table["chapters"].dependencies == ["books"]
+
+
+def f1_schemas():
+    """Reviewer 4's F1 repro (round 5): a new table events with an FK
+    to a column that is itself added to an existing table in the same
+    migration — users.external_id, UNIQUE."""
+    current = {"users": table({"id": col("SERIAL")}, primary_key=["id"])}
+    target = {
+        "users": table(
+            {"id": col("SERIAL"), "external_id": col("TEXT", unique=True)},
+            primary_key=["id"],
+        ),
+        "events": table(
+            {
+                "id": col("SERIAL"),
+                "user_external_id": col("TEXT", foreign_key="users.external_id"),
+            },
+            primary_key=["id"],
+        ),
+    }
+    return current, target
+
+
+def test_fk_to_new_column_on_existing_table_is_deferred():
+    """F1 (round 5): the old generator emitted CREATE TABLE events
+    with the FK inline, before ADD COLUMN users.external_id and
+    before the UNIQUE on it — PostgreSQL rejects the FK at the
+    first step (UndefinedColumn; and even column-first it fails
+    without the unique: InvalidForeignKey). The FK must be
+    deferred to a post-constraint ADD CONSTRAINT step, after the
+    column and its unique exist."""
+    current, target = f1_schemas()
+    _, plan = compare_and_generate(current, target)
+    creates = step_sql(plan, "CREATE_TABLE")
+    assert [s.table for s in creates] == ["events"]
+    assert "REFERENCES" not in creates[0].sql_forward
+    assert "FOREIGN KEY" not in creates[0].sql_forward
+
+    positions = {s.step_id: i for i, s in enumerate(plan.steps)}
+    add_column = next(s for s in plan.steps if s.step_type == "ADD_COLUMN" and s.table == "users")
+    add_unique = next(
+        s
+        for s in plan.steps
+        if s.step_type == "ADD_CONSTRAINT" and "uq_users_external_id" in s.sql_forward
+    )
+    add_fk = next(
+        s
+        for s in plan.steps
+        if s.step_type == "ADD_CONSTRAINT" and "fk_events_user_external_id" in s.sql_forward
+    )
+    assert "REFERENCES users(external_id)" in add_fk.sql_forward
+    assert positions[add_column.step_id] < positions[add_fk.step_id]
+    assert positions[add_unique.step_id] < positions[add_fk.step_id]
+    assert add_fk.dependencies == ["events", "users"]
+
+
+def test_column_fk_to_new_column_on_existing_table_is_deferred():
+    """Same defect class as F1, for a new column's own FK: orders
+    gains user_external_id with an FK to users.external_id, added
+    in the same migration. The FK step must not run before the
+    referenced column and its unique exist."""
+    current = {
+        "users": table({"id": col("SERIAL")}, primary_key=["id"]),
+        "orders": table({"id": col("SERIAL")}, primary_key=["id"]),
+    }
+    target = {
+        "users": table(
+            {"id": col("SERIAL"), "external_id": col("TEXT", unique=True)},
+            primary_key=["id"],
+        ),
+        "orders": table(
+            {
+                "id": col("SERIAL"),
+                "user_external_id": col("TEXT", foreign_key="users.external_id"),
+            },
+            primary_key=["id"],
+        ),
+    }
+    _, plan = compare_and_generate(current, target)
+    positions = {s.step_id: i for i, s in enumerate(plan.steps)}
+    add_column = next(s for s in plan.steps if s.step_type == "ADD_COLUMN" and s.table == "users")
+    add_unique = next(
+        s
+        for s in plan.steps
+        if s.step_type == "ADD_CONSTRAINT" and "uq_users_external_id" in s.sql_forward
+    )
+    add_fk = next(
+        s
+        for s in plan.steps
+        if s.step_type == "ADD_CONSTRAINT" and "fk_orders_user_external_id" in s.sql_forward
+    )
+    assert positions[add_column.step_id] < positions[add_fk.step_id]
+    assert positions[add_unique.step_id] < positions[add_fk.step_id]
+    assert add_fk.dependencies == ["orders", "users"]
+
+
+def test_fk_to_preexisting_unique_column_stays_inline():
+    """The deferral is only for columns the migration itself adds.
+    When users.external_id and its unique already exist, the FK
+    can stay inline in the CREATE TABLE — no behaviour change for
+    the case that already worked."""
+    current = {
+        "users": table(
+            {"id": col("SERIAL"), "external_id": col("TEXT", unique=True)},
+            primary_key=["id"],
+        )
+    }
+    target = {
+        "users": table(
+            {"id": col("SERIAL"), "external_id": col("TEXT", unique=True)},
+            primary_key=["id"],
+        ),
+        "events": table(
+            {
+                "id": col("SERIAL"),
+                "user_external_id": col("TEXT", foreign_key="users.external_id"),
+            },
+            primary_key=["id"],
+        ),
+    }
+    _, plan = compare_and_generate(current, target)
+    creates = step_sql(plan, "CREATE_TABLE")
+    assert "REFERENCES users(external_id)" in creates[0].sql_forward
+    assert not [s for s in plan.steps if "fk_events_user_external_id" in s.sql_forward][1:]
+
+
+def test_column_fk_to_new_column_is_deferred_in_zero_downtime_mode():
+    """Same defect class as F1, in the zero-downtime path: the FK
+    action lives inside the column's APPLY_COLUMN_CONSTRAINTS
+    follow-up step, which runs in the column-addition phase — so
+    with orders before users in the schema, the FK was applied
+    before users.external_id and its unique existed. The FK must
+    go to the late-FK phase instead, after the unique is applied."""
+    current = {
+        "users": table({"id": col("SERIAL")}, primary_key=["id"]),
+        "orders": table({"id": col("SERIAL")}, primary_key=["id"]),
+    }
+    # Orders first on purpose: the column-addition phase processes
+    # columns in schema order, so the orders follow-up used to run
+    # before the users column existed.
+    target = {
+        "orders": table(
+            {
+                "id": col("SERIAL"),
+                "user_external_id": col("TEXT", foreign_key="users.external_id"),
+            },
+            primary_key=["id"],
+        ),
+        "users": table(
+            {"id": col("SERIAL"), "external_id": col("TEXT", unique=True)},
+            primary_key=["id"],
+        ),
+    }
+    _, plan = compare_and_generate(current, target, zero_downtime=True)
+    positions = {s.step_id: i for i, s in enumerate(plan.steps)}
+    follow_ups = [s for s in plan.steps if s.step_type == "APPLY_COLUMN_CONSTRAINTS"]
+    assert not any("FOREIGN KEY" in s.sql_forward for s in follow_ups)
+    apply_unique = next(s for s in follow_ups if "uq_users_external_id" in s.sql_forward)
+    add_fk = next(
+        s
+        for s in plan.steps
+        if s.step_type == "ADD_CONSTRAINT" and "fk_orders_user_external_id" in s.sql_forward
+    )
+    assert positions[apply_unique.step_id] < positions[add_fk.step_id]
+    assert add_fk.dependencies == ["orders", "users"]

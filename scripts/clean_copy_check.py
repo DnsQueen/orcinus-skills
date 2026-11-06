@@ -5,9 +5,10 @@ clean_install_check, claimed an install it never tested).
 A skill collection that only works in the author's working tree is
 not a one-install system. This script proves the repo works from a
 clean copy: it puts the repo into a fresh temp dir and runs the
-gates there — validator, drift check, ruff, and the script tests —
-with the working directory inside the copy, so relative paths
-resolve there and nowhere else.
+gates there — validator, drift check, ruff check, ruff format
+--check, mypy (the CI scope), and the script tests — with the
+working directory inside the copy, so relative paths resolve there
+and nowhere else.
 
 Two modes:
 - working-tree (default): copy the working tree (excluding .git,
@@ -39,8 +40,14 @@ What this does NOT prove, stated plainly:
   uncommitted files — it is not a check of a committed revision.
   Use --mode release for that.
 - It runs the gates with the CURRENT Python (sys.executable) and
-  its installed pytest/ruff — it is not a fresh virtualenv, and a
-  fresh machine would still need `pip install pytest ruff`.
+  its installed pytest/ruff/mypy — it is not a fresh virtualenv, and
+  a fresh machine would still need
+  `pip install --require-hashes -r requirements-ci.txt`.
+- A gate that times out, a corrupt manifest, or a `git archive`
+  that cannot be extracted fails its step with a FAIL line and a
+  controlled exit code — never a traceback. Exit 0 when every gate
+  passes in the clean copy; exit 1 when a gate fails; exit 2 for a
+  usage error (bad source, bad revision).
 - It never invokes npx or Claude Code. The `npx skills` install
   path is covered only in the sense that the skill files the
   installer reads are exactly the ones checked here. A real
@@ -51,8 +58,6 @@ What this does NOT prove, stated plainly:
 Usage:
   python3 scripts/clean_copy_check.py [--source <repo>] [--keep]
   python3 scripts/clean_copy_check.py --mode release [--rev <rev>]
-Exit 0 when every gate passes in the clean copy; exit 1 when a
-gate fails; exit 2 for a usage error (bad source, bad revision).
 --keep leaves the temp dir in place for inspection (its path is
 printed); without it the temp dir is deleted.
 """
@@ -82,6 +87,25 @@ EXCLUDE = {
 }
 
 
+# The mypy scope is the exact list CI typechecks (see
+# .github/workflows/ci.yml, test job). The clean-copy gates run the
+# same list, not a subset: a copy that passes here must pass the
+# same typecheck CI runs.
+MYPY_SCOPE = [
+    "scripts/",
+    "skills/architecture/scripts/",
+    "skills/database-designer/migration_generator.py",
+    "skills/database-designer/test_migration_generator.py",
+    "skills/database-designer/test_migration_integration.py",
+    "skills/database-designer/test_postgres_migration.py",
+    "skills/idea-capture/scripts/",
+    "skills/incomplete-refactor/scripts/",
+    "skills/orcinus-verify/scripts/",
+    "skills/webapp-testing/scripts/test_with_server.py",
+    "evals/waza-orcinus-verify-agent/test_graders.py",
+]
+
+
 def _copy_clean(source, dest):
     def ignore(_dir, names):
         return [n for n in names if n in EXCLUDE]
@@ -93,10 +117,14 @@ def _git_archive(source, rev, dest):
     """Extract one committed revision into dest. Returns (ok, error):
     ok is False when the revision cannot be resolved — that is a
     usage error, not a gate failure, and must fail loudly instead
-    of silently testing something else."""
-    proc = subprocess.run(
-        ["git", "-C", str(source), "archive", rev], capture_output=True, timeout=120
-    )
+    of silently testing something else. A timeout is reported the
+    same way, never raised as a traceback."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(source), "archive", rev], capture_output=True, timeout=120
+        )
+    except subprocess.TimeoutExpired:
+        return False, "git archive timed out after 120s"
     if proc.returncode != 0:
         return False, proc.stderr.decode("utf-8", "replace").strip()
     try:
@@ -110,7 +138,13 @@ def _git_archive(source, rev, dest):
 
 
 def _run(argv, cwd, timeout=300):
-    proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    """Run a gate command. A timeout is a failed gate, not an
+    exception: returncode 1 with the timeout as the detail, so the
+    caller prints a FAIL line and a controlled exit code."""
+    try:
+        proc = subprocess.run(argv, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 1, f"timed out after {timeout}s"
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
@@ -121,19 +155,33 @@ def _step(results, name, ok, detail=""):
 
 
 def _gates(dest):
-    """Run the five gates inside the clean copy. Returns the list of
-    failed step names (empty when all pass)."""
+    """Run the seven gates inside the clean copy — the same list CI
+    runs (validator, drift, ruff check, ruff format --check, mypy,
+    script tests), plus the manifest resolution the copy itself
+    makes possible. Returns (failed step names, total steps)."""
     results = []
     # 1. The manifest and every skill resolve in the clean copy.
-    manifest = json.loads((dest / "skills" / "manifest.json").read_text(encoding="utf-8"))
-    skills = manifest["skills"]
-    missing = [n for n in skills if not (dest / "skills" / n / "SKILL.md").is_file()]
-    _step(
-        results,
-        "all manifest skills resolve",
-        not missing,
-        f"{len(skills)} skills" if not missing else f"missing SKILL.md: {', '.join(missing)}",
-    )
+    # A corrupt or missing manifest fails this step — it is a broken
+    # copy, not a crash: the remaining gates still run.
+    try:
+        manifest = json.loads((dest / "skills" / "manifest.json").read_text(encoding="utf-8"))
+        skills = manifest["skills"]
+    except (json.JSONDecodeError, KeyError, OSError) as e:
+        _step(
+            results,
+            "all manifest skills resolve",
+            False,
+            f"skills/manifest.json is not readable: {e}",
+        )
+        skills = None
+    if skills is not None:
+        missing = [n for n in skills if not (dest / "skills" / n / "SKILL.md").is_file()]
+        _step(
+            results,
+            "all manifest skills resolve",
+            not missing,
+            f"{len(skills)} skills" if not missing else f"missing SKILL.md: {', '.join(missing)}",
+        )
     # 2. The repo validator passes on the clean copy.
     rc, out = _run([sys.executable, "scripts/validate_repo.py"], dest)
     _step(results, "repo validator", rc == 0, out.splitlines()[-1] if out else "")
@@ -159,7 +207,30 @@ def _gates(dest):
         )
     else:
         _step(results, "script tests", rc == 0, out.splitlines()[-1] if out else "")
-    return [name for name, ok, _ in results if not ok]
+    # 6. Formatting matches CI (ruff format --check).
+    rc, out = _run([sys.executable, "-m", "ruff", "format", "--check"], dest)
+    if rc != 0 and "No module named ruff" in out:
+        _step(
+            results,
+            "ruff format",
+            False,
+            "ruff is not installed in this Python; pip install ruff==0.17.4",
+        )
+    else:
+        _step(results, "ruff format", rc == 0, out.splitlines()[-1] if out else "")
+    # 7. mypy, same scope as CI (see MYPY_SCOPE).
+    rc, out = _run([sys.executable, "-m", "mypy", *MYPY_SCOPE], dest)
+    if rc != 0 and "No module named mypy" in out:
+        _step(
+            results,
+            "mypy",
+            False,
+            "mypy is not installed in this Python; pip install mypy==1.18.2",
+        )
+    else:
+        _step(results, "mypy", rc == 0, out.splitlines()[-1] if out else "")
+    failed = [name for name, ok, _ in results if not ok]
+    return failed, len(results)
 
 
 def main(argv=None):
@@ -193,7 +264,7 @@ def main(argv=None):
                 return 2
         else:
             _copy_clean(source, dest)
-        failed = _gates(dest)
+        failed, total = _gates(dest)
     finally:
         if not args.keep:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -202,7 +273,7 @@ def main(argv=None):
     if failed:
         print(f"FAIL: {len(failed)} step(s) failed in the clean copy: {', '.join(failed)}")
         return 1
-    print("OK: clean copy check passed (5 steps)")
+    print(f"OK: clean copy check passed ({total} steps)")
     return 0
 
 

@@ -184,7 +184,7 @@
     },
     "i18n": {
       "name": "i18n",
-      "description": "Internationalizes a project across language tags and negotiation, dates/times/time zones/calendars, numbers and currency, bidirectional text and RTL layout, pluralization and ICU messages, collation and sorting, Unicode text processing, content and asset adaptation, and localization testing. Use when the user types /i18n, asks to internationalize or localize a codebase, wants to add a language, or asks about RTL, time zones, plural rules, number formatting, or locale-aware sorting. Accepts an optional scope so the user can internationalize only selected aspects or selected languages. Only invoke via the orcinus router.",
+      "description": "Internationalizes a project across language tags and negotiation, dates/times/time zones/calendars, numbers and currency, bidirectional text and RTL layout, pluralization and ICU messages, collation and sorting, Unicode text processing, content and asset adaptation, and localization testing. Use when the user asks to internationalize or localize a codebase, wants to add a language, or asks about RTL, time zones, plural rules, number formatting, or locale-aware sorting. Accepts an optional scope so the user can internationalize only selected aspects or selected languages. Only invoke via the orcinus router.",
       "license": "MIT",
       "stages": [
         "20-39"
@@ -316,7 +316,7 @@
     },
     "orcinus": {
       "name": "orcinus",
-      "description": "One integrated companion for building software with a coding agent, from raw idea to publish. Use when starting, continuing, or finishing any software project, or when you need to know what stage you are in and what comes next.",
+      "description": "One integrated companion for building software with a coding agent, from raw idea to publish. Use when the user asks for the ORCINUS lifecycle — starting, continuing, or finishing a project through its stages — or asks what stage their project is in and what comes next.",
       "license": "MIT",
       "stages": [
         "0-100"
