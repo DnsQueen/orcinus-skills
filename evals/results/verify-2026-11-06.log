@@ -1,0 +1,31 @@
+# Verification log — ORCINUS v1.0.0 review-fix pass
+# Date: 2026-11-06 (UTC). Run after all Track A/B/C fixes, before commit.
+# Each line: command, exit code, result.
+
+python3 scripts/validate_repo.py
+  exit 0 — "OK: repo validation passed" (0 problems; was 25 at the start of the fix pass)
+
+python3 scripts/check_drift.py
+  exit 0 — "OK: 128 vendored files match the recorded checksums"
+
+python3 -m pytest -q
+  exit 0 — 57 passed in ~16s (15 capture + 13 check_architecture + 12 check_refactor + 11 migration_generator + 6 with_server)
+
+examples/demo: npm run build / lint / typecheck / test
+  build exit 0; lint exit 0; typecheck exit 0; test 7 passed, 0 failed
+
+python3 skills/architecture/scripts/check_architecture.py --root examples/demo
+  exit 0 — OK: no layer violations, no circular imports, all dependency licences allowed (7 licences listed)
+
+python3 skills/architecture/scripts/check_architecture.py --root ~/workspace/weekly-budget
+  exit 0 — OK: same 7 licences
+
+waza run evals/waza-orcinus-verify/eval.yaml --output /tmp/waza-results.json
+  (official v0.40.0 binary, SHA256 verified against the release checksums.txt)
+  exit 0 — 2/2 tasks passed, aggregate score 1.00 (Min 1.00, Max 1.00, Std Dev 0.0000)
+  NOTE: mock executor — proves the harness only, never agent quality.
+  Results JSON: evals/results/waza-harness-smoke-2026-11-06.json
+
+NOT run here (recorded, not claimed):
+- `claude plugin validate` — no claude CLI in this VM.
+- `evals/waza-orcinus-verify-agent/` (real executor) — no real agent executor here.

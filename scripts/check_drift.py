@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Check that vendored (upstream-copied) files have not drifted.
+
+Reads scripts/drift-manifest.json — a map of repo-relative path to the
+SHA256 the file had when it was last recorded — and verifies each file
+still matches. A mismatch means someone edited a vendored file without
+recording the change in that skill's ATTRIBUTION.md, or the file was
+deleted. A match does not prove the file is still identical to upstream
+(it proves it is identical to the last recorded ORCINUS copy); to check
+against upstream, re-run the diff against the upstream commit named in
+the ATTRIBUTION.
+
+Usage:
+    python3 scripts/check_drift.py            # check the manifest
+    python3 scripts/check_drift.py --update   # regenerate the manifest
+                                                # from the current files
+                                                # (only after a recorded
+                                                # change, and only with
+                                                # the ATTRIBUTION updated)
+
+Exit code: 0 when every listed file matches, 1 otherwise.
+"""
+
+import argparse
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+MANIFEST = ROOT / "scripts" / "drift-manifest.json"
+
+# Skills whose files are vendored from upstream (copied verbatim or
+# bundled as-is). ORCINUS-original from-scratch skills are not listed:
+# their files change freely and are not vendored.
+VENDORED_SKILLS = [
+    "accessibility",
+    "api-and-interface-design",
+    "ask-questions-if-underspecified",
+    "codebase-knowledge-builder",
+    "database-designer",
+    "diagnosing-bugs",
+    "frontend-architecture",
+    "frontend-data-contracts",
+    "frontend-optimistic-mutations",
+    "i18n",
+    "independent-review",
+    "issue-triage",
+    "mcp-builder",
+    "monitoring",
+    "monitoring-observability",
+    "performance-optimization",
+    "refactor",
+    "skill-creator",
+    "waza",
+    "webapp-testing",
+]
+
+# Files inside a vendored skill that are ORCINUS-authored, not vendored.
+EXCLUDED_NAMES = {"ATTRIBUTION.md", "LICENSE.txt"}
+EXCLUDED_SUFFIXES = (".pyc",)
+EXCLUDED_DIRS = {"__pycache__"}
+
+
+def _is_vendored(path: Path) -> bool:
+    rel = path.relative_to(ROOT)
+    parts = rel.parts
+    if len(parts) < 2 or parts[0] != "skills":
+        return False
+    if parts[1] not in VENDORED_SKILLS:
+        return False
+    if parts[-1] in EXCLUDED_NAMES:
+        return False
+    if path.suffix in EXCLUDED_SUFFIXES:
+        return False
+    if any(part in EXCLUDED_DIRS for part in parts):
+        return False
+    # ORCINUS-authored test files inside a vendored skill.
+    if parts[-1].startswith("test_") and path.suffix == ".py":
+        return False
+    return True
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def build_manifest() -> dict:
+    manifest = {}
+    for skill in VENDORED_SKILLS:
+        skill_dir = ROOT / "skills" / skill
+        if not skill_dir.is_dir():
+            continue
+        for path in sorted(skill_dir.rglob("*")):
+            if path.is_file() and _is_vendored(path):
+                manifest[str(path.relative_to(ROOT))] = _sha256(path)
+    return manifest
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--update", action="store_true",
+                        help="regenerate the manifest from the current files")
+    args = parser.parse_args()
+    if args.update:
+        manifest = build_manifest()
+        MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n",
+                            encoding="utf-8")
+        print(f"wrote {MANIFEST} ({len(manifest)} files)")
+        return 0
+    if not MANIFEST.exists():
+        print(f"FAIL: manifest not found: {MANIFEST}", file=sys.stderr)
+        print("Run: python3 scripts/check_drift.py --update", file=sys.stderr)
+        return 1
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    problems = []
+    for rel, expected in sorted(manifest.items()):
+        path = ROOT / rel
+        if not path.exists():
+            problems.append(f"missing: {rel}")
+        elif _sha256(path) != expected:
+            problems.append(f"drifted: {rel} (changed since the manifest was recorded — update the skill's ATTRIBUTION.md and regenerate the manifest)")
+    # A vendored file that is not in the manifest is also a problem:
+    # it was added without being recorded.
+    for rel in sorted(build_manifest()):
+        if rel not in manifest:
+            problems.append(f"unrecorded: {rel} (a vendored file with no recorded checksum — add it to the manifest)")
+    if problems:
+        print(f"FAIL: {len(problems)} problem(s)")
+        for problem in problems:
+            print(f"  - {problem}")
+        return 1
+    print(f"OK: {len(manifest)} vendored files match the recorded checksums")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

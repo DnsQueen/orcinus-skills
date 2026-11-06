@@ -1,6 +1,7 @@
 ---
 name: mutation-testing
-description: Check whether the tests actually catch bugs by mutating the code and seeing if the tests fail. Use after a slice passes its tests, before calling it done, and whenever a test suite looks green but unproven. JavaScript/TypeScript only.
+description: Check whether the tests actually catch bugs by mutating the code and seeing if the tests fail. Use after a slice passes its tests, before calling it done, and whenever a test suite looks green but unproven. JavaScript/TypeScript only. Only invoke via the orcinus router.
+license: MIT
 ---
 
 # MUTATION-TESTING — do the tests catch anything?

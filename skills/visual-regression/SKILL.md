@@ -1,6 +1,7 @@
 ---
 name: visual-regression
-description: Catch unintended visual changes by comparing screenshots against a baseline. Use after any change to a web UI, before calling it done, and whenever a change claims to be visual-only. Web UI only; needs a browser.
+description: Catch unintended visual changes by comparing screenshots against a baseline. Use after any change to a web UI, before calling it done, and whenever a change claims to be visual-only. Web UI only; needs a browser. Only invoke via the orcinus router.
+license: MIT
 ---
 
 # VISUAL-REGRESSION — did the look change, and was it supposed to?

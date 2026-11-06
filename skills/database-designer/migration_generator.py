@@ -174,10 +174,53 @@ class SchemaComparator:
     def compare_schemas(self) -> Dict[str, List[Dict[str, Any]]]:
         """Compare schemas and identify all changes."""
         self._compare_tables()
+        self._compare_renamed_table_columns()
         self._compare_columns()
         self._compare_constraints()
         self._compare_indexes()
         return self.changes
+
+    def _compare_renamed_table_columns(self):
+        """A renamed table's column changes are not compared by
+        _compare_columns (it only looks at tables with the same name in
+        both schemas). Compare them here, under the OLD table name —
+        the column steps run before the rename step, so they must
+        reference the table by its current name."""
+        for rename in self.changes['tables_renamed']:
+            old_name = rename['old_name']
+            new_name = rename['new_name']
+            current_table = self.current_schema[old_name]
+            target_table = self.target_schema[new_name]
+            current_columns = set(current_table.columns.keys())
+            target_columns = set(target_table.columns.keys())
+            for col_name in target_columns - current_columns:
+                self.changes['columns_added'].append({
+                    'table': old_name,
+                    'column': col_name,
+                    'definition': target_table.columns[col_name]
+                })
+            for col_name in current_columns - target_columns:
+                self.changes['columns_dropped'].append({
+                    'table': old_name,
+                    'column': col_name,
+                    'definition': current_table.columns[col_name]
+                })
+            for col_name in current_columns.intersection(target_columns):
+                current_col = current_table.columns[col_name]
+                target_col = target_table.columns[col_name]
+                if self._columns_different(current_col, target_col):
+                    self.changes['columns_modified'].append({
+                        'table': old_name,
+                        'column': col_name,
+                        'current_definition': current_col,
+                        'target_definition': target_col,
+                        'changes': self._describe_column_changes(current_col, target_col)
+                    })
+            # Constraints and indexes have the same gap: they are only
+            # compared for tables with the same name. Compare them here
+            # too, under the old name.
+            self._compare_table_constraints(current_table, target_table, old_name)
+            self._compare_table_indexes(current_table, target_table, old_name)
     
     def _compare_tables(self):
         """Compare table-level changes."""
@@ -319,94 +362,108 @@ class SchemaComparator:
         if current_col.foreign_key != target_col.foreign_key:
             changes.append(f"foreign_key: {current_col.foreign_key} -> {target_col.foreign_key}")
         
+        if current_col.check_constraint != target_col.check_constraint:
+            changes.append(f"check: {current_col.check_constraint} -> {target_col.check_constraint}")
+        
         return changes
     
     def _compare_constraints(self):
         """Compare constraint changes."""
         common_tables = set(self.current_schema.keys()).intersection(set(self.target_schema.keys()))
-        
+
         for table_name in common_tables:
-            current_table = self.current_schema[table_name]
-            target_table = self.target_schema[table_name]
-            
-            # Compare primary keys
-            if current_table.primary_key != target_table.primary_key:
-                if current_table.primary_key:
-                    self.changes['constraints_dropped'].append({
-                        'table': table_name,
-                        'constraint_type': 'PRIMARY_KEY',
-                        'columns': current_table.primary_key
-                    })
-                
-                if target_table.primary_key:
-                    self.changes['constraints_added'].append({
-                        'table': table_name,
-                        'constraint_type': 'PRIMARY_KEY',
-                        'columns': target_table.primary_key
-                    })
-            
-            # Compare unique constraints
-            current_unique = set(tuple(uc) for uc in current_table.unique_constraints)
-            target_unique = set(tuple(uc) for uc in target_table.unique_constraints)
-            
-            for constraint in target_unique - current_unique:
-                self.changes['constraints_added'].append({
-                    'table': table_name,
-                    'constraint_type': 'UNIQUE',
-                    'columns': list(constraint)
-                })
-            
-            for constraint in current_unique - target_unique:
+            self._compare_table_constraints(
+                self.current_schema[table_name],
+                self.target_schema[table_name], table_name)
+
+    def _compare_table_constraints(self, current_table, target_table, table_name):
+        """Compare the constraints of one table pair. Called for common
+        tables and for renamed tables (under the old name)."""
+        # Compare primary keys
+        if current_table.primary_key != target_table.primary_key:
+            if current_table.primary_key:
                 self.changes['constraints_dropped'].append({
                     'table': table_name,
-                    'constraint_type': 'UNIQUE',
-                    'columns': list(constraint)
+                    'constraint_type': 'PRIMARY_KEY',
+                    'columns': current_table.primary_key
                 })
-            
-            # Compare check constraints
-            current_checks = set(current_table.check_constraints.items())
-            target_checks = set(target_table.check_constraints.items())
-            
-            for name, condition in target_checks - current_checks:
+
+            if target_table.primary_key:
                 self.changes['constraints_added'].append({
                     'table': table_name,
-                    'constraint_type': 'CHECK',
-                    'constraint_name': name,
-                    'condition': condition
+                    'constraint_type': 'PRIMARY_KEY',
+                    'columns': target_table.primary_key
                 })
-            
-            for name, condition in current_checks - target_checks:
-                self.changes['constraints_dropped'].append({
-                    'table': table_name,
-                    'constraint_type': 'CHECK',
-                    'constraint_name': name,
-                    'condition': condition
-                })
-    
+
+        # Compare unique constraints
+        current_unique = set(tuple(uc) for uc in current_table.unique_constraints)
+        target_unique = set(tuple(uc) for uc in target_table.unique_constraints)
+
+        for constraint in target_unique - current_unique:
+            self.changes['constraints_added'].append({
+                'table': table_name,
+                'constraint_type': 'UNIQUE',
+                'columns': list(constraint)
+            })
+
+        for constraint in current_unique - target_unique:
+            self.changes['constraints_dropped'].append({
+                'table': table_name,
+                'constraint_type': 'UNIQUE',
+                'columns': list(constraint)
+            })
+
+        # Compare check constraints
+        current_checks = set(current_table.check_constraints.items())
+        target_checks = set(target_table.check_constraints.items())
+
+        for name, condition in target_checks - current_checks:
+            self.changes['constraints_added'].append({
+                'table': table_name,
+                'constraint_type': 'CHECK',
+                'constraint_name': name,
+                'condition': condition
+            })
+
+        for name, condition in current_checks - target_checks:
+            self.changes['constraints_dropped'].append({
+                'table': table_name,
+                'constraint_type': 'CHECK',
+                'constraint_name': name,
+                'condition': condition
+            })
+
     def _compare_indexes(self):
         """Compare index changes."""
         common_tables = set(self.current_schema.keys()).intersection(set(self.target_schema.keys()))
-        
+
         for table_name in common_tables:
-            current_indexes = {idx['name']: idx for idx in self.current_schema[table_name].indexes}
-            target_indexes = {idx['name']: idx for idx in self.target_schema[table_name].indexes}
-            
-            current_names = set(current_indexes.keys())
-            target_names = set(target_indexes.keys())
-            
-            # Indexes added
-            for idx_name in target_names - current_names:
-                self.changes['indexes_added'].append({
-                    'table': table_name,
-                    'index': target_indexes[idx_name]
-                })
-            
-            # Indexes dropped
-            for idx_name in current_names - target_names:
-                self.changes['indexes_dropped'].append({
-                    'table': table_name,
-                    'index': current_indexes[idx_name]
-                })
+            self._compare_table_indexes(
+                self.current_schema[table_name],
+                self.target_schema[table_name], table_name)
+
+    def _compare_table_indexes(self, current_table, target_table, table_name):
+        """Compare the indexes of one table pair. Called for common
+        tables and for renamed tables (under the old name)."""
+        current_indexes = {idx['name']: idx for idx in current_table.indexes}
+        target_indexes = {idx['name']: idx for idx in target_table.indexes}
+
+        current_names = set(current_indexes.keys())
+        target_names = set(target_indexes.keys())
+
+        # Indexes added
+        for idx_name in target_names - current_names:
+            self.changes['indexes_added'].append({
+                'table': table_name,
+                'index': target_indexes[idx_name]
+            })
+
+        # Indexes dropped
+        for idx_name in current_names - target_names:
+            self.changes['indexes_dropped'].append({
+                'table': table_name,
+                'index': current_indexes[idx_name]
+            })
 
 
 class MigrationGenerator:
@@ -435,15 +492,17 @@ class MigrationGenerator:
         self.migration_steps = []
         self.step_counter = 0
         
-        # Generate steps in dependency order
+        # Generate steps in dependency order. Constraint REMOVAL comes
+        # before constraint ADDITION: a primary-key swap would fail if
+        # the new key were added while the old one still exists.
         self._generate_table_creation_steps(changes['tables_added'])
         self._generate_column_addition_steps(changes['columns_added'])
+        self._generate_constraint_removal_steps(changes['constraints_dropped'])
         self._generate_constraint_addition_steps(changes['constraints_added'])
         self._generate_index_addition_steps(changes['indexes_added'])
         self._generate_column_modification_steps(changes['columns_modified'])
         self._generate_table_rename_steps(changes['tables_renamed'])
         self._generate_index_removal_steps(changes['indexes_dropped'])
-        self._generate_constraint_removal_steps(changes['constraints_dropped'])
         self._generate_column_removal_steps(changes['columns_dropped'])
         self._generate_table_removal_steps(changes['tables_dropped'])
         
@@ -590,6 +649,34 @@ class MigrationGenerator:
             zero_downtime_phase="EXPAND"
         )
     
+    @staticmethod
+    def _references_sql(foreign_key: str) -> str:
+        """A foreign key is stored as "table.column"; SQL wants
+        "table(column)"."""
+        if "." in foreign_key:
+            ref_table, ref_col = foreign_key.rsplit(".", 1)
+            return f"{ref_table}({ref_col})"
+        return foreign_key
+
+    def _column_definition_sql(self, name: str, column: Column) -> str:
+        """The full column definition: type, NOT NULL, UNIQUE, DEFAULT,
+        CHECK, REFERENCES. The zero-downtime temp column and a dropped
+        column's rollback must match the target, not just its type —
+        a temp column that carries only the data type silently drops the
+        target's constraints."""
+        sql = f"{name} {column.data_type}"
+        if not column.nullable:
+            sql += " NOT NULL"
+        if column.unique:
+            sql += " UNIQUE"
+        if column.default_value:
+            sql += f" DEFAULT {column.default_value}"
+        if column.check_constraint:
+            sql += f" CHECK ({column.check_constraint})"
+        if column.foreign_key:
+            sql += f" REFERENCES {self._references_sql(column.foreign_key)}"
+        return sql
+
     def _generate_column_modification_steps(self, columns_modified: List[Dict[str, Any]]):
         """Generate steps for modifying columns."""
         for col_info in columns_modified:
@@ -635,6 +722,50 @@ class MigrationGenerator:
             else:
                 rollback_statements.append(f"ALTER COLUMN {column} DROP DEFAULT")
         
+        # Unique, foreign key and check changes are constraint changes.
+        # _columns_different detects them, so this step must convert them
+        # to SQL — otherwise a unique-only change produces an empty ALTER
+        # (invalid SQL) that claims to do the change and does nothing.
+        if current_def.unique != target_def.unique:
+            constraint_name = f"uq_{table}_{column}"
+            if target_def.unique:
+                alter_statements.append(f"ADD CONSTRAINT {constraint_name} UNIQUE ({column})")
+                rollback_statements.append(f"DROP CONSTRAINT {constraint_name}")
+            else:
+                alter_statements.append(f"DROP CONSTRAINT {constraint_name}")
+                rollback_statements.append(f"ADD CONSTRAINT {constraint_name} UNIQUE ({column})")
+        
+        if current_def.foreign_key != target_def.foreign_key:
+            constraint_name = f"fk_{table}_{column}"
+            if current_def.foreign_key:
+                alter_statements.append(f"DROP CONSTRAINT {constraint_name}")
+                rollback_statements.append(
+                    f"ADD CONSTRAINT {constraint_name} FOREIGN KEY ({column}) "
+                    f"REFERENCES {self._references_sql(current_def.foreign_key)}")
+            if target_def.foreign_key:
+                alter_statements.append(
+                    f"ADD CONSTRAINT {constraint_name} FOREIGN KEY ({column}) "
+                    f"REFERENCES {self._references_sql(target_def.foreign_key)}")
+                rollback_statements.append(f"DROP CONSTRAINT {constraint_name}")
+        
+        if current_def.check_constraint != target_def.check_constraint:
+            constraint_name = f"ck_{table}_{column}"
+            if current_def.check_constraint:
+                alter_statements.append(f"DROP CONSTRAINT {constraint_name}")
+                rollback_statements.append(
+                    f"ADD CONSTRAINT {constraint_name} CHECK ({current_def.check_constraint})")
+            if target_def.check_constraint:
+                alter_statements.append(
+                    f"ADD CONSTRAINT {constraint_name} CHECK ({target_def.check_constraint})")
+                rollback_statements.append(f"DROP CONSTRAINT {constraint_name}")
+        
+        if not alter_statements:
+            # A detected change with no SQL handler must stop here, not
+            # produce an empty ALTER that pretends to do the change.
+            raise ValueError(
+                f"column {table}.{column}: the detected change "
+                f"({', '.join(changes)}) has no SQL handler")
+        
         # Build SQL
         alter_sql = f"ALTER TABLE {table}\n    " + ",\n    ".join(alter_statements) + ";"
         rollback_sql = f"ALTER TABLE {table}\n    " + ",\n    ".join(rollback_statements) + ";"
@@ -665,14 +796,18 @@ class MigrationGenerator:
         # For zero-downtime, use expand-contract pattern
         temp_column = f"{column}_new"
         
-        # Step 1: Add new column
+        # Step 1: Add new column. It carries the target's full
+        # definition (NOT NULL, UNIQUE, DEFAULT, CHECK, REFERENCES) —
+        # a temp column with only the data type would silently drop the
+        # target's constraints.
         step1 = MigrationStep(
             step_id=self._generate_step_id(),
             step_type="ADD_TEMP_COLUMN",
             table=table,
             description=f"Add temporary column {temp_column} for zero-downtime migration",
-            sql_forward=f"ALTER TABLE {table} ADD COLUMN {temp_column} {target_def.data_type};",
+            sql_forward=f"ALTER TABLE {table} ADD COLUMN {self._column_definition_sql(temp_column, target_def)};",
             sql_rollback=f"ALTER TABLE {table} DROP COLUMN {temp_column};",
+            risk_level="LOW",
             zero_downtime_phase="EXPAND"
         )
         steps.append(step1)
@@ -685,18 +820,21 @@ class MigrationGenerator:
             description=f"Copy data from {column} to {temp_column}",
             sql_forward=f"UPDATE {table} SET {temp_column} = {column};",
             sql_rollback=f"UPDATE {table} SET {temp_column} = NULL;",
+            risk_level="MEDIUM",
             zero_downtime_phase="EXPAND"
         )
         steps.append(step2)
         
-        # Step 3: Drop old column
+        # Step 3: Drop old column. This destroys the original column, so
+        # it is HIGH risk — it must never inherit the default LOW.
         step3 = MigrationStep(
             step_id=self._generate_step_id(),
             step_type="DROP_OLD_COLUMN",
             table=table,
             description=f"Drop original column {column}",
             sql_forward=f"ALTER TABLE {table} DROP COLUMN {column};",
-            sql_rollback=f"ALTER TABLE {table} ADD COLUMN {column} {current_def.data_type};",
+            sql_rollback=f"ALTER TABLE {table} ADD COLUMN {self._column_definition_sql(column, current_def)};",
+            risk_level="HIGH",
             zero_downtime_phase="CONTRACT"
         )
         steps.append(step3)
@@ -709,6 +847,7 @@ class MigrationGenerator:
             description=f"Rename {temp_column} to {column}",
             sql_forward=f"ALTER TABLE {table} RENAME COLUMN {temp_column} TO {column};",
             sql_rollback=f"ALTER TABLE {table} RENAME COLUMN {column} TO {temp_column};",
+            risk_level="MEDIUM",
             zero_downtime_phase="CONTRACT"
         )
         steps.append(step4)
@@ -726,6 +865,12 @@ class MigrationGenerator:
         
         if current.nullable and not target.nullable:
             return "HIGH"  # Adding NOT NULL constraint
+        
+        # Adding a constraint can fail on existing data.
+        if (current.unique != target.unique
+                or current.foreign_key != target.foreign_key
+                or current.check_constraint != target.check_constraint):
+            return "MEDIUM"
         
         return "LOW"
     
@@ -816,15 +961,18 @@ class MigrationGenerator:
         rename_sql = f"ALTER TABLE {old_name} RENAME TO {new_name};"
         rollback_sql = f"ALTER TABLE {new_name} RENAME TO {old_name};"
         
+        similarity = rename_info.get('similarity_score')
+        similarity_note = (f" (heuristic, column similarity {similarity:.2f} — "
+                           f"confirm the rename before running)") if similarity else ""
         return MigrationStep(
             step_id=self._generate_step_id(),
             step_type="RENAME_TABLE",
             table=old_name,
-            description=f"Rename table {old_name} to {new_name}",
+            description=f"Rename table {old_name} to {new_name}{similarity_note}",
             sql_forward=rename_sql,
             sql_rollback=rollback_sql,
             validation_sql=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{new_name}';",
-            risk_level="LOW"
+            risk_level="MEDIUM"
         )
     
     def _generate_column_removal_steps(self, columns_dropped: List[Dict[str, Any]]):
@@ -840,12 +988,9 @@ class MigrationGenerator:
         
         drop_sql = f"ALTER TABLE {table} DROP COLUMN {column.name};"
         
-        # Recreate column for rollback
-        col_sql = f"{column.name} {column.data_type}"
-        if not column.nullable:
-            col_sql += " NOT NULL"
-        if column.default_value:
-            col_sql += f" DEFAULT {column.default_value}"
+        # Recreate column for rollback — the full definition, so the
+        # rollback restores the constraints, not just the type.
+        col_sql = self._column_definition_sql(column.name, column)
         
         add_sql = f"ALTER TABLE {table} ADD COLUMN {col_sql};"
         
@@ -992,6 +1137,18 @@ class MigrationGenerator:
             },
             "zero_downtime": self.zero_downtime
         }
+        if self.zero_downtime:
+            # The expand-contract output is a DRAFT, not a verified
+            # zero-downtime migration: there is no write-synchronisation,
+            # no cutover and no backfill verification in these steps.
+            # It needs application coordination (dual-write during EXPAND,
+            # a backfill check before CONTRACT, a cutover). Do not run it
+            # automatically on real data.
+            summary["zero_downtime_warning"] = (
+                "Expand-contract DRAFT. Requires application coordination: "
+                "dual-write to both columns during EXPAND, a backfill "
+                "verification before CONTRACT, and a cutover. Do not run "
+                "automatically on real data.")
         
         return summary
 

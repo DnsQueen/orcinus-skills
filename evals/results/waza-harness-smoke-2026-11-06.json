@@ -1,0 +1,198 @@
+{
+  "schemaVersion": "1.8",
+  "eval_id": "run-1793925657",
+  "eval_name": "orcinus-verify-eval",
+  "timestamp": "2026-11-06T04:10:57.652914038+03:30",
+  "config": {
+    "runs_per_test": 1,
+    "model_id": "",
+    "engine_type": "mock",
+    "timeout_sec": 120
+  },
+  "summary": {
+    "total_tests": 2,
+    "succeeded": 2,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "success_rate": 1,
+    "aggregate_score": 1,
+    "min_score": 1,
+    "max_score": 1,
+    "std_dev": 0,
+    "duration_ms": 179,
+    "weighted_score": 1
+  },
+  "metrics": {},
+  "tasks": [
+    {
+      "test_id": "verify-fail",
+      "display_name": "A failing slice verifies FAIL",
+      "status": "passed",
+      "runs": [
+        {
+          "run_number": 1,
+          "attempts": 1,
+          "prompt": "Verify a slice whose test fails: the verdict must be FAIL, never PASS.",
+          "status": "passed",
+          "duration_ms": 0,
+          "validations": {
+            "_output_contains": {
+              "identifier": "_output_contains",
+              "type": "",
+              "score": 1,
+              "weight": 1,
+              "passed": true,
+              "feedback": "matched 1/1 required strings",
+              "duration_ms": 0
+            },
+            "output_nonempty": {
+              "identifier": "output_nonempty",
+              "type": "code",
+              "score": 1,
+              "weight": 1,
+              "passed": true,
+              "feedback": "All assertions passed",
+              "details": {
+                "failures": null,
+                "passed_assertions": 1,
+                "total_assertions": 1
+              },
+              "duration_ms": 54
+            },
+            "verdict_present": {
+              "identifier": "verdict_present",
+              "type": "code",
+              "score": 1,
+              "weight": 1,
+              "passed": true,
+              "feedback": "All assertions passed",
+              "details": {
+                "failures": null,
+                "passed_assertions": 1,
+                "total_assertions": 1
+              },
+              "duration_ms": 36
+            }
+          },
+          "session_digest": {
+            "tool_call_count": 0,
+            "tools_used": [],
+            "errors": [],
+            "session_id": "mock-session-1793925657658317771"
+          },
+          "final_output": "Mock response for: Verify a slice whose test fails: the verdict must be FAIL, never PASS.\nTask: A failing slice verifies FAIL\nDescription: A slice whose test fails must get verdict FAIL, never PASS. A check that\ndid not run is never reported as passed.\n\nContext:\n  skill: orcinus-verify\n  slice: broken-slice\nAnalyzed 1 file(s):\n  - summary.ts\n// Weekly summary: total spent, remaining budget, warning flag, percent used.\nexport function weeklySummary(spending: number[], budget: number): {\n  total: number;\n  remaining: number;\n  warned: boolean;\n  percent: number;\n} {\n  if (budget \u003c= 0) {\n    throw new Error(\"budget must be greater than 0\");\n  }\n  const total = spending.reduce((sum, value) =\u003e sum + value, 0);\n  return {\n    total,\n    remaining: budget - total,\n    warned: total \u003e= budget * 0.8,\n    percent: Math.round((total / budget) * 100),\n  };\n}\n",
+          "workspace_dir": "/tmp/waza-mock-1724502293"
+        }
+      ],
+      "stats": {
+        "pass_rate": 1,
+        "flakiness_percent": 0,
+        "passed_runs": 1,
+        "failed_runs": 0,
+        "error_runs": 0,
+        "total_runs": 1,
+        "avg_score": 1,
+        "min_score": 1,
+        "max_score": 1,
+        "std_dev_score": 0,
+        "score_variance": 0,
+        "ci95_lo": 0,
+        "ci95_hi": 0,
+        "flaky": false,
+        "avg_duration_ms": 0,
+        "avg_weighted_score": 1
+      }
+    },
+    {
+      "test_id": "verify-pass",
+      "display_name": "A passing slice verifies PASS",
+      "status": "passed",
+      "runs": [
+        {
+          "run_number": 1,
+          "attempts": 1,
+          "prompt": "Verify the weekly-summary slice in the demo: build, lint, typecheck, and tests all pass.",
+          "status": "passed",
+          "duration_ms": 0,
+          "validations": {
+            "_output_contains": {
+              "identifier": "_output_contains",
+              "type": "",
+              "score": 1,
+              "weight": 1,
+              "passed": true,
+              "feedback": "matched 1/1 required strings",
+              "duration_ms": 0
+            },
+            "output_nonempty": {
+              "identifier": "output_nonempty",
+              "type": "code",
+              "score": 1,
+              "weight": 1,
+              "passed": true,
+              "feedback": "All assertions passed",
+              "details": {
+                "failures": null,
+                "passed_assertions": 1,
+                "total_assertions": 1
+              },
+              "duration_ms": 34
+            },
+            "verdict_present": {
+              "identifier": "verdict_present",
+              "type": "code",
+              "score": 1,
+              "weight": 1,
+              "passed": true,
+              "feedback": "All assertions passed",
+              "details": {
+                "failures": null,
+                "passed_assertions": 1,
+                "total_assertions": 1
+              },
+              "duration_ms": 33
+            }
+          },
+          "session_digest": {
+            "tool_call_count": 0,
+            "tools_used": [],
+            "errors": [],
+            "session_id": "mock-session-1793925657759360920"
+          },
+          "final_output": "Mock response for: Verify the weekly-summary slice in the demo: build, lint, typecheck, and tests all pass.\nTask: A passing slice verifies PASS\nDescription: The weekly-summary slice in the demo passes build, lint, typecheck, and\nall 7 tests. orcinus-verify must return verdict PASS with the evidence.\n\nContext:\n  skill: orcinus-verify\n  slice: weekly-summary\nAnalyzed 1 file(s):\n  - summary.ts\n// Weekly summary: total spent, remaining budget, warning flag, percent used.\nexport function weeklySummary(spending: number[], budget: number): {\n  total: number;\n  remaining: number;\n  warned: boolean;\n  percent: number;\n} {\n  if (budget \u003c= 0) {\n    throw new Error(\"budget must be greater than 0\");\n  }\n  const total = spending.reduce((sum, value) =\u003e sum + value, 0);\n  return {\n    total,\n    remaining: budget - total,\n    warned: total \u003e= budget * 0.8,\n    percent: Math.round((total / budget) * 100),\n  };\n}\n",
+          "workspace_dir": "/tmp/waza-mock-2844293082"
+        }
+      ],
+      "stats": {
+        "pass_rate": 1,
+        "flakiness_percent": 0,
+        "passed_runs": 1,
+        "failed_runs": 0,
+        "error_runs": 0,
+        "total_runs": 1,
+        "avg_score": 1,
+        "min_score": 1,
+        "max_score": 1,
+        "std_dev_score": 0,
+        "score_variance": 0,
+        "ci95_lo": 0,
+        "ci95_hi": 0,
+        "flaky": false,
+        "avg_duration_ms": 0,
+        "avg_weighted_score": 1
+      }
+    }
+  ],
+  "evaluation_usage": {
+    "sessions": [
+      {
+        "session_id": "mock-session-1793925657658317771"
+      },
+      {
+        "session_id": "mock-session-1793925657759360920"
+      }
+    ]
+  },
+  "skill": "orcinus-verify"
+}

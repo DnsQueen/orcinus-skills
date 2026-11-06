@@ -1,0 +1,22 @@
+name: orcinus-verify-agent-eval
+description: Graded eval for the orcinus-verify skill, run with a REAL agent executor (not the mock). The prompts do NOT state the expected verdict — the agent must read the code and the evidence and decide. A mock executor cannot run this suite: it echoes the prompt back, so a prompt that contains the answer would pass trivially.
+skill: orcinus-verify
+schemaVersion: "1.0"
+version: "1.0"
+config:
+  trials_per_task: 1
+  timeout_seconds: 300
+  parallel: false
+  executor: copilot-sdk
+metrics:
+  - name: task_completion
+    weight: 1.0
+    threshold: 0.8
+graders:
+  - type: code
+    name: verdict_present
+    config:
+      assertions:
+        - "len(output) > 0"
+tasks:
+  - "tasks/*.yaml"

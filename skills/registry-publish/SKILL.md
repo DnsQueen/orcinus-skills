@@ -1,6 +1,7 @@
 ---
 name: registry-publish
-description: Publish a package to a registry safely — prepare, check, dry-run, confirm, publish, then verify the published artifact actually installs and works. Use when shipping a new version of a package. npm first. No publish happens without the user's explicit written confirmation.
+description: Publish a package to a registry safely — prepare, check, dry-run, confirm, publish, then verify the published artifact actually installs and works. Use when shipping a new version of a package. npm first. No publish happens without the user's explicit written confirmation. Only invoke via the orcinus router.
+license: MIT
 ---
 
 # REGISTRY-PUBLISH — ship the package, and prove the shipped one works
@@ -28,7 +29,7 @@ Publishing is the one step in the lifecycle that cannot be undone cleanly. You c
 ### 2. Check
 
 - The four commands are green (build, lint, typecheck, test).
-- The version does not exist on the registry yet (`npm view <name> version` must not return this version).
+- The version does not exist on the registry yet (`npm view <name>@<version> version` must return nothing — query the exact version, not the latest, or a different version's existence will mislead you).
 - The git tree is clean and the version bump is committed.
 
 ### 3. Dry-run

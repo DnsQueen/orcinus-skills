@@ -12,7 +12,7 @@ How to check whether `security-review` works. Run it on the demo project (`/tmp/
 2. The secrets thin scan finds no match, and the report says so.
 3. `npm audit` (or the stack equivalent) is attempted, and its result is recorded — either the counts by severity, or the exact error if the audit endpoint is blocked — and it is never reported as passed when it did not run.
 4. The report lists Gitleaks, OSV-Scanner, and Semgrep/CodeQL as **not run — tool not installed**, with no claim that those checks passed.
-5. Verdict is PASS, with the not-run list visible.
+5. Verdict is PASS WITH LIMITATIONS, with the not-run list visible — Gitleaks, OSV-Scanner, and Semgrep/CodeQL did not run, so the verdict is not a plain PASS.
 
 **Fail criteria — any one of these fails the eval:**
 

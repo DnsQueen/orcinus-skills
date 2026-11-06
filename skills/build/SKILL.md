@@ -1,6 +1,7 @@
 ---
 name: build
-description: Build one slice at a time, test first, with the four checks and independent verification before commit. Use when a scaffolded project exists and a slice from the calibrated brief is next.
+description: Build one slice at a time, test first, with the four checks and independent verification before commit. Use when a scaffolded project exists and a slice from the calibrated brief is next. Only invoke via the orcinus router.
+license: MIT
 ---
 
 # BUILD — one slice at a time, test first
@@ -38,16 +39,20 @@ Run, in order, and record the real output and exit code for each:
 
 1. `build`
 2. `lint`
-3. `typecheck`
+3. `typecheck` (if the project has one — the ORCINUS scaffold always sets one up, so a missing typecheck in a scaffolded project is a finding)
 4. `test` (full suite, not only the new test)
 
 All four must pass. If any fails, fix only the cause and re-run all four from the top. After 3 failed loops, stop and hand back to the user.
 
-### 5. Verify independently
+### 5. Check the tests themselves (mutation)
+
+After the slice passes its tests, check the tests themselves with mutation-testing before calling it done. Run it on the slice's changed files (or the whole suite for a small project). If a mutant survives, the test suite has a gap — strengthen the test (never weaken it) and re-run. A slice is not done while its tests can be fooled.
+
+### 6. Verify independently
 
 Run orcinus-verify. It reads the code and the evidence, not your summary. If it says FAIL, fix the finding and re-verify from step 4. Do not commit while verification is failing.
 
-### 6. Commit one slice
+### 7. Commit one slice
 
 One commit per slice, with a clear message naming the behaviour. Then record progress: what is done, what is next, what is blocked. End the session in a clean state.
 

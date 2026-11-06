@@ -1,6 +1,7 @@
 ---
 name: breaking-change
-description: Detect breaking changes between two OpenAPI specs before shipping, so a change that breaks consumers never ships under the same version. Use before merging any API change and in CI on every spec change. OpenAPI 3.x only.
+description: Detect breaking changes between two OpenAPI specs before shipping, so a change that breaks consumers never ships under the same version. Use before merging any API change and in CI on every spec change. OpenAPI 3.x only. Only invoke via the orcinus router.
+license: MIT
 ---
 
 # BREAKING-CHANGE — did the API break, and is it allowed to?

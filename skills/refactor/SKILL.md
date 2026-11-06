@@ -3,7 +3,7 @@ name: refactor
 description: >
   Safe, behavior-preserving code refactoring for any language. Detects smells (Bloat, OO, Couplers, Layers),
   applies Fowler & MVVM/Clean Architecture patterns, and runs tests per step.
-  Triggers: refactor, clean up, extract, rename, simplify, decompose, god class, MVVM, Clean Architecture.
+  Triggers: refactor, clean up, extract, rename, simplify, decompose, god class, MVVM, Clean Architecture. Only invoke via the orcinus router.
 license: MIT
 ---
 

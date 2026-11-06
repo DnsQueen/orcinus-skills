@@ -1,6 +1,6 @@
 ---
 name: idea-capture
-description: Capture a raw idea the moment it arrives and keep it in a durable store, so it survives between sessions. Use whenever an idea comes up mid-work, in passing, or outside a calibration session — before it is lost — and when you need to find, promote, or drop a stored idea.
+description: Capture a raw idea the moment it arrives and keep it in a durable store, so it survives between sessions. Use whenever an idea comes up mid-work, in passing, or outside a calibration session — before it is lost — and when you need to find, promote, or drop a stored idea. Only invoke via the orcinus router.
 license: MIT
 ---
 
@@ -20,19 +20,19 @@ An idea that arrives mid-work and is not written down is gone by the next sessio
 
 ### 1. Capture
 
-Run the script (`scripts/capture.py`, Python, standard library only):
+Run the script (`scripts/capture.py`, Python 3.9+, standard library only):
 
 ```
 capture.py capture --store <project>/ideas --text "<the idea, verbatim>" --source "<who said it>"
 ```
 
-It prints the idea id (`YYYYMMDD-HHMMSS-slug`). An empty idea is refused (exit 1, no file created). If two ideas arrive in the same second, the second gets a `-2` suffix — the id is always unique.
+It prints the idea id (`YYYYMMDD-HHMMSS-slug`). An empty idea is refused (exit 1, no file created). If two ideas arrive in the same second, the second gets a `-2` suffix — the id is always unique. The raw text is stored exactly as given; only the emptiness check strips whitespace. The source must be a single line (a newline would inject a frontmatter field). The id is strictly validated (only the generated shape is accepted) and the resolved path must stay inside the store, so an id can never escape it — even through a symlink. A status change is written atomically (temp file + replace), and a capture creates its file exclusively, so two concurrent captures cannot overwrite each other. A file that cannot be parsed is reported to stderr, never silently skipped.
 
 ### 2. Find it later
 
 - `capture.py list --store <project>/ideas` — every idea, with status and date.
 - `capture.py list --store <project>/ideas --status raw` — only the unprocessed ones.
-- `capture.py search --store <project>/ideas <keyword>` — ideas whose text contains the keyword (case-insensitive; works in Persian and English).
+- `capture.py search --store <project>/ideas <keyword>` — ideas whose raw text contains the keyword (case-insensitive; works in Persian and English). Search matches only the raw idea text, not the frontmatter or the History, so searching for "raw" or "dropped" does not return everything.
 - `capture.py show --store <project>/ideas <id>` — the whole file.
 
 ### 3. Move it forward

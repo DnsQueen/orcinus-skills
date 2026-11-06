@@ -1,6 +1,6 @@
 ---
 name: monitoring
-description: "Use when setting up uptime and health monitoring, alerts, or on-call basics for a service already in production, so you learn it is down before customers do — health and readiness probes, alerting on SLO error-budget burn rather than raw counts, curing alert fatigue, on-call rotation with escalation, and a status page. NOT instrumenting logs, metrics or traces, or wiring OpenTelemetry (that is `observability`)."
+description: "Use when setting up uptime and health monitoring, alerts, or on-call basics for a service already in production, so you learn it is down before customers do — health and readiness probes, alerting on SLO error-budget burn rather than raw counts, curing alert fatigue, on-call rotation with escalation, and a status page. NOT instrumenting logs, metrics or traces, or wiring OpenTelemetry (that is `observability`). Only invoke via the orcinus router."
 license: MIT
 ---
 
@@ -107,7 +107,9 @@ The homepage being up tells you almost nothing. Probe the path that makes you mo
 | > 6 | 6h (+ 30m short) | 5% in 6h | warning | **ticket** |
 | > 1 | 3d (+ 6h short) | 10% in 3d | info | review |
 
-Routing: **critical → page**, **warning → ticket**, **info → dashboard/review**. Dedupe and group related alerts into one incident (10 hosts failing the same check = one page, not ten). Set **maintenance windows** so planned deploys don't page anyone. The full burn-rate math and a copy-paste Prometheus-style rule with a `runbook_url` annotation are in `references/burn-rate-and-oncall.md`.
+Routing: **critical → page**, **warning → ticket**, **info → dashboard/review**. Dedupe and group related alerts into one incident (10 hosts failing the same check = one page, not ten). Set **maintenance windows** so planned deploys don't page anyone.
+
+Scale by criticality: for a small or single-user service, the on-call is just the owner — no rotation, no escalation chain, and the SLO can be a single availability target (for example 99% uptime over 30 days). Add a rotation and a secondary only when more than one person is on call, and add burn-rate alerts only when the service has a real error budget to spend. Do not build a full on-call rotation for a service with one user. The full burn-rate math and a copy-paste Prometheus-style rule with a `runbook_url` annotation are in `references/burn-rate-and-oncall.md`.
 
 ## On-call basics
 
@@ -150,4 +152,4 @@ Routing: **critical → page**, **warning → ticket**, **info → dashboard/rev
 - `references/tool-setup.md` — Uptime Kuma docker-compose (rootless image, volume, port), HTTP + push-heartbeat + SSL/domain-expiry monitors, a synthetic multi-step journey, notification wiring (ntfy / Slack webhook / PagerDuty integration key), a UptimeRobot/Better Stack monitor JSON shape, and Go + FastAPI health-endpoint handlers.
 - `references/burn-rate-and-oncall.md` — full multi-window multi-burn-rate math, a copy-paste Prometheus-style alert rule with `runbook_url`, severity mapping, a sample escalation-policy YAML, and a fill-in runbook template.
 
-Related: `../observability/SKILL.md` (what the app emits), `../deployment/SKILL.md` (release-gating healthcheck + rollback), `../error-handling/SKILL.md` (degrade in code), `../domains-dns/SKILL.md` (provision certs/DNS), `../scaling/SKILL.md` (survive the load monitoring detected).
+Related in this repo: `../monitoring-observability/SKILL.md` — the telemetry side (what the app emits: logs, metrics, traces). The other siblings this skill originally linked to (observability, deployment, error-handling, domains-dns, scaling) are not part of ORCINUS; the links were removed because they pointed nowhere after installation.

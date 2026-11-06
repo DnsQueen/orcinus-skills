@@ -1,6 +1,6 @@
 ---
 name: waza
-description: "**WORKFLOW SKILL** - Evaluate AI agent skills using structured benchmarks with YAML specs, fixture isolation, and pluggable validators. USE FOR: run waza, waza help, run eval, run benchmark, evaluate skill, test agent, generate eval suite, init eval, compare results, score agent, agent evaluation, skill testing, cross-model comparison. DO NOT USE FOR: improving skill frontmatter (use waza dev), creating new skills from scratch (use skill-creator), token counting or budget checks (use waza tokens). INVOKES: Copilot SDK executor, mock engine, code/regex validators. FOR SINGLE OPERATIONS: use waza run directly for a single benchmark."
+description: "**WORKFLOW SKILL** - Evaluate AI agent skills using structured benchmarks with YAML specs, fixture isolation, and pluggable validators. USE FOR: run waza, waza help, run eval, run benchmark, evaluate skill, test agent, generate eval suite, init eval, compare results, score agent, agent evaluation, skill testing, cross-model comparison. DO NOT USE FOR: improving skill frontmatter (use waza dev), creating new skills from scratch (use skill-creator), token counting or budget checks (use waza tokens). INVOKES: Copilot SDK executor, mock engine, code/regex validators. FOR SINGLE OPERATIONS: use waza run directly for a single benchmark. Only invoke via the orcinus router."
 license: MIT
 ---
 
@@ -167,15 +167,21 @@ executor: mock          # or copilot-sdk
 tasks:
   - id: task-1
     name: "Describe the task"
-    prompt: "Your prompt to the agent"
-    expected: "Expected behavior"
-    validators:
-      - type: code
+    inputs:
+      prompt: "Your prompt to the agent"
+    expected:
+      output_contains:
+        - "expected pattern"
+      outcomes:
+        - type: task_completed
+      behavior:
+        max_tool_calls: 5
+    graders:
+      - name: output_present
+        type: code
         config:
-          language: go
-      - type: text
-        config:
-          pattern: "expected pattern"
+          assertions:
+            - "len(output) > 0"
 ```
 
 ## Engines

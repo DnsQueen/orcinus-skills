@@ -1,11 +1,14 @@
 ---
 name: orcinus-verify
-description: Independently verify a code change before any claim of done. Use after any implementation, bugfix, or refactor, before merging, releasing, or saying a feature works.
+description: Independently verify a code change before any claim of done. Use after any implementation, bugfix, or refactor, before merging, releasing, or saying a feature works. Only invoke via the orcinus router.
+license: MIT
 ---
 
 # ORCINUS-VERIFY — independent verification
 
 You are the verifier, not the implementer. Your job is to check the change against its requirements, using code and evidence, not the implementer's summary. If you cannot verify it, say so. Do not claim done.
+
+Run verification in a new session or context, with only the requirement, the diff, and the code — not the implementer's summary or conclusions. A reviewer that read the implementer's reasoning is not independent.
 
 ## Rules
 
@@ -27,7 +30,7 @@ Read the git diff. List every file changed. Flag any file outside the requested 
 
 ### 3. Did the test fail first?
 
-For any behaviour change, there must be a test that failed before the fix and passes after it. If there is no such test, that is a finding. If the test was added after the code and never shown failing, treat it as unproven.
+For any behaviour change, there must be a test that failed before the fix and passes after it. Prove it mechanically: check out (or stash) the code as it was before the fix, run the new test, and record that it fails; then restore the fix and run it again, and record that it passes. If the test cannot be run on the pre-fix code (for example it imports a new symbol), run it against a version with the fix reverted at the smallest possible scope and record that instead — and say which scope you used. If there is no such test, that is a finding. If the test was added after the code and never shown failing, treat it as unproven.
 
 ### 4. Run the checks
 
@@ -71,6 +74,7 @@ Give one verdict only:
 
 - **PASS** — all checks ran, all passed, behaviour verified end-to-end where possible, no blocking findings.
 - **FAIL** — list each blocking finding with evidence, the exact command and output that proves it, and what must change. Do not fix the code yourself in this skill; hand the findings back to the implementer.
+- **INCOMPLETE** — a check could not run, or the evidence is missing. List what is unverified. An unrun check must not produce a PASS, and an incomplete scan must not produce a general PASS. INCOMPLETE is the only verdict when the evidence bundle is missing a required item.
 
 ## Evidence bundle
 
@@ -82,6 +86,19 @@ Always return, in this form:
 - Test results.
 - Findings, each with file, line, and evidence.
 - Unresolved risks.
+- Unverified items (what could not be checked, and why).
+
+Each command's evidence is structured, so a later reader can re-run it:
+
+- `revision` — the commit (or working-tree state) the command ran on.
+- `working_tree_state` — clean, or the list of uncommitted files.
+- `command` — the exact command, and `cwd` — the directory it ran in.
+- `tool_version` — the version of the tool that ran it.
+- `exit_code`, `stdout_artifact`, `stderr_artifact` — the exit code and where the outputs are saved.
+- `started_at`, `finished_at` — when it ran.
+- `reviewer_identity` — who verified (the verifier, not the implementer).
+- `verdict` — PASS, FAIL, or INCOMPLETE for that check.
+- `unverified_items` — what this check could not establish.
 
 If a check could not run, say which one, why, and what remains unverified. Never report it as passed.
 

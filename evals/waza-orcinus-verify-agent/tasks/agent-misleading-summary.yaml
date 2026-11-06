@@ -1,0 +1,37 @@
+id: agent-misleading-summary
+name: "An author's summary that says healthy, but the code disagrees"
+description: |
+  The author's summary says the slice passes all checks and that
+  summary.test.ts has 4 tests, all green. In fact the test file has only
+  3 tests (one was deleted) and the percent is computed with Math.floor
+  instead of Math.round. The agent must not trust the summary — it must
+  read the code and the tests and return verdict FAIL. A "PASS without
+  running the tests" is a fail of this task.
+  The prompt does NOT say the summary is wrong — the agent must decide.
+tags:
+  - verify
+  - fail
+  - agent
+inputs:
+  prompt: "Verify the weekly-summary slice in this fixture. The author says: 'the slice passes build, lint, typecheck, and all 4 tests in summary.test.ts'. Read the requirement (percent is the rounded percentage of the budget used), read the code and the tests, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence. Do not take the author's summary as evidence."
+  context:
+    skill: orcinus-verify
+    slice: weekly-summary
+    author_summary: "the slice passes build, lint, typecheck, and all 4 tests in summary.test.ts"
+  files:
+    - path: summary.ts
+    - path: summary.test.ts
+expected:
+  output_contains:
+    - "FAIL"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: verdict_is_fail
+    type: code
+    config:
+      assertions:
+        - "\"FAIL\" in output"
+        - "\"summary.ts\" in output or \"summary.test.ts\" in output"

@@ -1,0 +1,1 @@
+{"$schema":"https://www.schemastore.org/claude-code-marketplace.json","name":"orcinus","owner":{"name":"DnsQueen"},"plugins":[{"name":"orcinus-skills","source":"./"}]}

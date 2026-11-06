@@ -1,0 +1,33 @@
+id: agent-pass
+name: "A genuinely passing slice verifies PASS"
+description: |
+  The weekly-summary slice in the demo passes build, lint, typecheck, and
+  all 7 tests. orcinus-verify must return verdict PASS with the evidence.
+  The prompt does NOT say the slice passes — the agent must run the
+  checks and decide.
+tags:
+  - verify
+  - pass
+  - agent
+inputs:
+  prompt: "Verify the weekly-summary slice in examples/demo. Read the requirement in docs/constitution.md, read the diff, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence."
+  context:
+    skill: orcinus-verify
+    slice: weekly-summary
+  files:
+    - path: summary.ts
+    - path: summary.test.ts
+expected:
+  output_contains:
+    - "PASS"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: verdict_is_pass
+    type: code
+    config:
+      assertions:
+        - "\"PASS\" in output"
+        - "\"FAIL\" not in output"

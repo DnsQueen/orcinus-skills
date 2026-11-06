@@ -1,12 +1,16 @@
 ---
 name: independent-review
-description: Review a change independently before it merges, with six focused reviewers reading the diff — not the author's summary. Use before committing, before creating a pull request, and after a logical chunk of work. The implementer is never the final judge.
+description: Review a change independently before it merges, with six focused reviewers reading the diff — not the author's summary. Use before committing, before creating a pull request, and after a logical chunk of work. The implementer is never the final judge. Only invoke via the orcinus router.
 license: MIT
 ---
 
 # INDEPENDENT-REVIEW — the implementer is never the final judge
 
 A change the author reviewed themself is not reviewed. This skill runs an independent review of a change: six focused reviewers read the diff and the code, each from one angle, and their findings are aggregated into one verdict. It does not fix code — fixing is a separate step, one slice at a time, test first.
+
+## Licences
+
+This skill's text is MIT. The bundled reviewer agents and command (`agents/`, `commands/`) are Apache-2.0 — see `ATTRIBUTION.md`. Do not re-license the bundled files.
 
 ## Rules
 
@@ -20,12 +24,16 @@ A change the author reviewed themself is not reviewed. This skill runs an indepe
 
 ### 1. Determine the scope
 
-Run `git diff --name-only` and `git status` to list the changed files (new files included). That list is the scope. Nothing outside it is reviewed.
+Pick the mode first, then list the changed files (new files included). That list is the scope. Nothing outside it is reviewed.
+
+- **Local (uncommitted work):** staged + unstaged + untracked files. `git status` alone misses staged changes, and `git diff` alone misses untracked files — list all three.
+- **Single commit:** the commit against its parent (`git diff --name-only <commit>^ <commit>`).
+- **Pull request:** the head against the merge-base of the target branch (`git diff --name-only $(git merge-base <target> HEAD) HEAD`). In a clean PR worktree without a base, comparing against the branch's merge-base is the only way to see the PR's changes — a plain `git diff` shows nothing.
 
 ### 2. Pick the applicable reviewers
 
 - **Always**: code-reviewer (general quality, project guidelines, bugs).
-- **If test files changed**: pr-test-analyzer (behavioral coverage, critical gaps, test quality).
+- **If test files changed, or if behaviour changed with no new tests**: pr-test-analyzer (behavioral coverage, critical gaps, test quality). A behaviour change with no new test is itself a coverage finding — do not skip the analyzer because no test file changed.
 - **If comments or docs were added**: comment-analyzer (comment accuracy vs code, comment rot).
 - **If error handling changed**: silent-failure-hunter (silent failures, catch blocks, fallbacks).
 - **If types were added or modified**: type-design-analyzer (encapsulation, invariants).

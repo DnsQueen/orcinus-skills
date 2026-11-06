@@ -1,6 +1,7 @@
 ---
 name: scaffold
-description: Set up a new project so build, lint, typecheck, and test all run from day one. Use when a calibrated idea is confirmed and there is no project yet, or when an existing project has no working checks.
+description: Set up a new project so build, lint, typecheck, and test all run from day one. Use when a calibrated idea is confirmed and there is no project yet, or when an existing project has no working checks. Only invoke via the orcinus router.
+license: MIT
 ---
 
 # SCAFFOLD — a project that is green from day one

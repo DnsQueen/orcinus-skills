@@ -1,6 +1,6 @@
 ---
 name: handoff
-description: Write a compact handoff file so a fresh session resumes the task — state, decisions, next steps, and pointers, never file contents. Also load an existing handoff and resume from it. Use when the user asks for a handoff, or when the context is large and the task is still open.
+description: Write a compact handoff file so a fresh session resumes the task — state, decisions, next steps, and pointers, never file contents. Also load an existing handoff and resume from it. Use when the user asks for a handoff, or when the context is large and the task is still open. Only invoke via the orcinus router.
 license: MIT
 ---
 

@@ -1,0 +1,36 @@
+id: agent-planted-bug
+name: "A planted rounding bug verifies FAIL, even though the tests pass"
+description: |
+  The weekly-summary slice's percent is computed with Math.floor instead
+  of Math.round, so 79.6% shows as 79% instead of 80%. The existing tests
+  still pass (they only test exact values like 80/100). The agent must
+  catch the bug by reading the code (adversarial review), not by the
+  tests, and return verdict FAIL naming summary.ts.
+  The prompt does NOT say the slice fails — the agent must decide.
+tags:
+  - verify
+  - fail
+  - agent
+inputs:
+  prompt: "Verify the weekly-summary slice in this fixture. Read the requirement (percent is the rounded percentage of the budget used), read the code, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence."
+  context:
+    skill: orcinus-verify
+    slice: weekly-summary
+  files:
+    - path: summary.ts
+    - path: summary.test.ts
+expected:
+  output_contains:
+    - "FAIL"
+    - "summary.ts"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: verdict_is_fail_with_location
+    type: code
+    config:
+      assertions:
+        - "\"FAIL\" in output"
+        - "\"summary.ts\" in output"

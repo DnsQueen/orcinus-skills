@@ -1,6 +1,6 @@
 # MAP — 0 to 100
 
-Every micro-step, its best proven source, its licence, and how it enters ORCINUS. Status: `built` (in v1), `covered` (already installed / routed to), `rewrite` (own words), `bundle` (separate licensed module in same install), `todo` (to be written from scratch).
+Every micro-step, its best proven source, its licence, and how it enters ORCINUS. Status: `built` (in v1), `external-optional` (not in this repo; the router has a fallback for the step), `todo` (to be written from scratch). A row is never marked `built` for a skill that is not in this repo — a skill that lives only on the builder's machine is not part of the one-install system.
 
 Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-SA is rewritten or bundled as a separate module, never copied verbatim into an MIT file. Proprietary is reimplemented, never copied. Unverified licence = rewrite until verified.
 
@@ -9,8 +9,8 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Need | Best source | Licence | Integration | Status |
 |---|---|---|---|---|
 | Fleeting capture | — | — | Write from scratch: skills/idea-capture + scripts/capture.py (Python, stdlib only), one Markdown file per idea in the project's ideas/ store | built |
-| Sharpen / brainstorm | egm-brainstorm, egm-draft (installed) | Apache-2.0 | covered | covered |
-| Process / grill | grill-me / grilling (installed) | MIT | covered | covered |
+| Sharpen / brainstorm | egm-brainstorm, egm-draft | Apache-2.0 | external-optional: not in this repo; the router falls back to idea-calibrate's own questions | external-optional |
+| Process / grill | grill-me / grilling | MIT | external-optional: not in this repo; the router falls back to idea-calibrate's own questions | external-optional |
 | Nurture / manage | phuryn/pm-skills: opportunity-solution-tree, hypothesis | MIT | own-words in idea-calibrate step 3 | built |
 | Validate feasibility | phuryn/pm-skills: lean-validation, identify-assumptions | MIT | own-words in idea-calibrate step 4 | built |
 | Launch decision | phuryn/pm-skills: pre-mortem, prioritization | MIT | own-words in idea-calibrate step 5 | built |
@@ -35,13 +35,13 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 |---|---|---|---|---|
 | Clean code | wondelai/skills: clean-code | MIT | own-words in build (ponytail: smallest complete change) | built |
 | Task breakdown / slices | addyosmani/agent-skills: planning-and-task-breakdown; obra/superpowers: executing-plans | MIT | own-words in build step 1 | built |
-| Step-by-step implementation | ponytail, tdd (installed) | MIT | covered, routed via build | covered |
+| Step-by-step implementation | ponytail, tdd | MIT | external-optional: not in this repo; the router falls back to build's own test-first loop (a failing test first, then the smallest complete change) | external-optional |
 | API design (MCP) | anthropics/skills: mcp-builder | Apache-2.0 | skill + 5 references + 4 scripts injected verbatim, licence verified from the skill's own LICENSE.txt (repo licence is split) | built |
 | API design (REST/GraphQL) | addyosmani/agent-skills: api-and-interface-design | MIT | copy | built |
 | API consumption / contract tests | stareezy-1/frontend-architecture-skill: skills/frontend-data-contracts | MIT | copied verbatim (1 file, frontmatter licence normalized to MIT), licence verified from primary LICENSE, commit d7f0c53; the map's "write from scratch" plan was superseded — the skill was found after the first round | built |
 | Breaking-change detection | oasdiff | Apache-2.0 | bundle (CLI), own-words wrapper, licence verified from primary LICENSE | built |
 | State | stareezy-1/frontend-architecture-skill: skills/frontend-architecture + skills/frontend-optimistic-mutations | MIT | copied verbatim (1 file each, frontmatter licence normalized to MIT), licence verified from primary LICENSE, commit d7f0c53, 10 stars | built |
-| Database / schema / migration | alirezarezvani/claude-skills: engineering/skills/database-designer | MIT | copied verbatim (15 files, frontmatter adapted to spec only) + one minimal fix to migration_generator.py (upstream bug: failed on any schema change), licence verified from primary LICENSE, commit 8f08254; scripts audited (stdlib only, no network/DB/exec) | built |
+| Database / schema / migration | alirezarezvani/claude-skills: engineering/skills/database-designer | MIT | copied verbatim (15 files, frontmatter adapted to spec only) + ORCINUS fixes to migration_generator.py (see its ATTRIBUTION.md: the upstream `_json_default` bug, plus the unique/fk/check SQL, constraint order, renamed-table comparison, and zero-downtime labelling from external reviews), licence verified from primary LICENSE, commit 8f08254; scripts audited (stdlib only, no network/DB/exec) | built |
 | i18n | Marvellbrazil/my-agentic-skills: i18n | MIT | copied verbatim (10 files, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 42203fd | built |
 | Accessibility | maxgfr/ultra11y | MIT | own-words wrapper + engine bundled as-is (upstream SKILL.md is 522 lines, over the spec's 500-line guidance, so not copied verbatim), licence verified from primary LICENSE, commit b245094 | built |
 
@@ -49,12 +49,12 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 
 | Need | Best source | Licence | Integration | Status |
 |---|---|---|---|---|
-| Unit / integration | tdd (installed) | MIT | covered | covered |
+| Unit / integration | tdd | MIT | external-optional: not in this repo; the router falls back to build's own test-first loop (a failing test first, then the smallest complete change) | external-optional |
 | E2E | anthropics/skills: webapp-testing | Apache-2.0 | copied verbatim (6 files, frontmatter adapted to spec only), licence verified from the skill's own LICENSE.txt, commit ca45fc4 | built |
 | Mutation (JS/TS) | Stryker | Apache-2.0 | own-words skill, Stryker used as-is (command runner for node:test), licence verified from primary LICENSE | built |
 | Mutation beyond JS/TS | mutmut (boxed/mutmut) | BSD-3-Clause | own-words skill, mutmut used as-is (Python proof), licence verified from primary LICENSE, 3.8.1 | built |
 | Independent review | anthropics/claude-plugins-official: pr-review-toolkit | Apache-2.0 | own-words skill, 6 reviewer agents + review-pr command bundled as-is, licence verified from the plugin's own LICENSE file (the README's "MIT" line is an error in the README) | built |
-| Evidence / eval | microsoft/waza | MIT | skill injected verbatim + official v0.40.0 CLI as-is (binary not in repo), runnable suite evals/waza-orcinus-verify/ | built |
+| Evidence / eval | microsoft/waza | MIT | skill injected verbatim + official v0.40.0 CLI as-is (binary not in repo), runnable suites evals/waza-orcinus-verify/ (harness-smoke, mock) and evals/waza-orcinus-verify-agent/ (agent-behavior, real executor, not yet run) | built |
 | Benchmark | SWE-bench | MIT | benchmark, not a skill | todo |
 | Sandbox runtime | SWE-agent/swe-rex | MIT | bundle, container isolation only | todo |
 | Skill eval | openai/plugins: plugin-eval | per-plugin, repo licence not declared | do not copy verbatim | todo |
@@ -74,8 +74,8 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 
 | Need | Best source | Licence | Integration | Status |
 |---|---|---|---|---|
-| Debugging loop | diagnosing-bugs (installed) | MIT | covered | covered |
-| Tech-debt cleanup | ponytail-debt (installed) | MIT | covered | covered |
+| Debugging loop | mattpocock/skills (engineering/diagnosing-bugs) | MIT | copied verbatim (SKILL.md + hitl-loop template, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 4ae2317; the OpenAI agent definition (agents/openai.yaml) was not copied | built |
+| Tech-debt cleanup | ponytail-debt | MIT | external-optional: not in this repo; the router falls back to refactor's own simplification rule (remove what the slice no longer needs) | external-optional |
 | Simplification | pr-review-toolkit: code-simplifier | Apache-2.0 | code-simplifier agent bundled as-is in independent-review (runs after a review passes); no separate SKILL.md written | built |
 | Incomplete refactoring | — | — | Write from scratch (detector for orphaned consumers) | built |
 | Generic refactoring | MuhiminOsim/code-refactoring-skill | MIT | skill + 11 references injected verbatim, licence verified from primary LICENSE (Copyright 2026 Muhiminul Islam Osim), 12 stars, content read and checked before copying | built |
@@ -84,7 +84,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 
 | Need | Best source | Licence | Integration | Status |
 |---|---|---|---|---|
-| Docs / handoff | handoff (installed); anthropics/skills: doc-coauthoring (licence unclear) | MIT / unclear | covered; rewrite doc-coauthoring | covered |
+| Docs / handoff | mattpocock/skills: handoff; dariohansson/claude-handoff | MIT | merged into the handoff skill (mattpocock base + dariohansson template/path rules/resume mode), written in own words, both MIT | built |
 | Long-context handoff | claude-handoff (dariohansson) | MIT | merged into the handoff skill (mattpocock base + dariohansson template/path rules/resume mode), written in own words, both MIT | built |
 | Onboarding contributor | OthmanAdi/codebase-knowledge-builder | MIT | skill + 2 references + 1 template injected verbatim, licence verified from primary LICENSE (Copyright 2025 Ahmad Othman Ammar Adi), 28 stars — replaces the MAP's candidate kart-rc/codebase-onboarding, which does not exist (GitHub 404) | built |
 | Release | googleapis/release-please | Apache-2.0 | used as-is in finalize (CLI + Action), licence verified from primary LICENSE | built |

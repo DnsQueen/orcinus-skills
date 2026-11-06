@@ -1,6 +1,6 @@
 ---
 name: "database-designer"
-description: "Design a database schema: tables, relationships, indexes, normalization, SQL vs NoSQL, migration plans. Use whenever the user asks how to structure their data, which database to pick, or before writing DDL."
+description: "Design a database schema: tables, relationships, indexes, normalization, SQL vs NoSQL, migration plans. Use whenever the user asks how to structure their data, which database to pick, or before writing DDL. Only invoke via the orcinus router."
 license: MIT
 ---
 
@@ -60,7 +60,7 @@ Write the user's hot queries into a query-patterns JSON first (copy `assets/samp
 python3 migration_generator.py --current current_schema.json --target target_schema.json --zero-downtime --format sql -o migration.sql
 ```
 
-`--zero-downtime` emits an expand-contract plan; `--validate-only` checks feasibility without generating SQL.
+`--zero-downtime` emits an expand-contract plan. That plan is a DRAFT, not a verified zero-downtime migration: it has no write-synchronisation, no cutover and no backfill verification. It needs application coordination (dual-write to both columns during EXPAND, a backfill check before CONTRACT, a cutover). Do not run it automatically on real data. `--validate-only` checks feasibility without generating SQL.
 
 ### 4. Verification loop
 

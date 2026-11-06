@@ -1,6 +1,6 @@
 ---
 name: i18n
-description: Internationalizes a project across language tags and negotiation, dates/times/time zones/calendars, numbers and currency, bidirectional text and RTL layout, pluralization and ICU messages, collation and sorting, Unicode text processing, content and asset adaptation, and localization testing. Use when the user types /i18n, asks to internationalize or localize a codebase, wants to add a language, or asks about RTL, time zones, plural rules, number formatting, or locale-aware sorting. Accepts an optional scope so the user can internationalize only selected aspects or selected languages.
+description: Internationalizes a project across language tags and negotiation, dates/times/time zones/calendars, numbers and currency, bidirectional text and RTL layout, pluralization and ICU messages, collation and sorting, Unicode text processing, content and asset adaptation, and localization testing. Use when the user types /i18n, asks to internationalize or localize a codebase, wants to add a language, or asks about RTL, time zones, plural rules, number formatting, or locale-aware sorting. Accepts an optional scope so the user can internationalize only selected aspects or selected languages. Only invoke via the orcinus router.
 license: MIT
 ---
 

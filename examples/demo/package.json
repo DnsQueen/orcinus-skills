@@ -1,0 +1,23 @@
+{
+  "description": "Demo project scaffolded by following skills/scaffold. First slice: weekly delivery budget warning at 80%.",
+  "license": "MIT",
+  "name": "orcinus-demo-scaffold",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint .",
+    "test": "tsc && node --test dist/tests/*.test.js",
+    "typecheck": "tsc --noEmit",
+    "mutation": "stryker run"
+  },
+  "type": "module",
+  "version": "0.1.0",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@stryker-mutator/core": "^10.1.1",
+    "@stryker-mutator/typescript-checker": "^10.1.1",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1"
+  }
+}

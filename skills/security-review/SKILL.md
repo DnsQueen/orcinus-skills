@@ -1,6 +1,7 @@
 ---
 name: security-review
-description: Review a change for secrets, injection, supply-chain, and unsafe patterns before merge. Use after any implementation, before merging or releasing, and whenever code touches auth, secrets, data, or external input.
+description: Review a change for secrets, injection, supply-chain, and unsafe patterns before merge. Use after any implementation, before merging or releasing, and whenever code touches auth, secrets, data, or external input. Only invoke via the orcinus router.
+license: MIT
 ---
 
 # SECURITY-REVIEW — check before you trust
@@ -56,9 +57,10 @@ For each new capability: who can call it, is auth checked before the action, wha
 
 Give one verdict only:
 
-- **PASS** — no blocking findings, and the report lists every check as ran (with tool and version) or not run (with reason).
+- **PASS** — no blocking findings, and every check the project requires ran (with tool and version).
+- **PASS WITH LIMITATIONS** — no blocking findings, but a check that is not required for this project could not run (a deeper scanner not installed, an audit endpoint blocked). The report lists exactly which checks are unverified. This is not a PASS.
 - **FAIL** — list each blocking finding with file, line, and evidence, and what must change. Do not fix the code yourself in this skill; hand the findings back.
-- **INCOMPLETE** — a check the project requires could not run. List what is unverified and do not claim PASS.
+- **INCOMPLETE** — a check the project REQUIRES could not run (for example the secrets scan itself, or a scanner the project's policy mandates). List what is unverified and do not claim PASS.
 
 ## Report
 
@@ -67,7 +69,7 @@ Always return, in this form:
 - Files changed, with the security-sensitive ones marked.
 - Each check, its tool and version, or "not run" with the reason.
 - Findings, each with file, line, and evidence.
-- Verdict (PASS, FAIL, or INCOMPLETE).
+- Verdict (PASS, PASS WITH LIMITATIONS, FAIL, or INCOMPLETE).
 
 If a check could not run, say which one, why, and what remains unverified. Never report it as passed.
 

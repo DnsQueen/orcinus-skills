@@ -1,6 +1,7 @@
 ---
 name: idea-calibrate
-description: Turn a raw idea into a calibrated, testable v1 plan before any code. Use when you have only an idea, a rough brief, or a feature request, and need the problem, user, success criteria, assumptions, and non-goals confirmed.
+description: Turn a raw idea into a calibrated, testable v1 plan before any code. Use when you have only an idea, a rough brief, or a feature request, and need the problem, user, success criteria, assumptions, and non-goals confirmed. Only invoke via the orcinus router.
+license: MIT
 ---
 
 # IDEA-CALIBRATE — from raw idea to a plan you can build

@@ -1,6 +1,7 @@
 ---
 name: finalize
-description: Prepare a release, cut it, and hand it over — docs, release notes, CI gates, rollback plan, and monitoring — without publishing anything the user has not approved. Use when the work claims to be complete and ready to publish.
+description: Prepare a release, cut it, and hand it over — docs, release notes, CI gates, rollback plan, and monitoring — without publishing anything the user has not approved. Use when the work claims to be complete and ready to publish. Only invoke via the orcinus router.
+license: MIT
 ---
 
 # FINALIZE — ready to publish, and provably so
@@ -52,7 +53,7 @@ Stop here. Present the release report (below) and ask the user to confirm it in 
 
 ### 8. After publish
 
-New issues go through bug triage. The ready skill for that is issue-triage (CC-BY-SA-4.0), kept as a separate licensed module, not copied into this MIT repo. Until that module exists, record new issues in the project's tracker with the same evidence standard: what broke, how to reproduce it, and what the last known-good version was.
+New issues go through bug triage. The ready skill for that is issue-triage (MIT, copied verbatim into this repo — see its ATTRIBUTION.md). Record new issues in the project's tracker with the same evidence standard: what broke, how to reproduce it, and what the last known-good version was.
 
 ## Release report
 
@@ -69,4 +70,4 @@ Return the report in this form, no more, no less:
 
 ## Sources
 
-This skill is an orchestrator. It uses ready tools as-is: release-please (googleapis/release-please, Apache-2.0, licence verified from the primary LICENSE file); Waza (microsoft/waza, MIT); handoff (installed, MIT); monitoring-observability (yonatangross/orchestkit, MIT, injected verbatim — see its ATTRIBUTION.md). No text was copied from release-please, Waza, or handoff. Issue-triage is referenced, not copied (CC-BY-SA-4.0).
+This skill is an orchestrator. It uses ready tools as-is: release-please (googleapis/release-please, Apache-2.0, licence verified from the primary LICENSE file); Waza (microsoft/waza, MIT); handoff (installed, MIT); monitoring-observability (yonatangross/orchestkit, MIT, injected verbatim — see its ATTRIBUTION.md). No text was copied from release-please, Waza, or handoff. Issue-triage is copied verbatim (MIT — see its ATTRIBUTION.md).
