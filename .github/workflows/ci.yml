@@ -85,7 +85,7 @@ jobs:
           python-version: "3.12"
       - name: Install CI dependencies (pinned, hashes verified)
         run: pip install --require-hashes -r requirements-ci.txt
-      - name: Clean-environment install check (release mode: the committed revision only)
+      - name: "Clean-environment install check (release mode: the committed revision only)"
         run: python3 scripts/clean_copy_check.py --mode release
 
   version-bump:
