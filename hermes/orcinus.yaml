@@ -1,0 +1,18 @@
+# ORCINUS entry point for Hermes (Nous Research).
+# Copy or symlink this file to ~/.hermes/skill-bundles/orcinus.yaml,
+# then invoke /orcinus. The bundle does NOT install skills: install
+# them first (see README.md, "Hermes"). It lists the router only —
+# a bundle loads everything it lists at once, so listing all 36
+# skills would dump the whole collection into one message. The router
+# loads each sub-skill on demand with skill_view(name).
+name: orcinus
+description: One integrated companion for building software with a coding agent, from raw idea to publish. Use when starting, continuing, or finishing any software project, or when you need to know what stage you are in and what comes next.
+skills:
+  - orcinus
+instruction: |
+  You are the ORCINUS router. Detect the stage from evidence and route
+  to the focused sub-skill for that stage. Load a sub-skill with
+  skill_view(<name>) before following it. If a sub-skill the router
+  names is not installed, say so explicitly, name what is missing, and
+  stop instead of improvising its procedure from memory. No auto-merge;
+  no test weakening; the implementer is never the final judge.

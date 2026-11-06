@@ -1,8 +1,10 @@
 # SCOPE
 
-## In v1
+## In v0.9
 
 - One entry and router (`skills/orcinus`).
+- One entry point, enforced: only the router is user-invocable — every sub-skill carries `user-invocable: false` in its frontmatter, so no sub-skill appears in the `/` menu and the user never picks one mid-work; the router invokes them. `user-invocable` is a Claude Code extension field, ignored by other hosts. It is a non-spec field, so claude.ai / Skills API uploads would reject it — uploads are not a distribution path for this repo (install is via the plugin marketplace or `npx skills add`). No skill sets `disable-model-invocation: true`: the router must be able to invoke sub-skills itself.
+- Hermes support (`hermes/orcinus.yaml` + README install docs): the repo is a Hermes tap as-is (`hermes skills tap add DnsQueen/orcinus-skills`, default path `skills/`), and the bundle is the `/orcinus` entry point — it lists the router only, because a bundle loads everything it lists at once and the router loads sub-skills on demand with `skill_view(name)`. A validator check (`check_hermes_bundle`, 8 tests) pins the bundle: it must exist, parse, list only skills that exist, and list the router only. The router checks a sub-skill is installed before routing to it — a Hermes bundle silently skips missing skills. Deliberately NOT embedded: `metadata.hermes` tags/category — Hermes documents them, but the Agent Skills spec requires metadata values to be strings and ORCINUS keeps frontmatter spec-pure; tags/category are discovery-only and the router is the entry point. What Hermes loses: the plugin-root `agents/` and `commands/` (Claude Code only), and `${CLAUDE_PLUGIN_ROOT}` paths (one place, `orcinus-verify`) need the Hermes skill folder instead. Recorded limit: the bundle was validated by the repo's own YAML parser and check, never loaded by a real Hermes installation — no Hermes CLI exists in this environment.
 - One flagship verification skill (`skills/orcinus-verify`).
 - One idea-calibration skill (`skills/idea-calibrate`), with a scored eval (`evals/idea-calibrate-01.md`).
 - One scaffold skill (`skills/scaffold`), with a scored eval (`evals/scaffold-01.md`) proven on a real demo project.
@@ -41,7 +43,7 @@
 - Shared glossary and boundaries.
 - Eval scenarios for the flagship, run on a demo repo.
 
-## Out of v1
+## Out of v0.9
 
 - Full implementations of every sub-skill in the map. They are added one at a time, each proven before it ships.
 - Auto-merge, auto-publish to a registry, and any irreversible action without human approval.
@@ -51,30 +53,30 @@
 
 - The router, gates, glossary, evidence bundle, and eval harness exist.
 - Every stage 0–100 has a present entry in the map — no empty stage.
-- Some sub-skills are thin in v1. Depth grows in later versions; the structure does not change.
+- Some sub-skills are thin in v0.9. Depth grows in later versions; the structure does not change.
 
 ## Non-goals
 
 - A dump of 2,000 skills to pick from. ORCINUS is one unit.
 - Copying CC-BY-SA or proprietary text verbatim into MIT files.
-- Rebuilding what ponytail and tdd already do well. ORCINUS routes to them where they fit and focuses new work on the gaps: independent verification, security, and eval. (diagnosing-bugs was external-optional in v1.0.0's first draft and is now bundled — see the debugging skill above.)
+- Rebuilding what ponytail and tdd already do well. ORCINUS routes to them where they fit and focuses new work on the gaps: independent verification, security, and eval. (diagnosing-bugs was external-optional in v0.9.0's first draft and is now bundled — see the debugging skill above.)
 
 
-## v1.1 (planned, not v1 blockers)
+## v1.1 (planned, not v0.9 blockers)
 
 These came from four independent external reviews (2026-11-06). They are
 recorded here so they are not lost, and so no one mistakes them for
-v1.0.0 promises. v1.0.0 ships the INCOMPLETE status and the structured
+v0.9.0 promises. v0.9.0 ships the INCOMPLETE status and the structured
 evidence schema in `orcinus-verify`; the rest of the enforcement layer
 is v1.1 work.
 
 **Built in the second review round (2026-11-06) — the v1.1 steps, not
 the layer itself:** the central skill manifest (`skills/manifest.json`,
 checked by the validator against the folders and the frontmatter);
-the machine-readable evidence schema (`evals/evidence.schema.json`)
-with a validator (`scripts/validate_evidence.py`) that enforces
+the machine-readable evidence schema (`skills/orcinus-verify/references/evidence.schema.json`)
+with a validator (`skills/orcinus-verify/scripts/validate_evidence.py`) that enforces
 verdict consistency; the `doctor` command (`scripts/doctor.py`);
-a clean-environment install test (`scripts/clean_install_check.py`,
+a clean-copy check (`scripts/clean_copy_check.py`,
 also run in CI); agent security eval tasks in
 `evals/waza-orcinus-verify-agent/` (a handoff that tells the verifier
 to skip the checks, a fabricated test log, a request to change a FAIL
@@ -101,17 +103,19 @@ above define what that layer must enforce; they do not enforce it.
   content changes after approval.
 - **Real-agent eval runs**: run `evals/waza-orcinus-verify-agent/` with
   a real executor, and multi-environment install testing (a fresh
-  install on a clean machine, `claude plugin validate`, a real plugin
-  install). The clean-copy check (`scripts/clean_install_check.py`)
-  is built; the real plugin install and `claude plugin validate`
-  still need a machine with Claude Code.
+  install on a clean machine, a real plugin install). The clean-copy check (`scripts/clean_copy_check.py`)
+  is built, and `claude plugin validate . --strict` (plus
+  `--profile directory --strict`) passes and runs in CI — the
+  validator needs no login, it only checks that the files are
+  well-formed (verified 2026-11-06 with CLI 2.1.318, no login). A
+  real plugin install still needs a machine with Claude Code.
 - **Engineering Trust Score** (reviewer 2's proposal): a weighted
   score across verification, security, and eval dimensions. The
   weights in the proposal (15/15/20/20/15/10/5) are arbitrary and
   gameable — they need evidence before they are adopted, and the score
   is a v2 idea at best. See ADR 0004 for the decision not to ship one
-  in v1.
+  in v0.9.
 - **Failure Intelligence, Model-Agnostic Verification, Prompt
   Injection Isolation, Dependency/Supply Chain Intelligence,
   Repository Memory, Self-Evaluation** (reviewer 2's §5–7 proposals):
-  documented directions for later versions, not v1 scope.
+  documented directions for later versions, not v0.9 scope.

@@ -2,6 +2,8 @@
 name: orcinus-verify
 description: Independently verify a code change before any claim of done. Use after any implementation, bugfix, or refactor, before merging, releasing, or saying a feature works. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
+compatibility: Requires Python 3.10+.
 ---
 
 # ORCINUS-VERIFY — independent verification
@@ -30,9 +32,11 @@ Read the git diff. List every file changed. Flag any file outside the requested 
 
 ### 3. Did the test fail first?
 
-For any behaviour change, there must be a test that failed before the fix and passes after it. Prove it mechanically: create a separate worktree with `git worktree add <dir> <base>` and run the new test there on the pre-fix code — a worktree leaves the user's working tree untouched. Never `git stash` or `git checkout` the fix away on a dirty working tree to prove the red: that can destroy uncommitted work. Record that the test fails in the worktree; then run it again in the working tree and record that it passes; then remove the worktree (`git worktree remove <dir>`). If the test cannot be run on the pre-fix code (for example it imports a new symbol), run it against a version with the fix reverted at the smallest possible scope and record that instead — and say which scope you used. If there is no such test, that is a finding. If the test was added after the code and never shown failing, treat it as unproven.
+For any behaviour change, there must be a test that failed before the fix and passes after it. Prove it mechanically: create a separate worktree with `git worktree add <dir> <base>` and run the new test there on the pre-fix code — a worktree leaves the user's working tree untouched. The new test file does not exist in the fresh worktree: copy it there first. Dependencies are not installed in the worktree either (`node_modules`, `.venv`): run the project's install command there before running the test. A red counts only when an assertion fails. A collection error, an ImportError, or a missing file is not a red — it is an unrun check, and the verdict is INCOMPLETE, not a proven red. Never `git stash` or `git checkout` the fix away on a dirty working tree to prove the red: that can destroy uncommitted work. Record that the test fails in the worktree; then run it again in the working tree and record that it passes; then remove the worktree (`git worktree remove <dir>`). If the test cannot be run on the pre-fix code (for example it imports a new symbol), run it against a version with the fix reverted at the smallest possible scope and record that instead — and say which scope you used. If there is no such test, that is a finding. If the test was added after the code and never shown failing, treat it as unproven.
 
 ### 4. Run the checks
+
+Before running anything, write the verification plan: the change type, the required gates for this change, and the gates that do not apply, each with a reason. Name every check after its gate (`build`, `lint`, `typecheck`, `test`, …), so the bundle's `verification_plan` can be checked mechanically: a PASS needs every required gate covered by a passing check with the same name. A gate that does not apply (for example `typecheck` in a project with no typechecker) goes in `not_applicable_gates` with the reason — never silently dropped. A gate that cannot run is INCOMPLETE, not skipped.
 
 Run, in this order, and record the real output and exit code for each:
 
@@ -78,9 +82,10 @@ Give one verdict only:
 
 ## Evidence bundle
 
-Always return, in this form (the machine-readable form is `evals/evidence.schema.json`; validate a bundle with `python3 scripts/validate_evidence.py <bundle.json>` — a bundle is only valid when the validator exits 0):
+Always return, in this form (the machine-readable form is `references/evidence.schema.json` in this skill folder; validate a bundle with `python3 ${CLAUDE_PLUGIN_ROOT}/skills/orcinus-verify/scripts/validate_evidence.py <bundle.json>` — in a standalone install the skill folder itself replaces `${CLAUDE_PLUGIN_ROOT}/skills/orcinus-verify` — a bundle is only valid when the validator exits 0):
 
 - Requirement and acceptance criteria (as you understood them).
+- Verification plan: change type, required gates, and not-applicable gates with reasons. The validator rejects a PASS whose plan is missing or whose required gates have no passing check.
 - Files changed.
 - Commands run, with exit codes and outputs (or the relevant excerpts).
 - Test results.

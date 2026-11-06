@@ -2,8 +2,8 @@
 name: frontend-optimistic-mutations
 description: A portable, framework-agnostic discipline for the write path of any React or React Native app using a query/cache layer. Codifies the optimistic-update lifecycle (cancel in-flight queries → snapshot every affected cache → patch instantly → roll back verbatim on error → invalidate on settle), idempotency keys generated once at form init so retries replay the original response on money-moving writes, multi-cache coherence so a detail view and every list page update in lock-step, and the rule that server state is never mirrored into a client store. Shows TanStack Query, RTK Query, and SWR variants. Use this skill when writing create/update/delete mutations, adding optimistic UI with rollback, making writes idempotent, keeping list and detail caches consistent after a write, or reviewing mutation and cache-invalidation code. Works with React + Vite, Next.js, Remix, and Expo / React Native. Only invoke via the orcinus router.
 compatibility: Works with Claude Code, OpenCode, Codex, Cursor, Windsurf, Copilot, and any tool that reads SKILL.md or is pointed here from AGENTS.md / CLAUDE.md.
-keywords: optimistic update, optimistic ui, rollback, mutation, tanstack query, react query, useMutation, onMutate, onError, onSettled, idempotency key, cache invalidation, query keys, server state, write path, conflict, retry, financial writes, rtk query, swr, react, react native
 license: MIT
+user-invocable: false
 ---
 
 # Frontend Optimistic Mutations (the write path)

@@ -8,4 +8,5 @@ This skill was copied verbatim from a ready-made, community-tested skill, as agr
 - **Upstream commit:** `301b02b12bff98e4688e6984af6556802322bbde` (2026-11-01, "Merge #736: validate review findings against code and baseline")
 - **Files copied:** 1 file (`SKILL.md`), verified identical to upstream with `diff` before the copy. A secret-pattern scan of the copied file found nothing.
 - **What changed:** only the frontmatter of `SKILL.md` was adapted to the Agent Skills spec (kept `name` and `description`, added `license: MIT`). The description text and the entire body are byte-for-byte identical to upstream (verified programmatically).
+- **user-invocable, added 2026-11-06 (round 3):** frontmatter gained `user-invocable: false` — only the router is a user entry point; sub-skills hide from the `/` menu and are invoked by the router. A Claude Code extension field; other hosts ignore it.
 - **Wiring:** the ORCINUS router loads this skill when designing or changing an API, a module boundary, or any public interface — see the router's shared rules.

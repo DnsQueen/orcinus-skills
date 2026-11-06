@@ -2,6 +2,7 @@
 name: ask-questions-if-underspecified
 description: Clarify requirements before implementing. Use when serious doubts arise. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
 ---
 
 # Ask Questions If Underspecified

@@ -1,7 +1,7 @@
 # Persistent project state — `.orcinus/state.json`
 
 Date: 2026-11-06
-Status: spec (v1). The router reads and writes this file; the
+Status: spec (v0.9). The router reads and writes this file; the
 enforcement layer that would make it tamper-proof is v1.1 (see
 SCOPE.md). This spec defines the file so the router, the verifier,
 and the human all agree on what "verified" means.
@@ -61,7 +61,7 @@ the human approves transitions that need approval.
 | `project` | string | yes | The project name. |
 | `stage` | string | yes | One of the six stages above. |
 | `revision` | string | yes | The exact commit the stage refers to. |
-| `evidence_bundle` | string or null | yes | The path to the evidence bundle (per `evals/evidence.schema.json`) for the `revision`, or null when there is none (BUILDING). |
+| `evidence_bundle` | string or null | yes | The path to the evidence bundle (per `skills/orcinus-verify/references/evidence.schema.json`) for the `revision`, or null when there is none (BUILDING). |
 | `approval` | object or null | yes | When the human approves: `{approved_by, revision, artifact, at}`. The approval is bound to a specific revision and artifact hash — approving one revision does not approve the next. |
 | `history` | array | yes | Every stage transition, with the revision and the time. The history is append-only; a transition is never rewritten. |
 
@@ -69,7 +69,7 @@ the human approves transitions that need approval.
 
 1. **VERIFIED is bound to a revision and an evidence bundle.** A
    state file that says VERIFIED without an `evidence_bundle` that
-   validates (see `scripts/validate_evidence.py`) is corrupt, not
+   validates (see `skills/orcinus-verify/scripts/validate_evidence.py`) is corrupt, not
    verified.
 2. **A new commit resets the stage.** When the revision changes, the
    stage goes back to BUILDING. The history keeps the old VERIFIED
@@ -78,7 +78,7 @@ the human approves transitions that need approval.
    approves a specific revision and a specific artifact (a release
    tarball, a commit, a published package). Approving revision A does
    not approve revision B.
-4. **The state file is not the enforcement.** In v1, any agent (or
+4. **The state file is not the enforcement.** In v0.9, any agent (or
    human) with write access can edit it. The enforcement layer
    (v1.1, in SCOPE.md) would make transitions checkable — the
    verifier's signature, the evidence bundle's hash, the approval's

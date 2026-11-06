@@ -2,11 +2,12 @@
 name: monitoring
 description: "Use when setting up uptime and health monitoring, alerts, or on-call basics for a service already in production, so you learn it is down before customers do — health and readiness probes, alerting on SLO error-budget burn rather than raw counts, curing alert fatigue, on-call rotation with escalation, and a status page. NOT instrumenting logs, metrics or traces, or wiring OpenTelemetry (that is `observability`). Only invoke via the orcinus router."
 license: MIT
+user-invocable: false
 ---
 
 # Monitoring
 
-You are wiring up the *outside* view of a service that already shipped: is it alive, is it fast, and when it breaks, does exactly one human get exactly one actionable page. This skill emits a concrete setup — a checker config, a health-endpoint contract, symptom-based alert rules, and an on-call rotation. Not telemetry instrumentation (that is `../observability/SKILL.md`), not the release-gating healthcheck (that is `../deployment/SKILL.md`).
+You are wiring up the *outside* view of a service that already shipped: is it alive, is it fast, and when it breaks, does exactly one human get exactly one actionable page. This skill emits a concrete setup — a checker config, a health-endpoint contract, symptom-based alert rules, and an on-call rotation. Not telemetry instrumentation (that is `monitoring-observability`), not the release-gating healthcheck.
 
 ## The one rule
 
@@ -80,7 +81,7 @@ def readyz():
     )
 ```
 
-Do **not** put a third-party API call in readiness — a payment provider's outage shouldn't pull all your instances from rotation and take you fully down. Degrade that path in code (`../error-handling/SKILL.md`), don't fail-closed on it here. Go and FastAPI handler examples are in `references/tool-setup.md`.
+Do **not** put a third-party API call in readiness — a payment provider's outage shouldn't pull all your instances from rotation and take you fully down. Degrade that path in code, don't fail-closed on it here. Go and FastAPI handler examples are in `references/tool-setup.md`.
 
 ## What to actually monitor
 
@@ -152,4 +153,4 @@ Scale by criticality: for a small or single-user service, the on-call is just th
 - `references/tool-setup.md` — Uptime Kuma docker-compose (rootless image, volume, port), HTTP + push-heartbeat + SSL/domain-expiry monitors, a synthetic multi-step journey, notification wiring (ntfy / Slack webhook / PagerDuty integration key), a UptimeRobot/Better Stack monitor JSON shape, and Go + FastAPI health-endpoint handlers.
 - `references/burn-rate-and-oncall.md` — full multi-window multi-burn-rate math, a copy-paste Prometheus-style alert rule with `runbook_url`, severity mapping, a sample escalation-policy YAML, and a fill-in runbook template.
 
-Related in this repo: `../monitoring-observability/SKILL.md` — the telemetry side (what the app emits: logs, metrics, traces). The other siblings this skill originally linked to (observability, deployment, error-handling, domains-dns, scaling) are not part of ORCINUS; the links were removed because they pointed nowhere after installation.
+Related in this repo: `monitoring-observability` — the telemetry side (what the app emits: logs, metrics, traces). The other siblings this skill originally linked to (observability, deployment, error-handling, domains-dns, scaling) are not part of ORCINUS; the links were removed because they pointed nowhere after installation.

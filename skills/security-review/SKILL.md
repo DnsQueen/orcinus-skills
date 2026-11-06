@@ -2,6 +2,7 @@
 name: security-review
 description: Review a change for secrets, injection, supply-chain, and unsafe patterns before merge. Use after any implementation, before merging or releasing, and whenever code touches auth, secrets, data, or external input. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
 ---
 
 # SECURITY-REVIEW — check before you trust

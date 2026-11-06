@@ -1,1 +1,1 @@
-{"$schema":"https://www.schemastore.org/claude-code-marketplace.json","name":"orcinus","owner":{"name":"DnsQueen"},"plugins":[{"name":"orcinus-skills","source":"./"}]}
+{"$schema":"https://www.schemastore.org/claude-code-marketplace.json","description":"ORCINUS: a verification-first engineering skill collection — one integrated nervous system for the 0–100 software lifecycle, from raw idea to release.","name":"orcinus","owner":{"name":"DnsQueen"},"plugins":[{"name":"orcinus-skills","source":"./"}]}

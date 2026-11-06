@@ -5,9 +5,13 @@ This is a limited check of relative imports in JavaScript/TypeScript
 (plus dependency licences). It is not a full module resolver: it does
 not follow re-exports through barrel files, it does not evaluate
 conditional or computed imports, and it only resolves the tsconfig
-`paths` aliases it is told about (see --tsconfig). For a project that
-needs a complete graph, use a real resolver (dependency-cruiser, madge)
-instead of this script.
+`paths` aliases it is told about (see --tsconfig). A string literal
+containing the text of an import statement is counted as an import —
+the scanner is a regex over comment-stripped text, not a parser — so
+a file that quotes an import in a string can report a false
+"unresolved import". A serious gate needs a real parser (an AST).
+For a project that needs a complete graph, use a real resolver
+(dependency-cruiser, madge) instead of this script.
 
 Checks:
   1. Layer rule: no file under src/ imports from outside src/ — that
@@ -28,7 +32,10 @@ the longest matching prefix wins, every replacement of that pattern
 is tried, and a pattern that matches but does not resolve falls
 through to the next pattern (and then to a package import) instead
 of reporting a false "unresolved import". `baseUrl` is honoured
-(paths resolve relative to it) and `extends` is followed. A tsconfig
+(paths resolve relative to it) and `extends` is followed — and a
+relative path resolves against the file that declared it, so a
+baseUrl or paths inherited from a base config resolve against the
+base config's directory, not the child's. A tsconfig
 that exists but cannot be parsed (JSONC comments and trailing commas
 are accepted) is an INCOMPLETE result, never a silent empty mapping —
 a config that failed to load must not shrink the import graph
@@ -243,45 +250,32 @@ def _load_tsconfig_file(path):
     return cfg
 
 
-def _merge_tsconfig(base, override):
-    """Merge an `extends` base config with the file that extends it.
-    compilerOptions merge key by key; the extending file wins. The
-    extends chain continues from the BASE (if the base itself extends
-    another config), not from the child — the child's extends was
-    already followed, and keeping it would loop forever."""
-    merged = dict(base)
-    base_opts = base.get("compilerOptions") or {}
-    over_opts = override.get("compilerOptions") or {}
-    if base_opts or over_opts:
-        opts = dict(base_opts)
-        opts.update(over_opts)
-        merged["compilerOptions"] = opts
-    for key, value in override.items():
-        if key not in ("compilerOptions", "extends"):
-            merged[key] = value
-    if "extends" in base:
-        merged["extends"] = base["extends"]
-    else:
-        merged.pop("extends", None)
-    return merged
-
-
 def load_tsconfig_paths(root, tsconfig_path):
     """tsconfig compilerOptions.paths, as {"paths": {...}, "base_dir": ...}.
 
     `paths` replacements are relative to base_dir: the tsconfig's
-    baseUrl when set, otherwise the directory containing the tsconfig.
-    `extends` is followed (a relative target resolves against the
-    extending file's directory; a bare name is looked up under
-    node_modules). Returns ({"paths": {}, "base_dir": root}) when there
-    is no tsconfig file. Raises TsconfigError when a tsconfig exists
-    but cannot be used — the caller must report INCOMPLETE, never
+    baseUrl when set, otherwise the directory containing the tsconfig
+    that declared the paths. `extends` is followed (a relative target
+    resolves against the extending file's directory; a bare name is
+    looked up under node_modules). Relative paths resolve against the
+    file that DECLARED them, the way TypeScript does: a baseUrl
+    inherited from a base config resolves against the base config's
+    directory, not the child's — and paths with no baseUrl anywhere
+    resolve against the directory of the config that declared them.
+    Returns ({"paths": {}, "base_dir": root}) when there is no
+    tsconfig file. Raises TsconfigError when a tsconfig exists but
+    cannot be used — the caller must report INCOMPLETE, never
     silently use an empty mapping."""
     path = tsconfig_path or os.path.join(root, "tsconfig.json")
     if not os.path.isfile(path):
         return {"paths": {}, "base_dir": root}
+    # Walk the extends chain, child first, remembering which file each
+    # config came from. A relative extends target resolves against the
+    # extending file's directory.
+    chain = []  # [(abspath, cfg)] — child first, root-most base last
     cfg = _load_tsconfig_file(path)
     seen = {os.path.abspath(path)}
+    chain.append((os.path.abspath(path), cfg))
     while isinstance(cfg.get("extends"), str):
         parent = cfg["extends"]
         if parent.startswith("."):
@@ -299,21 +293,40 @@ def load_tsconfig_paths(root, tsconfig_path):
         if not os.path.isfile(base_path):
             raise TsconfigError(
                 f"tsconfig {path} extends {parent!r}, which was not found")
-        cfg = _merge_tsconfig(_load_tsconfig_file(base_path), cfg)
+        cfg = _load_tsconfig_file(base_path)
+        chain.append((os.path.abspath(base_path), cfg))
         path = base_path
-    opts = cfg.get("compilerOptions", {})
-    if not isinstance(opts, dict):
-        raise TsconfigError(f"{path}: compilerOptions is not an object")
+    # Merge base-first so the child wins, tracking which file defined
+    # each compilerOptions key — the winner's file is what relative
+    # paths resolve against.
+    opts = {}
+    origins = {}
+    for cfg_path, cfg in reversed(chain):
+        cfg_opts = cfg.get("compilerOptions") or {}
+        if not isinstance(cfg_opts, dict):
+            raise TsconfigError(f"{cfg_path}: compilerOptions is not an object")
+        for key, value in cfg_opts.items():
+            opts[key] = value
+            origins[key] = cfg_path
     paths = opts.get("paths", {})
     if not isinstance(paths, dict):
-        raise TsconfigError(f"{path}: compilerOptions.paths is not an object")
+        raise TsconfigError(
+            f"{origins.get('paths', chain[0][0])}: "
+            f"compilerOptions.paths is not an object")
     base_url = opts.get("baseUrl")
     if base_url is not None and not isinstance(base_url, str):
-        raise TsconfigError(f"{path}: compilerOptions.baseUrl is not a string")
-    tsconfig_dir = os.path.dirname(os.path.abspath(
-        tsconfig_path or os.path.join(root, "tsconfig.json")))
-    base_dir = os.path.normpath(os.path.join(tsconfig_dir, base_url)) \
-        if base_url else tsconfig_dir
+        raise TsconfigError(
+            f"{origins['baseUrl']}: compilerOptions.baseUrl is not a string")
+    if base_url is not None:
+        # baseUrl resolves relative to the file that declared it.
+        base_dir = os.path.normpath(
+            os.path.join(os.path.dirname(origins["baseUrl"]), base_url))
+    elif paths:
+        # No baseUrl: paths resolve relative to the file that declared
+        # them.
+        base_dir = os.path.dirname(origins["paths"])
+    else:
+        base_dir = os.path.dirname(chain[0][0])
     out = {}
     for pattern, targets in paths.items():
         if isinstance(targets, list):

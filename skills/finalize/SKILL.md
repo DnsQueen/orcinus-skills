@@ -2,6 +2,7 @@
 name: finalize
 description: Prepare a release, cut it, and hand it over — docs, release notes, CI gates, rollback plan, and monitoring — without publishing anything the user has not approved. Use when the work claims to be complete and ready to publish. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
 ---
 
 # FINALIZE — ready to publish, and provably so
@@ -31,7 +32,7 @@ Use release-please (googleapis/release-please, Apache-2.0, CLI + GitHub Action) 
 
 ### 4. CI gates
 
-Re-run the four commands (build, lint, typecheck, test) and record their outputs. Use Waza (`skills/waza`, microsoft/waza, MIT, CLI) as-is for graded eval scenarios when the project has them — the runnable example is `evals/waza-orcinus-verify/`. Record each result with its tool and version, or "not run" with the reason.
+Re-run the four commands (build, lint, typecheck, test) and record their outputs. Use Waza (`skills/waza`, microsoft/waza, MIT, CLI) as-is for graded eval scenarios when the project has them (the repo ships a runnable example, `waza-orcinus-verify`, for a full-repo install). Record each result with its tool and version, or "not run" with the reason.
 
 ### 5. Release checklist
 

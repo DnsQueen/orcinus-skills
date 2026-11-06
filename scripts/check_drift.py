@@ -56,6 +56,26 @@ VENDORED_SKILLS = [
     "webapp-testing",
 ]
 
+# Vendored files that live at the plugin root, not inside a skill:
+# Claude Code discovers agents/commands by folder at the plugin
+# root, so the pr-review-toolkit agents/command and the
+# skill-creator agents moved there (round 3, track 8). Their
+# upstream provenance is recorded in the owning skill's
+# ATTRIBUTION.md; the skill-creator agents additionally carry
+# ORCINUS-added frontmatter (name + description), recorded there.
+VENDORED_ROOT_FILES = [
+    "agents/analyzer.md",
+    "agents/code-reviewer.md",
+    "agents/code-simplifier.md",
+    "agents/comment-analyzer.md",
+    "agents/comparator.md",
+    "agents/grader.md",
+    "agents/pr-test-analyzer.md",
+    "agents/silent-failure-hunter.md",
+    "agents/type-design-analyzer.md",
+    "commands/review-pr.md",
+]
+
 # Files inside a vendored skill that are ORCINUS-authored, not vendored.
 EXCLUDED_NAMES = {"ATTRIBUTION.md", "LICENSE.txt"}
 EXCLUDED_SUFFIXES = (".pyc",)
@@ -94,6 +114,10 @@ def build_manifest() -> dict:
         for path in sorted(skill_dir.rglob("*")):
             if path.is_file() and _is_vendored(path):
                 manifest[str(path.relative_to(ROOT))] = _sha256(path)
+    for rel in VENDORED_ROOT_FILES:
+        path = ROOT / rel
+        if path.is_file():
+            manifest[rel] = _sha256(path)
     return manifest
 
 

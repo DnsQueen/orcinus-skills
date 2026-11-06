@@ -2,6 +2,7 @@
 name: codebase-knowledge-builder
 description: Study unfamiliar codebases and produce evidence-backed knowledge artifacts. Use for repository orientation, architecture mapping, subsystem tracing, onboarding, or codebase documentation. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
 ---
 
 # Codebase Knowledge Builder

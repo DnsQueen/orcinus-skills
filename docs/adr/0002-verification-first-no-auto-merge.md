@@ -28,7 +28,7 @@ at scale.
   evidence and gets agreement first.
 - **Evidence, not claims.** Every claim points to a command, an
   output, or a file, in the structured bundle
-  (`evals/evidence.schema.json`), bound to the exact revision it ran
+  (`skills/orcinus-verify/references/evidence.schema.json`), bound to the exact revision it ran
   on. A PASS is bound to that revision only.
 
 ## Consequences

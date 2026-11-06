@@ -5,6 +5,7 @@ description: >
   applies Fowler & MVVM/Clean Architecture patterns, and runs tests per step.
   Triggers: refactor, clean up, extract, rename, simplify, decompose, god class, MVVM, Clean Architecture. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
 ---
 
 # Refactoring Specialist

@@ -2,6 +2,7 @@
 name: diagnosing-bugs
 description: Diagnosis loop for hard bugs and performance regressions. Use when the user says "diagnose"/"debug this", or reports something broken/throwing/failing/slow. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
 ---
 
 # Diagnosing Bugs

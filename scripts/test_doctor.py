@@ -34,7 +34,18 @@ def test_repo_files_check_ready():
     assert result["status"] == "ready"
 
 
-def test_git_check_ready():
+def test_git_check_ready(tmp_path, monkeypatch):
+    """Git is ready inside a real repository — the check runs against
+    a repo the test creates, not the checkout pytest happens to run
+    in. The old version asserted ready in the current directory, so
+    it failed in the clean copy (which has no .git by design) and
+    passed vacuously anywhere git was installed."""
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True, timeout=30)
+    monkeypatch.setattr(doctor, "ROOT", repo)
     result = doctor.check_git()
     assert result["status"] == "ready"
     assert "git version" in result["detail"]
@@ -45,3 +56,81 @@ def test_check_shape():
                   doctor.check_repo_files()):
         assert set(check) == {"name", "status", "detail", "fix"}
         assert check["status"] in ("ready", "incomplete", "incompatible")
+
+
+# --- Round-3 regression tests (reviewer 4, section 5). ---
+
+def test_python_minimum_is_3_10():
+    # Python 3.9 was dropped 2026-11-06 (EOL, no Ubuntu 26.04 build);
+    # doctor must not report 3.9 as ready.
+    assert doctor.MIN_PYTHON == (3, 10)
+    result = doctor.check_python((3, 9, 0))
+    assert result["status"] == "incompatible"
+    assert "3.10" in result["fix"]
+    assert doctor.check_python((3, 10, 0))["status"] == "ready"
+
+
+def _patched_run(monkeypatch, mapping):
+    """Replace doctor._run with a stub returning (rc, out) per argv."""
+    def fake(argv, timeout=10):
+        for key, value in mapping.items():
+            if argv[:len(key)] == list(key):
+                return value
+        return (None, "")
+    monkeypatch.setattr(doctor, "_run", fake)
+
+
+def test_node_nonzero_exit_is_not_ready(monkeypatch):
+    _patched_run(monkeypatch, {("node", "--version"): (1, "error")})
+    result = doctor.check_node()
+    assert result["status"] != "ready"
+
+
+def test_git_version_failure_is_not_ready(monkeypatch):
+    _patched_run(monkeypatch, {("git", "--version"): (1, "")})
+    result = doctor.check_git()
+    assert result["status"] != "ready"
+
+
+def test_git_outside_repo_is_not_dirty_and_not_ready(monkeypatch):
+    def fake(argv, timeout=10):
+        if argv[:2] == ["git", "--version"]:
+            return (0, "git version 2.40.0")
+        return (128, "fatal: not a git repository")
+    monkeypatch.setattr(doctor, "_run", fake)
+    result = doctor.check_git()
+    assert result["status"] != "ready"
+    assert "dirty" not in result["detail"]
+    assert "not a git repository" in result["detail"]
+
+
+def test_waza_nonzero_exit_is_not_ready(monkeypatch):
+    def fake(argv, timeout=10):
+        return (1, "error")
+    monkeypatch.setattr(doctor, "_run", fake)
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/usr/bin/waza")
+    result = doctor.check_waza()
+    assert result["status"] != "ready"
+
+
+def test_waza_reports_extracted_version(monkeypatch):
+    # `waza --version` prints "waza version 0.40.0" (verified live).
+    # Doctor must report the version it read, never the pinned one.
+    def fake(argv, timeout=10):
+        assert argv[1] == "--version"
+        return (0, "waza version 0.41.0")
+    monkeypatch.setattr(doctor, "_run", fake)
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/usr/bin/waza")
+    result = doctor.check_waza()
+    assert result["status"] == "ready"
+    assert "0.41.0" in result["detail"]
+    assert "0.40.0" not in result["detail"]
+
+
+def test_waza_unreadable_version_is_incompatible(monkeypatch):
+    def fake(argv, timeout=10):
+        return (0, "no version here")
+    monkeypatch.setattr(doctor, "_run", fake)
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/usr/bin/waza")
+    result = doctor.check_waza()
+    assert result["status"] == "incompatible"

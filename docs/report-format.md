@@ -1,7 +1,7 @@
 # Unified report format — one machine-readable shape for all checkers
 
 Date: 2026-11-06
-Status: spec (v1). The checkers do not all emit it yet; the format is
+Status: spec (v0.9). The checkers do not all emit it yet; the format is
 the contract they converge to. A checker that cannot emit it must say
 so in its own output, not silently emit a different shape.
 
@@ -65,7 +65,7 @@ consumer (CI, the router, a human reading a summary) can combine.
    same binding as the evidence bundle's `revision`. A report from
    one revision does not certify another.
 4. **The evidence bundle is the verification report.** The
-   `evals/evidence.schema.json` bundle is the verification-specific
+   `skills/orcinus-verify/references/evidence.schema.json` bundle is the verification-specific
    form of this format (it adds `fail_first`, `files_changed`, and
    `reviewer_identity`). A verification report uses the evidence
    schema; a checker report uses this format. Both share the
@@ -73,7 +73,7 @@ consumer (CI, the router, a human reading a summary) can combine.
 
 ## Adoption
 
-- `scripts/validate_evidence.py` already enforces the equivalent
+- `skills/orcinus-verify/scripts/validate_evidence.py` already enforces the equivalent
   rules for evidence bundles (verdict consistency, fail-first).
 - The Python checkers (`validate_repo.py`, `check_drift.py`,
   `check_architecture.py`, `check_refactor.py`, `doctor.py`) print

@@ -78,7 +78,10 @@ Usage:
     capture.py drop --store <dir> <id> --reason <reason>
 
 Exit 0 on success, 1 on error (empty text, unknown id, illegal
-transition, missing reason, invalid id, malformed file). Prints the
+transition, missing reason, invalid id, malformed file, a status
+change on a file with no status recorded). Exit 2 when a list or a
+search skipped malformed files: the result is partial, and a machine
+caller must not treat it as complete. Prints the
 idea id on capture, and human-readable lines otherwise.
 
 Requires Python 3.9+ (builtin generics, Path.is_relative_to).
@@ -308,15 +311,27 @@ def _all_ideas(store: Path) -> tuple[list[tuple[str, dict, Path]], list[str]]:
     return ideas, malformed
 
 
-def _report_malformed(malformed: list[str]) -> None:
+def _report_malformed(malformed: list[str]) -> bool:
+    """Warn about each malformed file on stderr. Returns True when
+    any file was skipped, so the caller can say the result is
+    partial — a list or search that skipped files must not exit 0
+    (or, for search, 1 for "not found"), or a machine caller treats
+    an incomplete result as complete."""
     for m in malformed:
         print(f"warning: skipping malformed idea file ({m})", file=sys.stderr)
+    if malformed:
+        print(
+            f"partial: {len(malformed)} malformed file(s) skipped — "
+            f"the result is incomplete",
+            file=sys.stderr,
+        )
+    return bool(malformed)
 
 
 def cmd_list(args) -> int:
     store = Path(args.store)
     ideas, malformed = _all_ideas(store)
-    _report_malformed(malformed)
+    partial = _report_malformed(malformed)
     for idea_id, fields, path in ideas:
         if args.status and fields.get("status") != args.status:
             continue
@@ -326,20 +341,26 @@ def cmd_list(args) -> int:
         if raw.strip():
             first_line = raw.strip().splitlines()[0]
         print(f"{idea_id} [{fields.get('status', '?')}] {fields.get('created', '?')} — {first_line}")
-    return 0
+    # Exit 2 when the list is partial: a machine caller must not
+    # treat an incomplete list as success.
+    return 2 if partial else 0
 
 
 def cmd_search(args) -> int:
     store = Path(args.store)
     query = args.query.lower()
     ideas, malformed = _all_ideas(store)
-    _report_malformed(malformed)
+    partial = _report_malformed(malformed)
     found = False
     for idea_id, _fields, path in ideas:
         # Search the raw idea text only — not the frontmatter or History.
         if query in raw_text_of(path.read_text(encoding="utf-8")).lower():
             print(idea_id)
             found = True
+    # Exit 2 when the search is partial: a match may live in a
+    # skipped file, and "not found" cannot be trusted either.
+    if partial:
+        return 2
     return 0 if found else 1
 
 
@@ -420,21 +441,46 @@ def _set_status_locked(path: Path, idea_id: str, new_status: str, note: str) -> 
     except (ValueError, OSError) as e:
         print(f"error: cannot read {path.name}: {e}", file=sys.stderr)
         return 1
-    current = fields.get("status", "raw")
+    # A missing status is an error, not "raw": silently assuming a
+    # status invents a transition from a state the file never recorded.
+    if "status" not in fields:
+        print(
+            f"error: {path.name}: no status recorded in the frontmatter",
+            file=sys.stderr,
+        )
+        return 1
+    current = fields["status"]
     if new_status not in ALLOWED.get(current, ()):
         print(
             f"error: cannot move {idea_id} from {current} to {new_status}",
             file=sys.stderr,
         )
         return 1
-    text = path.read_text(encoding="utf-8")
-    text = re.sub(
-        r"^status: .*$",
-        f"status: {new_status}",
-        text,
-        count=1,
-        flags=re.MULTILINE,
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    # Rewrite the status line ONLY inside the frontmatter. The old
+    # code ran re.sub over the whole file, so when the frontmatter had
+    # no status line it rewrote a `status: ...` line inside the raw
+    # idea text instead — corrupting the verbatim text — and when no
+    # status line existed anywhere it changed nothing yet appended a
+    # History entry claiming the transition happened.
+    if not text.startswith("---\n"):
+        print(f"error: {path.name}: missing frontmatter", file=sys.stderr)
+        return 1
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        print(f"error: {path.name}: frontmatter is not closed", file=sys.stderr)
+        return 1
+    frontmatter = text[4:end]
+    new_frontmatter, n = re.subn(
+        r"^status:.*$", f"status: {new_status}", frontmatter, flags=re.MULTILINE
     )
+    if n == 0:
+        print(
+            f"error: {path.name}: no status line in the frontmatter",
+            file=sys.stderr,
+        )
+        return 1
+    text = text[:4] + new_frontmatter + text[end:]
     entry = f"- {now_iso()}: {current} -> {new_status}"
     if note:
         entry += f" ({note})"

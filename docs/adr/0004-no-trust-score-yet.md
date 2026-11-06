@@ -1,4 +1,4 @@
-# ADR 0004 — No single Trust Score in v1
+# ADR 0004 — No single Trust Score in v0.9
 
 Date: 2026-11-06
 Status: accepted
@@ -17,11 +17,11 @@ than no score — it gives a false sense of safety.
 
 ## Decision
 
-ORCINUS does **not** ship a single Trust Score in v1. Instead it
+ORCINUS does **not** ship a single Trust Score in v0.9. Instead it
 ships the components a score would be built from, each independently
 checkable:
 
-- the structured evidence bundle (`evals/evidence.schema.json`) —
+- the structured evidence bundle (`skills/orcinus-verify/references/evidence.schema.json`) —
   every check, its exit code, its revision, its verdict;
 - the fail-first proof (a test that failed before the fix and passes
   after it);
@@ -43,7 +43,7 @@ summary of the evidence, never a replacement for it.
 - Good: the components are useful on their own (the evidence bundle
   is the audit trail; the mutation score is the test-quality signal).
 - Bad: a user who wants one number to compare two changes does not
-  get it. Accepted for v1; the components make a future score
+  get it. Accepted for v0.9; the components make a future score
   honest, if one is ever built.
 - Recorded: the reviewers' proposal is kept in SCOPE.md's v1.1
   section (Engineering Trust Score, deferred), not deleted.

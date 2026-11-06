@@ -3,12 +3,14 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [1.0.0] — 2026-11-06
+## [0.9.0] — 2026-11-06
 
-The first release. ORCINUS is one integrated nervous system for the
+The first public release — a pre-1.0 version. ORCINUS is one integrated nervous system for the
 0–100 software lifecycle: a router (`orcinus`) plus 35 focused
 sub-skills, a shared glossary, evidence bundles, and independent
-review. No auto-merge, no weakened tests.
+review. No auto-merge, no weakened tests. It is 0.9.0, not 1.0.0,
+because the whole system has not yet run 0–100 end-to-end on one
+real project — that proof is the work before 1.0.0.
 
 ### Added
 
@@ -58,13 +60,13 @@ review. No auto-merge, no weakened tests.
   builder's own machine are now honest: `diagnosing-bugs` is bundled,
   the rest are marked external-optional with router fallbacks.
 
-### Known limits (not fixed in v1.0.0)
+### Known limits (not fixed in v0.9.0)
 
 - The whole system has not yet run 0–100 end-to-end on one real
   project; the weekly-budget dogfood run is in progress. The waza
   agent-behavior suite (real executor, no verdict in the prompt)
   exists in `evals/waza-orcinus-verify-agent/` and is not yet run.
 - The enforcement layer (skill manifest, persistent project state,
-  structured evidence, version-bound approval) is v1.1 work; v1.0.0
+  structured evidence, version-bound approval) is v1.1 work; v0.9.0
   ships the INCOMPLETE status and the structured evidence schema.
 - See `SCOPE.md` for the full list of recorded limits.

@@ -317,3 +317,61 @@ def test_spdx_parentheses_and_precedence(tmp_path):
     assert rc == 1, out
     assert "bad-dep" in out
     assert "ok-dep" not in out
+
+
+# --- Third review round: regression tests (2026-11-06) ---
+
+def test_inherited_baseurl_resolves_against_the_base_config(tmp_path):
+    """A baseUrl inherited from a base config resolves against the
+    BASE config's directory (the file that declared it), not the
+    child's: the old code resolved it against the child's directory,
+    so @/b pointed at config/src/lib/b and the import was reported
+    unresolved."""
+    root = tmp_path / "proj"
+    write(root / "tsconfig.base.json", json.dumps({
+        "compilerOptions": {
+            "baseUrl": "src",
+            "paths": {"@/*": ["lib/*"]}}}))
+    write(root / "config" / "tsconfig.json", json.dumps({
+        "extends": "../tsconfig.base.json", "compilerOptions": {}}))
+    write(root / "src" / "lib" / "b.ts", "export const b = 1;\n")
+    write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
+    pkg(root)
+    rc, out, _ = run(root, "--tsconfig", str(root / "config" / "tsconfig.json"))
+    assert rc == 0, out
+    assert "unresolved import" not in out
+
+
+def test_inherited_paths_without_baseurl_resolve_against_the_base_config(tmp_path):
+    """Paths inherited from a base config, with no baseUrl anywhere,
+    resolve against the BASE config's directory (the file that
+    declared them) — not the child's directory."""
+    root = tmp_path / "proj"
+    write(root / "tsconfig.base.json", json.dumps({
+        "compilerOptions": {"paths": {"@/*": ["src/lib/*"]}}}))
+    write(root / "config" / "tsconfig.json", json.dumps({
+        "extends": "../tsconfig.base.json", "compilerOptions": {}}))
+    write(root / "src" / "lib" / "b.ts", "export const b = 1;\n")
+    write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
+    pkg(root)
+    rc, out, _ = run(root, "--tsconfig", str(root / "config" / "tsconfig.json"))
+    assert rc == 0, out
+    assert "unresolved import" not in out
+
+
+def test_child_baseurl_wins_over_inherited_paths(tmp_path):
+    """When the child declares its own baseUrl, the inherited paths
+    resolve against the CHILD's baseUrl — the child's declaration
+    wins over the base's (which declares none here)."""
+    root = tmp_path / "proj"
+    write(root / "tsconfig.base.json", json.dumps({
+        "compilerOptions": {"paths": {"@/*": ["lib/*"]}}}))
+    write(root / "tsconfig.json", json.dumps({
+        "extends": "./tsconfig.base.json",
+        "compilerOptions": {"baseUrl": "src"}}))
+    write(root / "src" / "lib" / "b.ts", "export const b = 1;\n")
+    write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
+    pkg(root)
+    rc, out, _ = run(root)
+    assert rc == 0, out
+    assert "unresolved import" not in out

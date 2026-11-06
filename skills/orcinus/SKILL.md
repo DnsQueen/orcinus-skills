@@ -83,6 +83,8 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 
 If a sub-skill is not yet built, say so plainly, do the closest covered step, and record the gap. Do not invent a sub-skill.
 
+Before routing, confirm the sub-skill is installed: a host may silently skip a skill that is not present (a Hermes bundle skips missing skills instead of failing), so an absent sub-skill is an absence you must check for, not an error you will see. If the sub-skill you need is not available, say so explicitly, name what is missing, and stop instead of improvising its procedure from memory.
+
 ## Gates
 
 Major gates need explicit human confirmation:

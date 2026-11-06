@@ -114,17 +114,20 @@ def test_crlf_file_is_listed_not_silently_skipped(tmp_path):
 
 def test_malformed_file_is_reported_not_silently_skipped(tmp_path):
     """A file without frontmatter is warned about on stderr, and the
-    good files still list."""
+    good files still list — but the run is partial (exit 2), not a
+    success: a machine caller must not treat an incomplete list as
+    complete. (Third review round: this test used to assert rc 0.)"""
     store = tmp_path / "ideas"
     rc, out, err = capture(store, "a good idea")
     assert rc == 0, err
     good_id = out.strip()
     (store / "broken.md").write_text("no frontmatter here\n", encoding="utf-8")
     rc, out, err = run(store, "list", "--store", str(store))
-    assert rc == 0, err
+    assert rc == 2, err
     assert good_id in out
     assert "broken.md" in err
     assert "warning" in err
+    assert "partial" in err
 
 
 def test_search_matches_only_the_raw_text(tmp_path):
@@ -146,14 +149,25 @@ def test_search_matches_only_the_raw_text(tmp_path):
 
 def test_two_captures_with_the_same_text_get_distinct_ids(tmp_path):
     """Two captures in the same second (same slug) must not overwrite
-    each other — the second gets a -2 suffix (exclusive create)."""
-    store = tmp_path / "ideas"
-    rc1, out1, _ = capture(store, "same idea twice")
-    rc2, out2, _ = capture(store, "same idea twice")
-    assert rc1 == 0 and rc2 == 0
-    assert out1.strip() != out2.strip()
-    assert len(list(store.glob("*.md"))) == 2
-    assert out2.strip().endswith("-2")
+    each other — the second gets a -2 suffix (exclusive create). The
+    pair is retried until both land in the same second: two captures
+    straddling a second boundary get distinct timestamps instead, and
+    that is correct behaviour, not a failure — the old test asserted
+    the -2 suffix unconditionally and failed about a third of the
+    time on the boundary."""
+    for attempt in range(10):
+        store = tmp_path / f"ideas-{attempt}"
+        rc1, out1, _ = capture(store, "same idea twice")
+        rc2, out2, _ = capture(store, "same idea twice")
+        assert rc1 == 0 and rc2 == 0
+        id1, id2 = out1.strip(), out2.strip()
+        assert id1 != id2
+        assert len(list(store.glob("*.md"))) == 2
+        if id1[:15] == id2[:15]:  # same YYYYMMDD-HHMMSS stamp
+            assert id2.endswith("-2")
+            return
+    raise AssertionError("two captures never landed in the same second "
+                         "after 10 attempts")
 
 
 def test_id_stamp_and_created_agree(tmp_path):
@@ -349,11 +363,11 @@ def test_symlink_in_list_and_search_is_reported_not_read(tmp_path):
     except OSError:
         return  # Symlinks not supported here; skip.
     rc, out, err = run(store, "list", "--store", str(store))
-    assert rc == 0, err
+    assert rc == 2, err  # partial: a file was skipped (third review round)
     assert "secret outside" not in out
     assert "escapes the store" in err
     rc, out, err = run(store, "search", "--store", str(store), "secret")
-    assert rc == 1
+    assert rc == 2  # partial, not "not found" (third review round)
     assert "20261106-120000-outside" not in out
 
 
@@ -369,7 +383,7 @@ def test_frontmatter_id_must_match_filename(tmp_path):
         encoding="utf-8",
     )
     rc, out, err = run(store, "list", "--store", str(store))
-    assert rc == 0, err
+    assert rc == 2, err  # partial: a file was skipped (third review round)
     assert "20261106-120000-aaa" not in out
     assert "does not match the filename" in err
 
@@ -415,3 +429,117 @@ def test_concurrent_promotes_do_not_lose_history(tmp_path):
         assert "status: dropped" in content
     # No lock file left behind.
     assert list(store.glob(".*.lock")) == []
+
+
+# --- Third review round: regression tests (2026-11-06) ---
+
+def test_list_with_malformed_file_is_partial_not_success(tmp_path):
+    """list with a malformed file exits 2 (partial), not 0: a machine
+    caller must not treat an incomplete list as success. The good
+    ideas still list, and stderr says partial."""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "a good idea")
+    assert rc == 0, err
+    good_id = out.strip()
+    (store / "broken.md").write_text("no frontmatter here\n", encoding="utf-8")
+    rc, out, err = run(store, "list", "--store", str(store))
+    assert rc == 2, err
+    assert good_id in out
+    assert "broken.md" in err
+    assert "partial" in err
+
+
+def test_list_clean_store_exits_zero(tmp_path):
+    """The partial exit code must not leak into a clean list."""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "a good idea")
+    assert rc == 0, err
+    rc, out, err = run(store, "list", "--store", str(store))
+    assert rc == 0, err
+    assert "partial" not in err
+
+
+def test_search_with_malformed_file_is_partial(tmp_path):
+    """search with a malformed file exits 2 (partial): the result
+    cannot be trusted — a match may live in the skipped file."""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "a unique zebra idea")
+    assert rc == 0, err
+    (store / "broken.md").write_text("no frontmatter here\n", encoding="utf-8")
+    rc, out, err = run(store, "search", "--store", str(store), "zebra")
+    assert rc == 2, err
+    assert "partial" in err
+
+
+def _handwritten_idea(store, idea_id, frontmatter_lines, raw_text):
+    """An idea file written by hand (not by capture), so the fixture
+    can carry a defect capture() would never produce."""
+    store.mkdir(parents=True, exist_ok=True)
+    body = (
+        "---\n"
+        f"id: {idea_id}\n"
+        "created: 2026-11-06T12:00:00+00:00\n"
+        "source: test\n"
+        + "".join(f"{line}\n" for line in frontmatter_lines)
+        + "---\n\n# Raw idea (verbatim)\n\n"
+        + raw_text
+        + "\n\n## History\n\n- 2026-11-06T12:00:00+00:00: captured (status raw)\n"
+    )
+    path = store / f"{idea_id}.md"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_set_status_with_missing_status_is_an_error(tmp_path):
+    """A file with no status in the frontmatter must fail cleanly —
+    the old code silently assumed "raw", changed nothing, yet
+    appended a History entry claiming the transition happened and
+    returned 0."""
+    store = tmp_path / "ideas"
+    path = _handwritten_idea(
+        store, "20261106-120000-no-status", [],
+        "an idea with no status field")
+    before = path.read_text(encoding="utf-8")
+    rc, out, err = run(store, "promote", "--store", str(store),
+                       "20261106-120000-no-status", "calibrated")
+    assert rc == 1, out
+    assert "error" in err
+    assert "status" in err
+    assert path.read_text(encoding="utf-8") == before
+    assert "-> calibrated" not in path.read_text(encoding="utf-8")
+
+
+def test_set_status_does_not_rewrite_a_status_line_in_the_raw_text(tmp_path):
+    """The status rewrite ran over the WHOLE file, so when the
+    frontmatter had no status line it rewrote a `status: ...` line
+    inside the raw idea text instead — corrupting the verbatim text
+    while claiming success. The file must be left untouched."""
+    store = tmp_path / "ideas"
+    path = _handwritten_idea(
+        store, "20261106-120000-status-in-text", [],
+        "an idea whose text says\nstatus: raw\non its own line")
+    before = path.read_text(encoding="utf-8")
+    rc, out, err = run(store, "promote", "--store", str(store),
+                       "20261106-120000-status-in-text", "calibrated")
+    assert rc == 1, out
+    assert "error" in err
+    assert path.read_text(encoding="utf-8") == before
+    assert "status: calibrated" not in path.read_text(encoding="utf-8")
+
+
+def test_set_status_rewrites_only_the_frontmatter(tmp_path):
+    """Guard: with a status line in the frontmatter AND one in the
+    raw text, only the frontmatter line changes — the verbatim raw
+    text is never edited."""
+    store = tmp_path / "ideas"
+    path = _handwritten_idea(
+        store, "20261106-120000-status-both", ["status: raw"],
+        "an idea whose text says\nstatus: raw\non its own line")
+    rc, out, err = run(store, "promote", "--store", str(store),
+                       "20261106-120000-status-both", "calibrated")
+    assert rc == 0, err
+    content = path.read_text(encoding="utf-8")
+    assert content.startswith("---\nid: 20261106-120000-status-both\n"
+                              "created: 2026-11-06T12:00:00+00:00\n"
+                              "source: test\nstatus: calibrated\n---\n")
+    assert "an idea whose text says\nstatus: raw\non its own line" in content

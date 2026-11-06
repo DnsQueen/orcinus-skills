@@ -22,8 +22,10 @@ Claude Code (plugin) — two steps, inside a Claude Code session:
 The marketplace is this repo (`.claude-plugin/marketplace.json`, name
 `orcinus`); the plugin is the whole repo (`.claude-plugin/plugin.json`,
 `skills/` at the plugin root). The name after `@` is the marketplace
-name, not the repo name. Validate the manifests with
-`claude plugin validate .` before publishing a change to them.
+name, not the repo name. The manifests are validated by
+`claude plugin validate . --strict` (also `--profile directory
+--strict`), which runs in CI and needs no login — run it locally
+before publishing a change to them.
 
 Agent Skills (generic) — one unit, all 36 skills, no mid-work fetch:
 
@@ -36,9 +38,105 @@ every agent without prompting. Without it the CLI lets you pick
 individual skills, which breaks the one-install rule — ORCINUS routes
 internally, the user never picks a sub-skill mid-work.
 
-Then invoke `/orcinus` in your agent and keep working. ORCINUS detects the stage; you confirm each major gate.
+Hermes (Nous Research) — tap + bundle. The repo is a Hermes tap
+already: its skills live under `skills/`, which is the tap's default
+path.
 
-## What v1 contains
+```bash
+hermes skills tap add DnsQueen/orcinus-skills
+```
+
+Then install the skills, for example the router:
+
+```bash
+hermes skills install DnsQueen/orcinus-skills/orcinus
+```
+
+A tap install downloads `SKILL.md` plus the skill's `references/`,
+`templates/`, `scripts/` and `assets/` directories. To install all
+36 at once, clone the repo and point Hermes at its `skills/`
+directory instead:
+
+```yaml
+# ~/.hermes/config.yaml
+skills:
+  external_dirs:
+    - ~/orcinus/skills
+```
+
+External directories are scanned like local skills, but they are not
+a write-protection boundary: if the directory is writable, the
+agent's skill writes can change files there. Keep the checkout
+read-only, or use a separate copy, if the skills must stay pristine.
+
+Then install the bundle — it is the `/orcinus` entry point:
+
+```bash
+cp hermes/orcinus.yaml ~/.hermes/skill-bundles/orcinus.yaml
+# or symlink it, so updates follow the checkout
+```
+
+A bundle does not install skills: it only groups skills that are
+already present. It lists the router only, because a bundle loads
+everything it lists at once — the router loads each sub-skill on
+demand with `skill_view(name)`. A bundle silently skips a skill that
+is not installed, so if the router names a sub-skill that is missing
+it says so and stops instead of improvising.
+
+What Hermes does not get: the plugin-root `agents/` and `commands/`
+are Claude Code plugin components — Hermes has no equivalent, so the
+six reviewer agents and the `review-pr` command do not travel. The
+`independent-review` skill still describes the review procedure; the
+agent follows it inline instead of spawning registered reviewers.
+And `${CLAUDE_PLUGIN_ROOT}` paths in skill text (one place:
+`orcinus-verify`) mean the Claude Code plugin root — in Hermes use
+the installed skill folder, or `${HERMES_SKILL_DIR}` inside a skill
+body.
+
+`metadata.hermes` is deliberately not embedded in the skill
+frontmatter: Hermes documents `metadata.hermes.tags` / `category` /
+`config`, but the Agent Skills spec requires metadata values to be
+strings, and ORCINUS keeps its frontmatter spec-pure. Tags and
+category are discovery metadata only; the router — not the skill
+list — is the entry point, so nothing functional is lost.
+
+Protect the install: a Hermes agent can edit its own skills. Turn
+on the write-approval gate, and lock each installed ORCINUS skill:
+
+```yaml
+# ~/.hermes/config.yaml
+skills:
+  write_approval: true
+```
+
+```bash
+hermes curator lock orcinus
+```
+
+A locked skill stays readable and loadable, but `skill_manage`,
+`write_file`, `patch` and `terminal` all refuse to change it.
+
+## Invoke it
+
+The invocation differs per host — the skill name is the same, the
+prefix is not:
+
+- **Claude Code (plugin install):** `/orcinus-skills:orcinus` — plugin
+  skills are namespaced.
+- **Claude Code (skills-CLI install) and Cursor:** `/orcinus` — type
+  `/` in Agent chat and pick it, or let the agent pick it from the
+  description.
+- **Codex:** `$orcinus` — or `/skills` and pick it.
+- **Hermes:** `/orcinus` — the bundle in `hermes/orcinus.yaml`,
+  installed to `~/.hermes/skill-bundles/`.
+
+Only the router is invocable by the user: every sub-skill carries
+`user-invocable: false`, so no sub-skill appears in the `/` menu.
+(A Claude Code field; other hosts ignore it.)
+
+After that, keep working. ORCINUS detects the stage; you confirm each major gate.
+
+## What v0.9 contains
 
 - `skills/orcinus` — the router. One entry, stage detection, gates, shared language.
 - `skills/orcinus-verify` — the flagship. Independent verification and evidence before any claim of done.
@@ -48,7 +146,7 @@ Then invoke `/orcinus` in your agent and keep working. ORCINUS detects the stage
 - `skills/security-review` — review a change for secrets, injection, supply-chain, and unsafe patterns before merge, with an eval scenario in `evals/security-review-01.md` (proven on the demo project and on a planted fake secret).
 - `skills/finalize` — prepare a release, cut it, and hand it over — docs, release notes, CI gates, rollback plan, and monitoring — without publishing anything the user has not approved, with an eval scenario in `evals/finalize-01.md` (proven as a dry-run release on the demo project in `examples/demo/`). It uses ready tools as-is: release-please, Waza, handoff, and `monitoring-observability`.
 - `skills/monitoring-observability` — monitoring and observability patterns for Prometheus, Grafana, Langfuse LLM tracing, and drift detection, copied verbatim from a ready-made skill (OrchestKit, MIT, see its `ATTRIBUTION.md`), not rewritten. It is a reference skill, loaded by `finalize` when a project uses those stacks.
-- `skills/ask-questions-if-underspecified` — clarify requirements before implementing, copied verbatim from a ready-made skill (Agentic Awesome Skills, MIT, see its `ATTRIBUTION.md`), not rewritten. The router loads it whenever a request is underspecified, before any implementation.
+- `skills/ask-questions-if-underspecified` — clarify requirements before implementing, copied verbatim from a ready-made skill (sickn33/antigravity-awesome-skills, MIT, see its `ATTRIBUTION.md`), not rewritten. The router loads it whenever a request is underspecified, before any implementation.
 - `skills/webapp-testing` — test local web applications in a real browser with Playwright, copied verbatim from a ready-made skill (Anthropic, Apache-2.0, see its `ATTRIBUTION.md`), not rewritten. The router loads it whenever the project has a web UI.
 - `skills/mutation-testing` — check whether the tests actually catch bugs by mutating the code and seeing if the tests fail, using Stryker as-is (Apache-2.0). JavaScript/TypeScript only.
 - `skills/visual-regression` — catch unintended visual changes by comparing screenshots against a baseline, using Playwright as-is (Apache-2.0). Web UI only; needs a browser.
@@ -78,15 +176,15 @@ Then invoke `/orcinus` in your agent and keep working. ORCINUS detects the stage
 - `skills/issue-triage` — manage a GitHub issue backlog in 3 phases: audit, opt-in deep analysis, validated actions. Injected verbatim (florianbruniaux/claude-code-plugins, MIT). Pass the language explicitly (`en`) — the skill defaults to French.
 - `docs/MAP.md` — the full 0–100 map: every micro-step, its best proven source, its licence, and its integration method (copy / rewrite / bundle / write from scratch).
 - `skills/manifest.json` — the single source of truth for the skill inventory: name, licence, stages, source, and status per skill. The validator checks it against the folders and the frontmatter.
-- `evals/evidence.schema.json` — the machine-readable form of the evidence bundle orcinus-verify returns. Validate a bundle with `python3 scripts/validate_evidence.py <bundle.json>`.
+- `skills/orcinus-verify/references/evidence.schema.json` — the machine-readable form of the evidence bundle orcinus-verify returns. Validate a bundle with `python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json>`.
 - `scripts/doctor.py` — check whether this machine can run the ORCINUS gates (python, pytest, ruff, git, node, waza) and say exactly which ones it cannot.
-- `scripts/clean_install_check.py` — prove the repo works from a clean copy, not just in the author's working tree (also run in CI).
-- `docs/adr/` — architecture decision records for ORCINUS's own decisions (one install, verification-first, verbatim-with-attribution, no Trust Score in v1).
+- `scripts/clean_copy_check.py` — prove the repo works from a clean copy, with the source hidden during the run so nothing in the copy can reach back to the original checkout (also run in CI). It is a copy check, not an install check: it copies the working tree and runs the repo's own gates there.
+- `docs/adr/` — architecture decision records for ORCINUS's own decisions (one install, verification-first, verbatim-with-attribution, no Trust Score in v0.9).
 - `docs/report-format.md` — the unified machine-readable report format all checkers converge to.
 - `docs/project-state.md` — the persistent project state spec (`.orcinus/state.json`): BUILDING / VERIFYING / BLOCKED / VERIFIED / AWAITING_APPROVAL / RELEASE_READY, each bound to a revision and an evidence bundle.
-- `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v1 does and does not do.
+- `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v0.9 does and does not do.
 
-Later sub-skills (idea, architecture, coding, security, eval) are listed in `docs/MAP.md` with their source and status. They are added one at a time, each proven on a demo repo before it ships. No stage is empty in the map, but not every sub-skill is fully built in v1.
+Later sub-skills (idea, architecture, coding, security, eval) are listed in `docs/MAP.md` with their source and status. They are added one at a time, each proven on a demo repo before it ships. No stage is empty in the map, but not every sub-skill is fully built in v0.9.
 
 ## Boundaries (non-negotiable)
 
@@ -111,8 +209,8 @@ ORCINUS core is MIT. See `LICENSE`.
 
 Sub-skills adapted from other projects keep their own licence and attribution in their folder and in `docs/MAP.md`. MIT/Apache-2.0 sources may be copied verbatim with attribution. CC-BY-SA sources are rewritten in our own words or kept as a separate licensed module in the same install — never copied verbatim into an MIT file. Proprietary sources are reimplemented from scratch, never copied. Deprecated sources are not used.
 
-Sources that shaped v1 include Anthropic (Effective Harnesses, Agent Skills, code-review), OpenAI (Harness Engineering, monitoring), Columbia DAPLab (9 Critical Failure Patterns), METR, and the projects listed in `docs/MAP.md`.
+Sources that shaped v0.9 include Anthropic (Effective Harnesses, Agent Skills, code-review), OpenAI (Harness Engineering, monitoring), Columbia DAPLab (9 Critical Failure Patterns), METR, and the projects listed in `docs/MAP.md`.
 
 ## Status
 
-v1 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + security-review + finalize + monitoring-observability (injected verbatim) + ask-questions-if-underspecified (injected verbatim) + webapp-testing (injected verbatim) + mutation-testing + visual-regression + performance-optimization (injected verbatim) + api-and-interface-design (injected verbatim) + breaking-change + incomplete-refactor + registry-publish + i18n (injected verbatim) + accessibility (ultra11y engine as-is) + architecture + database-designer (injected verbatim, migration generator fixed — see its ATTRIBUTION.md) + skill-creator (injected verbatim) + frontend-architecture (injected verbatim) + frontend-optimistic-mutations (injected verbatim) + frontend-data-contracts (injected verbatim) + mutation-testing-python (written from scratch, mutmut as-is) + idea-capture (written from scratch, with a script) + monitoring (injected verbatim) + independent-review (own-words method, reviewers bundled as-is) + waza (injected verbatim, official CLI as-is) + refactor (injected verbatim) + mcp-builder (injected verbatim) + handoff (merged, own words) + codebase-knowledge-builder (injected verbatim) + issue-triage (injected verbatim) + diagnosing-bugs (injected verbatim) + map. The rest is built in order, with eval scenarios, not by dumping skills. Where a ready skill answers a need, it is used as-is — never rewritten — except where the licence or a real defect forced a change, and then the change is recorded in that skill's `ATTRIBUTION.md`: `accessibility` is an own-words wrapper around the ultra11y engine (bundled byte-identical), and `database-designer` has one minimal fix to its migration generator (upstream `json.dumps` on Column dataclasses failed on any schema change).
+v0.9 foundation. Router + orcinus-verify + idea-calibrate + scaffold + build + security-review + finalize + monitoring-observability (injected verbatim) + ask-questions-if-underspecified (injected verbatim) + webapp-testing (injected verbatim) + mutation-testing + visual-regression + performance-optimization (injected verbatim) + api-and-interface-design (injected verbatim) + breaking-change + incomplete-refactor + registry-publish + i18n (injected verbatim) + accessibility (ultra11y engine as-is) + architecture + database-designer (injected verbatim, migration generator fixed — see its ATTRIBUTION.md) + skill-creator (injected verbatim) + frontend-architecture (injected verbatim) + frontend-optimistic-mutations (injected verbatim) + frontend-data-contracts (injected verbatim) + mutation-testing-python (written from scratch, mutmut as-is) + idea-capture (written from scratch, with a script) + monitoring (injected verbatim) + independent-review (own-words method, reviewers bundled as-is) + waza (injected verbatim, official CLI as-is) + refactor (injected verbatim) + mcp-builder (injected verbatim) + handoff (merged, own words) + codebase-knowledge-builder (injected verbatim) + issue-triage (injected verbatim) + diagnosing-bugs (injected verbatim) + map. The rest is built in order, with eval scenarios, not by dumping skills. Where a ready skill answers a need, it is used as-is — never rewritten — except where the licence or a real defect forced a change, and then the change is recorded in that skill's `ATTRIBUTION.md`: `accessibility` is an own-words wrapper around the ultra11y engine (bundled byte-identical), and `database-designer` has one minimal fix to its migration generator (upstream `json.dumps` on Column dataclasses failed on any schema change).

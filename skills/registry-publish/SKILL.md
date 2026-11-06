@@ -2,6 +2,7 @@
 name: registry-publish
 description: Publish a package to a registry safely — prepare, check, dry-run, confirm, publish, then verify the published artifact actually installs and works. Use when shipping a new version of a package. npm first. No publish happens without the user's explicit written confirmation. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
 ---
 
 # REGISTRY-PUBLISH — ship the package, and prove the shipped one works

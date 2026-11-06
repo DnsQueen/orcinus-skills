@@ -48,7 +48,9 @@ def compare_and_generate(current, target, zero_downtime=False):
     comp.load_schemas(schema(current), schema(target))
     changes = comp.compare_schemas()
     gen = MigrationGenerator(zero_downtime=zero_downtime)
-    return changes, gen.generate_migration(changes)
+    return changes, gen.generate_migration(
+        changes, current_schema=schema(current),
+        target_schema=schema(target))
 
 
 def step_sql(plan, step_type):
@@ -142,9 +144,13 @@ def test_renamed_table_constraint_change_is_compared():
     assert len(changes["constraints_dropped"]) == 1
 
 
-def test_zero_downtime_drop_is_high_risk_and_temp_column_is_complete():
-    """The DROP COLUMN step used to inherit LOW risk, and the temp
-    column carried only the data type — not the target's constraints."""
+def test_zero_downtime_drop_is_high_risk_and_temp_column_is_type_only():
+    """The DROP COLUMN step must be HIGH risk, and the temp column
+    must be type-only and nullable: the old assertion (temp column
+    carries the full target definition) was the bug — a NOT NULL
+    column without a default fails on a populated table before the
+    copy step ever runs. The target's constraints are applied by the
+    APPLY_CONSTRAINTS step after the rename."""
     current = {"t": table({"v": col("VARCHAR(50)")})}
     target = {"t": table({"v": col(
         "VARCHAR(100)", nullable=False, unique=True, default="'x'",
@@ -155,10 +161,15 @@ def test_zero_downtime_drop_is_high_risk_and_temp_column_is_complete():
     assert drop[0].risk_level == "HIGH", drop[0].risk_level
     add_temp = step_sql(plan, "ADD_TEMP_COLUMN")[0].sql_forward
     assert "VARCHAR(100)" in add_temp
-    assert "NOT NULL" in add_temp
-    assert "UNIQUE" in add_temp
-    assert "DEFAULT 'x'" in add_temp
-    assert "CHECK (v <> '')" in add_temp
+    assert "NOT NULL" not in add_temp
+    assert "UNIQUE" not in add_temp
+    assert "DEFAULT" not in add_temp
+    assert "CHECK" not in add_temp
+    apply = step_sql(plan, "APPLY_CONSTRAINTS")[0].sql_forward
+    assert "SET NOT NULL" in apply
+    assert "SET DEFAULT 'x'" in apply
+    assert "ADD CONSTRAINT uq_t_v UNIQUE (v)" in apply
+    assert "ADD CONSTRAINT ck_t_v CHECK (v <> '')" in apply
     assert "zero_downtime_warning" in plan.summary
     assert "DRAFT" in plan.summary["zero_downtime_warning"]
 
@@ -168,6 +179,9 @@ def test_zero_downtime_phases_are_expand_then_contract():
     target = {"t": table({"v": col("VARCHAR(100)")})}
     _, plan = compare_and_generate(current, target, zero_downtime=True)
     phases = [s.zero_downtime_phase for s in plan.steps]
+    # A plain type change has nothing to apply after the rename, so
+    # there is no APPLY_CONSTRAINTS step here (see the test above
+    # for the constrained case).
     assert phases == ["EXPAND", "EXPAND", "CONTRACT", "CONTRACT"], phases
 
 
@@ -260,7 +274,9 @@ def test_create_table_emits_table_level_constraints():
 
 def test_add_column_keeps_constraints():
     """A new column's UNIQUE, foreign key and CHECK must survive into
-    the ADD COLUMN — they used to be dropped."""
+    the migration — as named ADD CONSTRAINT steps, not inline
+    constraints (an inline UNIQUE is unnamed and cannot be dropped
+    by name later). They used to be dropped entirely."""
     current = {"users": table({"id": col("INTEGER")}, primary_key=["id"])}
     target = {"users": table(
         {"id": col("INTEGER"),
@@ -270,13 +286,18 @@ def test_add_column_keeps_constraints():
         primary_key=["id"]),
         "groups": table({"id": col("INTEGER")}, primary_key=["id"])}
     _, plan = compare_and_generate(current, target)
-    adds = {s.description: s.sql_forward for s in step_sql(plan, "ADD_COLUMN")}
-    email_sql = [v for k, v in adds.items() if "email" in k][0]
-    assert "UNIQUE" in email_sql
-    status_sql = [v for k, v in adds.items() if "status" in k][0]
-    assert "CHECK (status IN ('a', 'b'))" in status_sql
-    group_sql = [v for k, v in adds.items() if "group_id" in k][0]
-    assert "REFERENCES groups(id)" in group_sql
+    constraints = [s.sql_forward for s in step_sql(plan, "ADD_CONSTRAINT")]
+    assert any("ADD CONSTRAINT uq_users_email UNIQUE (email)" in s
+               for s in constraints)
+    assert any("ADD CONSTRAINT ck_users_status CHECK (status IN ('a', 'b'))" in s
+               for s in constraints)
+    assert any("ADD CONSTRAINT fk_users_group_id FOREIGN KEY (group_id) REFERENCES groups(id)" in s
+               for s in constraints)
+    # And the ADD COLUMN steps themselves carry no inline constraints.
+    for s in step_sql(plan, "ADD_COLUMN"):
+        assert "UNIQUE" not in s.sql_forward
+        assert "CHECK" not in s.sql_forward
+        assert "REFERENCES" not in s.sql_forward
 
 
 def test_new_table_indexes_are_created():
@@ -295,3 +316,266 @@ def test_new_table_indexes_are_created():
     # And it runs after the CREATE TABLE.
     order = [s.step_type for s in plan.steps]
     assert order.index("CREATE_TABLE") < order.index("ADD_INDEX")
+
+
+# --- Third review round: regression tests (2026-11-06). ---
+
+def test_zero_default_is_kept_in_create_and_add():
+    """A default of 0 is a real default, not 'no default': `if
+    column.default_value:` dropped it. 0 must survive into the SQL."""
+    target = {"t": table({"n": col("INTEGER", default=0)})}
+    _, plan = compare_and_generate({}, target)
+    assert "DEFAULT 0" in step_sql(plan, "CREATE_TABLE")[0].sql_forward
+    current = {"t": table({"id": col("INTEGER")}, primary_key=["id"])}
+    target = {"t": table({"id": col("INTEGER"), "n": col("INTEGER", default=0)},
+                         primary_key=["id"])}
+    _, plan = compare_and_generate(current, target)
+    assert "DEFAULT 0" in step_sql(plan, "ADD_COLUMN")[0].sql_forward
+
+
+def test_default_change_to_zero():
+    current = {"t": table({"n": col("INTEGER", default=1)})}
+    target = {"t": table({"n": col("INTEGER", default=0)})}
+    _, plan = compare_and_generate(current, target)
+    sql = step_sql(plan, "MODIFY_COLUMN")[0].sql_forward
+    assert "SET DEFAULT 0" in sql
+
+
+def test_not_null_with_zero_default_is_low_risk():
+    """A NOT NULL column with a default of 0 is safe to add (existing
+    rows get 0); the risk must not be HIGH just because 0 is falsy."""
+    current = {"t": table({"id": col("INTEGER")}, primary_key=["id"])}
+    target = {"t": table({"id": col("INTEGER"),
+                         "n": col("INTEGER", nullable=False, default=0)},
+                         primary_key=["id"])}
+    _, plan = compare_and_generate(current, target)
+    assert step_sql(plan, "ADD_COLUMN")[0].risk_level == "LOW"
+
+
+def test_partial_index_keeps_predicate():
+    """An index that keeps its name but changes only its WHERE must
+    be rebuilt WITH the predicate — the old ADD INDEX emitted a plain
+    index and the migration did not reach the target."""
+    current = {"t": table(
+        {"id": col("INTEGER"), "active": col("BOOLEAN")},
+        indexes=[{"name": "idx_t_active", "columns": ["id"],
+                  "where": "active"}])}
+    target = {"t": table(
+        {"id": col("INTEGER"), "active": col("BOOLEAN")},
+        indexes=[{"name": "idx_t_active", "columns": ["id"],
+                  "where": "NOT active"}])}
+    _, plan = compare_and_generate(current, target)
+    add = step_sql(plan, "ADD_INDEX")[0].sql_forward
+    assert "WHERE NOT active" in add
+    # The DROP rollback recreates the OLD index, predicate included.
+    rollback = step_sql(plan, "DROP_INDEX")[0].sql_rollback
+    assert "WHERE active" in rollback
+
+
+def test_expression_index_keeps_expression():
+    target = {"t": table(
+        {"id": col("INTEGER"), "email": col("TEXT")},
+        indexes=[{"name": "idx_t_email_lower", "columns": [],
+                  "expression": "lower(email)"}])}
+    _, plan = compare_and_generate({}, target)
+    add = step_sql(plan, "ADD_INDEX")[0].sql_forward
+    assert "lower(email)" in add
+
+
+def test_method_index_keeps_using():
+    target = {"t": table(
+        {"id": col("INTEGER"), "tags": col("TEXT")},
+        indexes=[{"name": "idx_t_tags", "columns": ["tags"],
+                  "method": "gin"}])}
+    _, plan = compare_and_generate({}, target)
+    add = step_sql(plan, "ADD_INDEX")[0].sql_forward
+    assert "USING gin" in add
+
+
+def test_create_table_names_all_constraints():
+    """A table created by this generator must be modifiable later:
+    every constraint gets the name the modify/drop steps assume.
+    An unnamed PRIMARY KEY, FOREIGN KEY, inline UNIQUE or inline
+    CHECK cannot be dropped by name afterwards."""
+    target = {"t": table(
+        {"id": col("INTEGER"),
+         "author_id": col("INTEGER", foreign_key="authors.id"),
+         "email": col("TEXT", unique=True),
+         "price": col("NUMERIC", check_constraint="price > 0")},
+        primary_key=["id"]),
+        "authors": table({"id": col("INTEGER")}, primary_key=["id"])}
+    _, plan = compare_and_generate({}, target)
+    sql = [s for s in step_sql(plan, "CREATE_TABLE") if s.table == "t"][0].sql_forward
+    assert "CONSTRAINT pk_t PRIMARY KEY (id)" in sql
+    assert "CONSTRAINT fk_t_author_id FOREIGN KEY (author_id) REFERENCES authors(id)" in sql
+    assert "CONSTRAINT uq_t_email UNIQUE (email)" in sql
+    assert "CONSTRAINT ck_t_price CHECK (price > 0)" in sql
+    assert "\n    PRIMARY KEY (" not in sql
+    assert "\n    FOREIGN KEY (" not in sql
+    assert "email TEXT UNIQUE" not in sql
+    assert "price NUMERIC CHECK" not in sql
+
+
+def test_add_column_emits_named_constraints():
+    """An added column's UNIQUE, FK and CHECK must be named
+    constraints, not inline ones — otherwise a later DROP CONSTRAINT
+    by the conventional name fails."""
+    current = {"users": table({"id": col("INTEGER")}, primary_key=["id"])}
+    target = {"users": table(
+        {"id": col("INTEGER"),
+         "email": col("TEXT", unique=True),
+         "status": col("TEXT", check_constraint="status IN ('a', 'b')"),
+         "group_id": col("INTEGER", foreign_key="groups.id")},
+        primary_key=["id"]),
+        "groups": table({"id": col("INTEGER")}, primary_key=["id"])}
+    _, plan = compare_and_generate(current, target)
+    adds = {s.description: s.sql_forward for s in step_sql(plan, "ADD_COLUMN")}
+    email_sql = [v for k, v in adds.items() if "email" in k][0]
+    assert "UNIQUE" not in email_sql  # not inline any more
+    constraints = [s.sql_forward for s in step_sql(plan, "ADD_CONSTRAINT")]
+    assert any("ADD CONSTRAINT uq_users_email UNIQUE (email)" in s for s in constraints)
+    assert any("ADD CONSTRAINT fk_users_group_id FOREIGN KEY (group_id) REFERENCES groups(id)" in s for s in constraints)
+    assert any("ADD CONSTRAINT ck_users_status CHECK (status IN ('a', 'b'))" in s for s in constraints)
+
+
+def test_create_then_modify_constraint_round_trips():
+    """The round trip: create a table with a unique column, then
+    remove the unique. The DROP CONSTRAINT the second migration
+    emits must name a constraint the first migration actually
+    created."""
+    target_v1 = {"t": table(
+        {"id": col("INTEGER"), "email": col("TEXT", unique=True)},
+        primary_key=["id"])}
+    _, plan_v1 = compare_and_generate({}, target_v1)
+    created = step_sql(plan_v1, "CREATE_TABLE")[0].sql_forward
+    _, plan_v2 = compare_and_generate(
+        target_v1,
+        {"t": table({"id": col("INTEGER"), "email": col("TEXT")},
+                    primary_key=["id"])})
+    drop = step_sql(plan_v2, "MODIFY_COLUMN")[0].sql_forward
+    assert "DROP CONSTRAINT uq_t_email" in drop
+    assert "CONSTRAINT uq_t_email UNIQUE (email)" in created
+
+
+def test_zero_downtime_temp_column_is_nullable_and_type_only():
+    """The temp column must be nullable and carry only the data type:
+    a NOT NULL column without a default fails on a populated table
+    before the copy step ever runs. Constraints are applied after
+    the rename, not on the temp column."""
+    current = {"t": table({"v": col("VARCHAR(50)")})}
+    target = {"t": table({"v": col(
+        "VARCHAR(100)", nullable=False, unique=True, default="'x'",
+        check_constraint="v <> ''")})}
+    _, plan = compare_and_generate(current, target, zero_downtime=True)
+    add_temp = step_sql(plan, "ADD_TEMP_COLUMN")[0].sql_forward
+    assert "VARCHAR(100)" in add_temp
+    assert "NOT NULL" not in add_temp
+    assert "UNIQUE" not in add_temp
+    assert "DEFAULT" not in add_temp
+    assert "CHECK" not in add_temp
+
+
+def test_zero_downtime_applies_constraints_after_rename():
+    """After the rename, one step applies the target's constraints
+    with the final column name — NOT NULL, DEFAULT, UNIQUE, FK,
+    CHECK — and only then. It must come after RENAME_COLUMN, and it
+    must say it runs only after the backfill check returns 0."""
+    current = {"t": table({"v": col("VARCHAR(50)")})}
+    target = {"t": table({"v": col(
+        "VARCHAR(100)", nullable=False, unique=True, default="'x'",
+        check_constraint="v <> ''")})}
+    _, plan = compare_and_generate(current, target, zero_downtime=True)
+    apply = step_sql(plan, "APPLY_CONSTRAINTS")
+    assert len(apply) == 1
+    sql = apply[0].sql_forward
+    assert "SET NOT NULL" in sql
+    assert "SET DEFAULT 'x'" in sql
+    assert "ADD CONSTRAINT uq_t_v UNIQUE (v)" in sql
+    assert "ADD CONSTRAINT ck_t_v CHECK (v <> '')" in sql
+    order = [s.step_type for s in plan.steps]
+    assert order.index("RENAME_COLUMN") < order.index("APPLY_CONSTRAINTS")
+    assert "backfill" in apply[0].description.lower()
+    # The copy step carries the backfill check.
+    copy = step_sql(plan, "COPY_COLUMN_DATA")[0]
+    assert copy.validation_sql is not None
+    assert "v_new IS NULL" in copy.validation_sql
+
+
+def test_schema_hashes_are_real():
+    """The plan's hashes must be the hashes of the two schemas, not
+    of the changes dict — and the target hash must not be empty."""
+    import hashlib
+    import json
+    current = {"t": table({"id": col("INTEGER")}, primary_key=["id"])}
+    target = {"t": table({"id": col("INTEGER"), "n": col("INTEGER")},
+                        primary_key=["id"])}
+    comp = SchemaComparator()
+    comp.load_schemas(schema(current), schema(target))
+    changes = comp.compare_schemas()
+    gen = MigrationGenerator()
+    plan = gen.generate_migration(
+        changes, current_schema=schema(current),
+        target_schema=schema(target))
+    def _hash(data):
+        return hashlib.sha256(
+            json.dumps(data, sort_keys=True).encode()).hexdigest()
+    assert plan.source_schema_hash == _hash(schema(current))
+    assert plan.target_schema_hash == _hash(schema(target))
+    assert plan.source_schema_hash != plan.target_schema_hash
+
+
+def test_drop_table_rollback_recreates_the_table():
+    """The DROP TABLE rollback was literally a comment. The generator
+    has the table definition, so the rollback must be a real CREATE
+    TABLE (structure only — the data is gone)."""
+    current = {"t": table({"id": col("INTEGER"), "v": col("TEXT")},
+                          primary_key=["id"])}
+    _, plan = compare_and_generate(current, {})
+    drop = step_sql(plan, "DROP_TABLE")[0]
+    assert "implementation needed" not in drop.sql_rollback
+    assert "CREATE TABLE t" in drop.sql_rollback
+    assert drop.reversibility == "schema-only"
+
+
+def test_drop_column_rollback_is_schema_only():
+    """A dropped column's rollback re-adds an empty column: the data
+    is not restored. The step must say so, and the plan must require
+    a backup."""
+    current = {"t": table({"id": col("INTEGER"), "note": col("TEXT")},
+                          primary_key=["id"])}
+    target = {"t": table({"id": col("INTEGER")}, primary_key=["id"])}
+    _, plan = compare_and_generate(current, target)
+    drop = step_sql(plan, "DROP_COLUMN")[0]
+    assert drop.reversibility == "schema-only"
+    assert "not restored" in drop.description.lower() or "backup" in drop.description.lower()
+    assert plan.summary["backup_required"] is True
+    assert drop.step_id in plan.summary["data_loss_steps"]
+
+
+def test_summary_marks_data_loss_steps():
+    current = {"t": table({"id": col("INTEGER"), "note": col("TEXT")},
+                          primary_key=["id"])}
+    target = {"t": table({"id": col("INTEGER")}, primary_key=["id"])}
+    _, plan = compare_and_generate(current, target)
+    assert plan.summary["backup_required"] is True
+    assert len(plan.summary["data_loss_steps"]) == 1
+    _, plan2 = compare_and_generate(
+        {"t": table({"id": col("INTEGER")}, primary_key=["id"])},
+        {"t": table({"id": col("INTEGER"), "n": col("INTEGER")},
+                    primary_key=["id"])})
+    assert plan2.summary["backup_required"] is False
+    assert plan2.summary["data_loss_steps"] == []
+
+
+def test_drop_column_validation_exists():
+    """--validate-only used to emit no validation query for a DROP
+    COLUMN. There must be one: the column exists before the drop."""
+    from migration_generator import ValidationGenerator
+    current = {"t": table({"id": col("INTEGER"), "note": col("TEXT")},
+                          primary_key=["id"])}
+    target = {"t": table({"id": col("INTEGER")}, primary_key=["id"])}
+    _, plan = compare_and_generate(current, target)
+    checks = ValidationGenerator().generate_validations(plan)
+    assert len(checks) == 1
+    assert checks[0].check_type == "COLUMN_EXISTS_BEFORE_DROP"
+    assert checks[0].expected_result == 1

@@ -2,6 +2,8 @@
 name: architecture
 description: Define a project's architecture before any code is written — stack choice as a decision record, file tree and invariants, public contract, layer rules, and dependency licences — and enforce it with a checker. Use when a calibrated brief exists and the project does not yet have a written architecture, or when a structural change is proposed. No code before the architecture is written. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
+compatibility: Requires Python 3.10+.
 ---
 
 # ARCHITECTURE — decide the shape before building it
@@ -48,7 +50,7 @@ List every direct dependency in `package.json` and read its licence from `node_m
 python3 skills/architecture/scripts/check_architecture.py --root <project>
 ```
 
-The checker verifies what is mechanically checkable: no source file imports from outside `src/` (that includes the test directory), no circular import among source files, every relative import resolves to a file, and every direct dependency's licence is allowed (SPDX expressions and the legacy `licenses[]` array are understood). It reads `.ts`, `.tsx`, `.js` and `.jsx` files, follows dynamic `import()`, and resolves tsconfig `paths` aliases. `import type` and imports in comments are not runtime imports and are ignored. It does not verify the tree, the ADR, or the contract — those are verified by reading them, in the report below. It is a limited check of relative imports, not a full module resolver; for a project that needs a complete graph, use a real resolver (dependency-cruiser, madge). If it finds no source files at all it reports INCOMPLETE, never clean.
+The checker verifies what is mechanically checkable: no source file imports from outside `src/` (that includes the test directory), no circular import among source files, every relative import resolves to a file, and every direct dependency's licence is allowed (SPDX expressions and the legacy `licenses[]` array are understood). It reads `.ts`, `.tsx`, `.js` and `.jsx` files, follows dynamic `import()`, and resolves tsconfig `paths` aliases. `import type` and imports in comments are not runtime imports and are ignored. A `baseUrl` or `paths` inherited from a base config resolve against the base config's directory, not the child's (TypeScript's rule for `extends` chains). It is a limited check of relative imports, not a full module resolver; for a project that needs a complete graph, use a real resolver (dependency-cruiser, madge). Two limits to know: it does not follow re-exports through barrel files or evaluate conditional or computed imports, and a string literal containing the text of an import statement is counted as an import — the scanner is a regex over comment-stripped text, not a parser, so a file that quotes an import in a string can report a false "unresolved import". If it finds no source files at all it reports INCOMPLETE, never clean.
 
 ## Report
 

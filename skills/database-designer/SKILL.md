@@ -2,6 +2,8 @@
 name: "database-designer"
 description: "Design a database schema: tables, relationships, indexes, normalization, SQL vs NoSQL, migration plans. Use whenever the user asks how to structure their data, which database to pick, or before writing DDL. Only invoke via the orcinus router."
 license: MIT
+user-invocable: false
+compatibility: Requires Python 3.10+.
 ---
 
 # Database Designer - POWERFUL Tier Skill
@@ -60,7 +62,7 @@ Write the user's hot queries into a query-patterns JSON first (copy `assets/samp
 python3 migration_generator.py --current current_schema.json --target target_schema.json --zero-downtime --format sql -o migration.sql
 ```
 
-`--zero-downtime` emits an expand-contract plan. That plan is a DRAFT, not a verified zero-downtime migration: it has no write-synchronisation, no cutover and no backfill verification. It needs application coordination (dual-write to both columns during EXPAND, a backfill check before CONTRACT, a cutover). Do not run it automatically on real data. `--validate-only` checks feasibility without generating SQL.
+`--zero-downtime` emits an expand-contract plan. That plan is a DRAFT, not a verified zero-downtime migration: it has no write-synchronisation and no cutover. The backfill check IS in the plan now — the COPY step carries a validation query that must return 0 before the contract phase runs. It still needs application coordination (dual-write to both columns during EXPAND, a cutover). Do not run it automatically on real data. The plan's summary marks data-loss steps (`backup_required`, `data_loss_steps`): a dropped column or table comes back empty from its rollback — the structure is restored, the data is not. `--validate-only` checks feasibility without generating SQL.
 
 ### 4. Verification loop
 

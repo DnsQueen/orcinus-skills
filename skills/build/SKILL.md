@@ -2,6 +2,7 @@
 name: build
 description: Build one slice at a time, test first, with the four checks and independent verification before commit. Use when a scaffolded project exists and a slice from the calibrated brief is next. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
 ---
 
 # BUILD — one slice at a time, test first

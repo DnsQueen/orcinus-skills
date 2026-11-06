@@ -21,7 +21,7 @@ install. The router (`skills/orcinus`) loads the focused sub-skills
 internally; the user never fetches a sub-skill mid-work. The shared
 glossary (`skills/orcinus/references/GLOSSARY.md`), the shared rules
 (`skills/orcinus/references/rules.md`), and the evidence bundle
-(`evals/evidence.schema.json`) are the nervous system's common
+(`skills/orcinus-verify/references/evidence.schema.json`) are the nervous system's common
 language — every sub-skill speaks it.
 
 ## Consequences

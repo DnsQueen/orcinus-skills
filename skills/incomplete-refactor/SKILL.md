@@ -2,6 +2,8 @@
 name: incomplete-refactor
 description: Detect an incomplete refactor — old names still referenced, removed files still present, stale tests still calling the old API — before calling the refactor done. Use after every rename, move, or API migration, and in CI on refactor branches. A green test suite does not prove a refactor is complete. Only invoke via the orcinus router.
 license: MIT
+user-invocable: false
+compatibility: Requires Python 3.10+.
 ---
 
 # INCOMPLETE-REFACTOR — is the old thing really gone?

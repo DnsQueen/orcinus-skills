@@ -1,7 +1,8 @@
 ---
 name: independent-review
 description: Review a change independently before it merges, with six focused reviewers reading the diff — not the author's summary. Use before committing, before creating a pull request, and after a logical chunk of work. The implementer is never the final judge. Only invoke via the orcinus router.
-license: MIT
+license: MIT AND Apache-2.0
+user-invocable: false
 ---
 
 # INDEPENDENT-REVIEW — the implementer is never the final judge
@@ -10,7 +11,7 @@ A change the author reviewed themself is not reviewed. This skill runs an indepe
 
 ## Licences
 
-This skill's text is MIT. The bundled reviewer agents and command (`agents/`, `commands/`) are Apache-2.0 — see `ATTRIBUTION.md`. Do not re-license the bundled files.
+This skill's text is MIT. The bundled reviewer agents and command (registered at the plugin root, `agents/` and `commands/`) are Apache-2.0 — see `ATTRIBUTION.md`. Do not re-license the bundled files.
 
 ## Rules
 
@@ -41,7 +42,7 @@ Pick the mode first, then list the changed files (new files included). That list
 
 ### 3. Run the reviewers
 
-The reviewers are the bundled agents in `agents/` (from pr-review-toolkit, Apache-2.0). Run them in parallel when they are independent — they read the same diff from different angles. Each one reads the code, not a summary of it.
+The reviewers are the bundled agents registered at the plugin root (code-reviewer, code-simplifier, comment-analyzer, pr-test-analyzer, silent-failure-hunter, type-design-analyzer — from pr-review-toolkit, Apache-2.0). Run them in parallel when they are independent — they read the same diff from different angles. Each one reads the code, not a summary of it.
 
 Confidence scales, per reviewer:
 
@@ -84,4 +85,4 @@ Review only. This skill does not write code, does not fix findings, and does not
 
 ## Sources
 
-Method, in our own words, following pr-review-toolkit (anthropics/claude-plugins-official, Apache-2.0). The six reviewer agents and the `review-pr` command are bundled as-is in `agents/` and `commands/`; see `ATTRIBUTION.md`. No text was copied from the toolkit into this file.
+Method, in our own words, following pr-review-toolkit (anthropics/claude-plugins-official, Apache-2.0). The six reviewer agents and the `review-pr` command are bundled as-is at the plugin root (`agents/`, `commands/`); see `ATTRIBUTION.md`. No text was copied from the toolkit into this file.
