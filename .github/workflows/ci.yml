@@ -32,10 +32,10 @@ jobs:
         run: python3 -m pytest -q
       - name: Install waza (v0.40.0, checksum verified)
         run: |
-          curl -sL -o /tmp/waza https://github.com/microsoft/waza/releases/download/v0.40.0/waza-linux-amd64
+          curl -sL -o /tmp/waza-linux-amd64 https://github.com/microsoft/waza/releases/download/v0.40.0/waza-linux-amd64
           curl -sL -o /tmp/checksums.txt https://github.com/microsoft/waza/releases/download/v0.40.0/checksums.txt
           cd /tmp && grep 'waza-linux-amd64' checksums.txt | sha256sum -c -
-          chmod +x /tmp/waza
-          /tmp/waza --help | head -n 3
+          chmod +x /tmp/waza-linux-amd64
+          /tmp/waza-linux-amd64 --help | head -n 3
       - name: Run the waza harness-smoke suite (mock executor)
-        run: /tmp/waza run evals/waza-orcinus-verify/eval.yaml --output /tmp/waza-results.json
+        run: /tmp/waza-linux-amd64 run evals/waza-orcinus-verify/eval.yaml --output /tmp/waza-results.json
