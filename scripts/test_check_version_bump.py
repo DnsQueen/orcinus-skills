@@ -157,3 +157,25 @@ def test_unresolvable_base_fails_loudly(tmp_path):
     rc, out = _run(repo, "a" * 40, _head(repo))
     assert rc == 2, out
     assert "cannot resolve" in out
+
+
+def test_shallow_checkout_like_ci_passes(tmp_path):
+    """CI checks out depth-1 and fetches only the base commit, so
+    the two commits share no reachable merge-base locally: a
+    three-dot diff fails there (exit 2) even though nothing shipped
+    changed. The check must use a two-dot diff, which compares the
+    two trees directly."""
+    repo = _repo(tmp_path)
+    base = _head(repo)
+    _commit(repo, {"README.md": "docs\n"}, "docs")
+    head = _head(repo)
+    shallow = tmp_path / "shallow"
+    subprocess.run(["git", "clone", "-q", "--depth", "1",
+                    f"file://{repo}", str(shallow)],
+                   check=True, capture_output=True, timeout=30)
+    subprocess.run(["git", "-C", str(shallow), "fetch", "-q",
+                    "--depth", "1", "origin", base],
+                   check=True, capture_output=True, timeout=30)
+    rc, out = _run(shallow, base, head)
+    assert rc == 0, out
+    assert "no version bump needed" in out

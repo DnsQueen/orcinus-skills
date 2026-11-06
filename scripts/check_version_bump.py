@@ -64,13 +64,16 @@ def _resolve(repo, ref):
 
 
 def _changed_files(repo, base, head):
-    # Three-dot (merge-base) diff for real ranges. The empty tree is
-    # a tree, not a commit, so a three-dot range with it is invalid —
-    # a first push diffs two-dot against the empty tree instead.
-    if base == EMPTY_TREE:
-        args = ["diff", "--name-only", base, head]
-    else:
-        args = ["diff", "--name-only", f"{base}...{head}"]
+    # Two-dot diff: it compares the two trees directly, with no
+    # merge-base needed. A three-dot (merge-base) diff fails in CI,
+    # where the checkout is depth-1 and only the base commit is
+    # fetched — the two commits share no reachable merge-base there
+    # (2026-11-06: the version-bump job failed with exit 2 on a
+    # docs-only push for exactly this reason). Two-dot is also the
+    # right semantic here: for a linear push it is the push's own
+    # changes, and for a merge push it is everything the merge
+    # introduced against the old main.
+    args = ["diff", "--name-only", f"{base}..{head}"]
     rc, out = _git(repo, *args)
     if rc != 0:
         raise RuntimeError(f"git {' '.join(args)} failed: {out}")
@@ -88,7 +91,7 @@ def _plugin_version(repo, ref):
 
 
 def check(repo, base, head):
-    """Return (ok, message) for the range base...head."""
+    """Return (ok, message) for the range base..head."""
     base = _resolve(repo, base)
     head = _resolve(repo, head)
     files = _changed_files(repo, base, head)
