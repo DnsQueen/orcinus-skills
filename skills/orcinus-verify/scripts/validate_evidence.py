@@ -87,7 +87,14 @@ bundle is complete and self-consistent, so a missing check or a
 contradicted verdict cannot slip through as a PASS. Since v3 every
 executed check must also carry its output, so a PASS with no
 reviewable output is rejected — but the output itself can still be
-fabricated, which is what the agent-behaviour eval measures.
+fabricated, which is what the agent-behaviour eval measures. Since v6
+every check in a PASS bundle must be recorded by record_check.py: the
+validator recomputes the binding hash (command argv, cwd, timestamps,
+exit code, both stream hashes, content digest, revision) from the
+stored fields and the artifact files on disk, so a hand-written check
+cannot be filed as PASS. But a local writer can still run the wrapper
+on a lying command, so the bundle is tamper-evident recording, not
+proof the commands ran.
 """
 
 import argparse
@@ -95,10 +102,26 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sys
+import types
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
+
+# The binding hash lives in one place: record_check.py in this same
+# skill folder. The import is guarded so the validator module still
+# imports when the file is absent (a lone copy of the validator);
+# check_recorded_checks then reports the missing file instead of
+# crashing. record_check imports content_digest lazily, so importing
+# it never needs a repo checkout — the validator stays self-contained
+# in the skill folder.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+_record_check: types.ModuleType | None = None
+try:
+    import record_check as _record_check  # noqa: E402
+except ImportError:
+    pass
 
 # The skill folder (this file is <skill>/scripts/validate_evidence.py).
 # The schema is bundled next to it, in <skill>/references/, and is
@@ -1013,33 +1036,37 @@ def check_time_order(bundle, problems):
     already enforces RFC 3339 on both, so parsing cannot fail here
     — but the check must not depend on that: if it is ever called
     on unvalidated input, a bad timestamp is a problem to record,
-    not an exception to raise (F-11)."""
+    not an exception to raise (F-11). The red run's timestamps are
+    checked the same way: they are part of its recorded binding."""
     for c in _checks(bundle):
-        started = c.get("started_at")
-        finished = c.get("finished_at")
-        if not isinstance(started, str) or not isinstance(finished, str):
-            continue
-        try:
-            start = datetime.fromisoformat(started.replace("Z", "+00:00"))
-            end = datetime.fromisoformat(finished.replace("Z", "+00:00"))
-        except (ValueError, TypeError) as e:
-            problems.append(
-                f"check {c.get('name')!r} started_at {started!r} or "
-                f"finished_at {finished!r} could not be parsed: {e}"
-            )
-            continue
-        try:
-            out_of_order = end < start
-        except TypeError as e:
-            problems.append(
-                f"check {c.get('name')!r} started_at {started!r} and "
-                f"finished_at {finished!r} cannot be compared: {e}"
-            )
-            continue
-        if out_of_order:
-            problems.append(
-                f"check {c.get('name')!r} finished_at {finished} is before started_at {started}"
-            )
+        _check_one_time_order(c, f"check {c.get('name')!r}", problems)
+    ff = bundle.get("fail_first")
+    if isinstance(ff, dict) and isinstance(ff.get("red_check"), dict):
+        _check_one_time_order(ff["red_check"], "fail_first.red_check", problems)
+
+
+def _check_one_time_order(check, label, problems):
+    started = check.get("started_at")
+    finished = check.get("finished_at")
+    if not isinstance(started, str) or not isinstance(finished, str):
+        return
+    try:
+        start = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+    except (ValueError, TypeError) as e:
+        problems.append(
+            f"{label} started_at {started!r} or finished_at {finished!r} could not be parsed: {e}"
+        )
+        return
+    try:
+        out_of_order = end < start
+    except TypeError as e:
+        problems.append(
+            f"{label} started_at {started!r} and finished_at {finished!r} cannot be compared: {e}"
+        )
+        return
+    if out_of_order:
+        problems.append(f"{label} finished_at {finished} is before started_at {started}")
 
 
 def _resolve_inside(bundle_dir, artifact):
@@ -1116,6 +1143,30 @@ def _read_artifact_text(bundle_dir, artifact, label):
         return None, f"{label} {artifact!r} is not valid UTF-8 text"
 
 
+def _hash_artifact(bundle_dir, artifact, label):
+    """The sha256 of one artifact file, read through the containment /
+    symlink / size-cap path. Returns (hex, problem): problem is None
+    on success, and the hash is over the exact bytes on disk."""
+    f, problem = _open_artifact(bundle_dir, artifact, label)
+    if problem:
+        return None, problem
+    with f:
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_ARTIFACT_BYTES:
+                return None, (
+                    f"{label} {artifact!r} is larger than the "
+                    f"{MAX_ARTIFACT_BYTES}-byte artifact cap"
+                )
+            digest.update(chunk)
+    return digest.hexdigest(), None
+
+
 def check_artifacts(bundle, problems, bundle_dir):
     """An artifact path that does not exist is not evidence, and an
     artifact without its sha256 is a claim nobody can verify: the
@@ -1149,32 +1200,187 @@ def check_artifacts(bundle, problems, bundle_dir):
                     f"was given, so the artifact is unverified"
                 )
                 continue
-            f, problem = _open_artifact(bundle_dir, artifact, label)
+            digest, problem = _hash_artifact(bundle_dir, artifact, label)
             if problem:
                 problems.append(problem)
                 continue
-            with f:
-                digest = hashlib.sha256()
-                total = 0
-                too_large = False
-                while True:
-                    chunk = f.read(1024 * 1024)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > MAX_ARTIFACT_BYTES:
-                        problems.append(
-                            f"{label} is larger than the {MAX_ARTIFACT_BYTES}-byte artifact cap"
-                        )
-                        too_large = True
-                        break
-                    digest.update(chunk)
-                if too_large:
-                    continue
-                if isinstance(recorded, str) and recorded and digest.hexdigest() != recorded:
-                    problems.append(
-                        f"{label} sha256 mismatch: the file changed since the bundle was written"
-                    )
+            if isinstance(recorded, str) and recorded and digest != recorded:
+                problems.append(
+                    f"{label} sha256 mismatch: the file changed since the bundle was written"
+                )
+
+
+# The recorder identity a PASS bundle's checks must carry.
+RECORDED_BY = "record_check.py/1"
+
+
+def _verify_recorded_binding(check, label, bundle_dir, problems, require):
+    """Verify one check's recorded binding, if it claims one.
+
+    `require` is True for a check in a PASS bundle: recorded fields
+    are required there, and a hand-written check is not evidence. For
+    a FAIL/INCOMPLETE bundle they are not required — an honest
+    failure report may carry unrecorded checks — but a binding that
+    IS present must still recompute: a present-but-wrong hash is a
+    self-contradiction, not an honest report. The recompute reads the
+    artifact files from disk and hashes their bytes, so the stored
+    stdout_sha256/stderr_sha256 are never trusted on their own."""
+    recorded_by = check.get("recorded_by")
+    capture = check.get("capture_sha256")
+    if recorded_by is None and capture is None:
+        if require:
+            problems.append(
+                f"{label} has no recorded capture: a PASS bundle must record "
+                f"every check with record_check.py (recorded_by + "
+                f"capture_sha256) - a hand-written check is not evidence"
+            )
+        return
+    if recorded_by != RECORDED_BY:
+        problems.append(
+            f"{label} recorded_by is {recorded_by!r}, not {RECORDED_BY!r}: "
+            f"only record_check.py captures validate as recorded checks"
+        )
+        return
+    if not isinstance(capture, str) or not capture:
+        problems.append(f"{label} has recorded_by but no capture_sha256")
+        return
+    # The binding needs the whole record: argv, shell, cwd, both
+    # timestamps, exit code, both stream hashes, digest, revision.
+    missing = [
+        field
+        for field in (
+            "command_argv",
+            "shell",
+            "cwd",
+            "started_at",
+            "finished_at",
+            "exit_code",
+            "content_digest",
+            "revision",
+            "stdout_artifact",
+            "stderr_artifact",
+        )
+        if field not in check
+    ]
+    if missing:
+        problems.append(
+            f"{label} is recorded but missing {', '.join(missing)}: the binding "
+            f"cannot be recomputed without the whole record"
+        )
+        return
+    if check.get("stdout_text") is not None or check.get("stderr_text") is not None:
+        problems.append(
+            f"{label} is recorded but carries inline stdout_text/stderr_text: "
+            f"a recorded check's output is its artifacts - the binding hashes "
+            f"the raw stream bytes, never inline text"
+        )
+        return
+    argv = check["command_argv"]
+    shell = check["shell"]
+    command = check.get("command")
+    if shell is True:
+        if argv != ["sh", "-c", command]:
+            problems.append(
+                f"{label} command {command!r} does not match its recorded argv: "
+                f"a shell recording must be ['sh', '-c', <command>]"
+            )
+            return
+    else:
+        try:
+            rendered = shlex.join(argv)
+        except (AttributeError, TypeError, ValueError) as e:
+            problems.append(f"{label} recorded command_argv cannot be rendered: {e}")
+            return
+        if command != rendered:
+            problems.append(
+                f"{label} command {command!r} does not match its recorded argv "
+                f"{argv!r}: the command must be the canonical rendering of the argv"
+            )
+            return
+    if bundle_dir is None:
+        problems.append(
+            f"{label} capture was not verified: no bundle directory was given, "
+            f"so the artifact files are unverified"
+        )
+        return
+    stdout_hash, problem = _hash_artifact(bundle_dir, check["stdout_artifact"], label)
+    if problem:
+        problems.append(problem)
+        return
+    stderr_hash, problem = _hash_artifact(bundle_dir, check["stderr_artifact"], label)
+    if problem:
+        problems.append(problem)
+        return
+    try:
+        recomputed = _record_check.capture_binding_hash(
+            command_argv=argv,
+            shell=shell,
+            cwd=check["cwd"],
+            started_at=check["started_at"],
+            finished_at=check["finished_at"],
+            exit_code=check["exit_code"],
+            stdout_sha256=stdout_hash,
+            stderr_sha256=stderr_hash,
+            content_digest=check["content_digest"],
+            revision=check["revision"],
+        )
+    except (TypeError, ValueError) as e:
+        problems.append(f"{label} recorded fields cannot be hashed: {e}")
+        return
+    if recomputed != capture:
+        problems.append(
+            f"{label} capture_sha256 mismatch: the stored binding hash does not "
+            f"match the recorded fields and artifact files - the capture was "
+            f"edited, or reused under a different command, tree, or revision"
+        )
+
+
+def check_recorded_checks(bundle, problems, bundle_dir):
+    """A PASS bundle's checks must be recorded by record_check.py,
+    with a binding hash the validator recomputes (F-01). The same
+    rule covers fail_first.red_check: the red run is part of the PASS
+    claim. FAIL/INCOMPLETE bundles are exempt from the requirement
+    (they are not success claims), but a binding present there must
+    still recompute. A capture recorded on one tree cannot validate a
+    bundle for another: the content digest is inside the hash, so the
+    same capture_sha256 under two different content_digests is a
+    forgery, and is reported as such on top of the recompute failure."""
+    verdict = bundle.get("verdict")
+    require = verdict == "PASS"
+    targets = [(c, f"check {c.get('name')!r}") for c in _checks(bundle)]
+    ff = bundle.get("fail_first")
+    if isinstance(ff, dict) and isinstance(ff.get("red_check"), dict):
+        targets.append((ff["red_check"], "fail_first.red_check"))
+    if not targets:
+        return
+    if _record_check is None and (
+        require
+        or any(
+            c.get("recorded_by") is not None or c.get("capture_sha256") is not None
+            for c, _ in targets
+        )
+    ):
+        problems.append(
+            "record_check.py is missing from the skill folder: a recorded "
+            "capture cannot be verified without it"
+        )
+        return
+    for check, label in targets:
+        _verify_recorded_binding(check, label, bundle_dir, problems, require)
+    seen = {}
+    for check, _label in targets:
+        capture = check.get("capture_sha256")
+        digest = check.get("content_digest")
+        if not isinstance(capture, str) or not capture:
+            continue
+        if capture in seen and seen[capture] != digest:
+            problems.append(
+                f"capture_sha256 {capture[:12]}... appears with two different "
+                f"content_digests: a capture recorded on one tree cannot "
+                f"validate a bundle for another"
+            )
+        else:
+            seen[capture] = digest
 
 
 def check_output_present(bundle, problems):
@@ -1273,6 +1479,7 @@ def validate_bundle(bundle, schema, bundle_dir=None):
     check_acceptance_criteria(bundle, problems)
     check_time_order(bundle, problems)
     check_artifacts(bundle, problems, bundle_dir)
+    check_recorded_checks(bundle, problems, bundle_dir)
     check_output_present(bundle, problems)
     check_empty_checks(bundle, problems)
     check_dirty_files(bundle, problems)

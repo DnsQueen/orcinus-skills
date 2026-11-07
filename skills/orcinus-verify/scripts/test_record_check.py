@@ -23,6 +23,9 @@ import record_check as rc  # noqa: E402
 import validate_evidence as ve  # noqa: E402
 
 _RECORD_CHECK = Path(__file__).resolve().parent / "record_check.py"
+_SCHEMA = ve.load_schema(
+    Path(__file__).resolve().parent.parent / "references" / "evidence.schema.json"
+)
 
 
 def _git(repo, *args):
@@ -270,3 +273,44 @@ def test_cap_constant_matches_validator():
     # The wrapper and the validator must agree on the cap, or a
     # recorded capture could be too large for the validator to read.
     assert rc.MAX_CAPTURE_BYTES == ve.MAX_ARTIFACT_BYTES
+
+
+def test_recorded_check_validates_in_a_pass_bundle(tmp_path):
+    # End to end: a check recorded by the wrapper validates as part
+    # of a PASS bundle (docs-only, so no fail-first proof is needed).
+    # The schema version is read from the schema itself, so this
+    # test survives the next bump.
+    repo = _repo(tmp_path)
+    out_dir = tmp_path / "bundle"
+    proc, fragment = _run_record(repo, out_dir, "test", [sys.executable, "-c", "print('ok')"])
+    assert proc.returncode == 0, proc.stderr
+    check = dict(fragment)
+    # The fragment records the run, not the judgement: the agent adds
+    # the verdict and the tool version when pasting it into the bundle.
+    check["tool_version"] = "python 3.12.3"
+    check["verdict"] = "PASS"
+    bundle = {
+        "schema_version": _SCHEMA["properties"]["schema_version"]["const"],
+        "revision": "working-tree",
+        "working_tree_state": "clean",
+        "requirement": "Record one check.",
+        "acceptance_criteria": ["The recorded check validates."],
+        "files_changed": ["README.md"],
+        "checks": [check],
+        "findings": [],
+        "unresolved_risks": [],
+        "unverified_items": [],
+        "verdict": "PASS",
+        "reviewer_identity": "orcinus-verify (independent session)",
+        "implementer_identity": "implementer (author session)",
+        "verification_plan": {
+            "change_type": "docs-only",
+            "required_gates": ["test"],
+            "not_applicable_gates": [
+                {"gate": "build", "reason": "Docs-only change; nothing to build."},
+                {"gate": "lint", "reason": "Docs-only change; no code to lint."},
+                {"gate": "typecheck", "reason": "Docs-only change; nothing to typecheck."},
+            ],
+        },
+    }
+    assert ve.validate_bundle(bundle, _SCHEMA, bundle_dir=out_dir) == []

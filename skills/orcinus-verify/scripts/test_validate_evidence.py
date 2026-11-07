@@ -75,14 +75,23 @@ def _write_junit_reports(bundle, directory, red_cases=None, green_cases=None):
         }
 
 
-def _problems(bundle):
+def _problems(bundle, bundle_dir=None):
     # A PASS bundle for a behaviour change must carry real JUnit
-    # reports (F-03), so the fixture writes them into a temp bundle
-    # directory and validates against it. The reports are always
-    # for the canonical test: a bundle naming another test must
-    # fail the structural link, not silently gain a matching report.
+    # reports (F-03) and real recorded captures (F-01), so the
+    # fixture writes them into a temp bundle directory and validates
+    # against it. The reports are always for the canonical test: a
+    # bundle naming another test must fail the structural link, not
+    # silently gain a matching report. When the caller passes a
+    # bundle_dir (a test that recorded its captures there with
+    # _recorded_bundle), the reports are written into that same
+    # directory, so one directory holds reports and captures.
     import tempfile
 
+    if bundle_dir is not None:
+        bundle_dir = Path(bundle_dir)
+        if isinstance(bundle.get("fail_first"), dict):
+            _write_junit_reports(bundle, bundle_dir)
+        return ve.validate_bundle(bundle, _SCHEMA, bundle_dir=bundle_dir)
     if isinstance(bundle.get("fail_first"), dict):
         with tempfile.TemporaryDirectory() as d:
             _write_junit_reports(bundle, Path(d))
@@ -90,9 +99,101 @@ def _problems(bundle):
     return ve.validate_bundle(bundle, _SCHEMA)
 
 
+# The real commands the fixture's checks are recorded with: trivial
+# commands that print exactly the stdout the old hand-written fixture
+# claimed, so a recorded capture is genuine and the fail-first
+# corroboration (the nodeid in the red/green output) still holds.
+# _recorded_bundle runs record_check.py on these argv lists — never
+# on the hand-written command strings in _good_bundle.
+_RECORD_COMMANDS = {
+    "test": [
+        sys.executable,
+        "-c",
+        "print('tests/test_capture.py::test_capture_persian_only passed; 45 passed in 0.42s')",
+    ],
+    "lint": [sys.executable, "-c", "print('All checks passed!')"],
+}
+_RED_COMMAND = [
+    sys.executable,
+    "-c",
+    "import sys; print('FAILED tests/test_capture.py::test_capture_persian_only - AssertionError: Persian-only idea raised'); sys.exit(1)",
+]
+
+
+def _run_record_check(directory, name, argv, shell=False):
+    """Run record_check.py once, in `directory`, and return the
+    fragment it prints. The command runs for real; the fragment is
+    the wrapper's own record of it."""
+    import json
+    import subprocess
+
+    record_check = Path(__file__).resolve().parent / "record_check.py"
+    repo = Path(__file__).resolve().parent.parent.parent.parent
+    args = [
+        sys.executable,
+        str(record_check),
+        "--name",
+        name,
+        "--out-dir",
+        str(directory),
+        "--repo",
+        str(repo),
+    ]
+    if shell:
+        args.append("--shell")
+    args += ["--", *argv]
+    proc = subprocess.run(args, capture_output=True, text=True, cwd=directory, timeout=60)
+    # 0 for a passing command, 1 for the red run (sys.exit(1)); 2
+    # would be a recording failure, and then there is no fragment.
+    assert proc.returncode in (0, 1), proc.stderr
+    return json.loads(proc.stdout)
+
+
+def _recorded_bundle(bundle, directory, commands=None):
+    """Record every check in `bundle` (and fail_first.red_check) by
+    running record_check.py for real, writing the capture files into
+    `directory` and merging each fragment into the check. A bundle is
+    a PASS bundle only after this: under schema v6 hand-written checks
+    do not validate. `commands` maps a check name (or "red_check") to
+    the argv to actually run — a list for argv mode, or a string for
+    --shell mode; the default is the fixture's trivial commands above."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    cmds = dict(_RECORD_COMMANDS)
+    if commands:
+        cmds.update(commands)
+    for check in bundle.get("checks") or []:
+        cmd = cmds.get(check.get("name"))
+        if cmd is None:
+            continue
+        if isinstance(cmd, str):
+            fragment = _run_record_check(directory, check["name"], [cmd], shell=True)
+        else:
+            fragment = _run_record_check(directory, check["name"], cmd)
+        check.update(fragment)
+        check.pop("stdout_text", None)
+        check.pop("stderr_text", None)
+    ff = bundle.get("fail_first")
+    if isinstance(ff, dict) and isinstance(ff.get("red_check"), dict):
+        cmd = cmds.get("red_check", _RED_COMMAND)
+        if isinstance(cmd, str):
+            fragment = _run_record_check(directory, "red_check", [cmd], shell=True)
+        else:
+            fragment = _run_record_check(directory, "red_check", cmd)
+        # The red run has no name in the schema (additionalProperties
+        # is false): the fragment's name is the capture filename stem.
+        fragment.pop("name", None)
+        ff["red_check"].update(fragment)
+        ff["red_check"].pop("stdout_text", None)
+
+
 def _good_bundle():
+    # The check commands are the trivial recordable commands
+    # _recorded_bundle runs (they print the stdout the old fixture
+    # claimed): a PASS fixture's captures must be generated by
+    # record_check.py itself, never hand-written.
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "revision": "abc1234",
         "working_tree_state": "clean",
         "requirement": "Fix the Persian capture crash.",
@@ -101,7 +202,7 @@ def _good_bundle():
         "checks": [
             {
                 "name": "test",
-                "command": "python3 -m pytest -q",
+                "command": "python3 -c \"print('tests/test_capture.py::test_capture_persian_only passed; 45 passed in 0.42s')\"",
                 "cwd": "/repo",
                 "exit_code": 0,
                 "verdict": "PASS",
@@ -112,7 +213,7 @@ def _good_bundle():
             },
             {
                 "name": "lint",
-                "command": "ruff check skills/idea-capture",
+                "command": "python3 -c \"print('All checks passed!')\"",
                 "cwd": "/repo",
                 "exit_code": 0,
                 "verdict": "PASS",
@@ -142,7 +243,7 @@ def _good_bundle():
             "passed_after": True,
             "method": "worktree",
             "red_check": {
-                "command": "python3 -m pytest -q -k test_capture_persian_only",
+                "command": "python3 -c \"import sys; print('FAILED tests/test_capture.py::test_capture_persian_only - AssertionError: Persian-only idea raised'); sys.exit(1)\"",
                 "exit_code": 1,
                 "stdout_text": "FAILED tests/test_capture.py::test_capture_persian_only - AssertionError: Persian-only idea raised",
             },
@@ -150,8 +251,10 @@ def _good_bundle():
     }
 
 
-def test_good_bundle_passes():
-    assert _problems(_good_bundle()) == []
+def test_good_bundle_passes(tmp_path):
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    assert _problems(b, tmp_path) == []
 
 
 def test_pass_hiding_a_failed_check_fails():
@@ -224,7 +327,7 @@ def test_fail_first_never_shown_failing_fails():
     assert any("never shown failing" in p for p in problems)
 
 
-def test_fail_first_not_applicable_needs_a_note():
+def test_fail_first_not_applicable_needs_a_note(tmp_path):
     b = _good_bundle()
     b["fail_first"]["method"] = "not-applicable"
     problems = _problems(b)
@@ -243,7 +346,10 @@ def test_fail_first_not_applicable_needs_a_note():
         {"gate": "typecheck", "reason": "Docs-only change; nothing to typecheck."},
         {"gate": "test", "reason": "Docs-only change; no behaviour to test."},
     ]
-    assert _problems(b) == []
+    # A docs-only PASS still needs its checks recorded (the red run
+    # is not-applicable here, so only the two checks are recorded).
+    _recorded_bundle(b, tmp_path)
+    assert _problems(b, tmp_path) == []
 
 
 # --- Round-3 regression tests (reviewer 4, section 3). Each of these
@@ -418,7 +524,7 @@ def test_pass_with_only_test_gate_fails():
     assert any("typecheck" in p for p in problems)
 
 
-def test_not_applicable_gate_needs_a_reason():
+def test_not_applicable_gate_needs_a_reason(tmp_path):
     b = _good_bundle()
     b["verification_plan"]["required_gates"] = ["test"]
     b["verification_plan"]["not_applicable_gates"] = [{"gate": "typecheck"}]
@@ -429,7 +535,8 @@ def test_not_applicable_gate_needs_a_reason():
         {"gate": "typecheck", "reason": "No typechecker in this Python project."},
     ]
     b["verification_plan"]["required_gates"] = ["test", "lint"]
-    assert _problems(b) == []
+    _recorded_bundle(b, tmp_path)
+    assert _problems(b, tmp_path) == []
 
 
 def test_validator_is_self_contained_outside_the_repo(tmp_path):
@@ -451,6 +558,11 @@ def test_validator_is_self_contained_outside_the_repo(tmp_path):
     shutil.copytree(skill, elsewhere / "orcinus-verify")
     bundle = elsewhere / "bundle.json"
     b = _good_bundle()
+    # The captures are recorded into the bundle directory (elsewhere)
+    # before the validator runs there: the copied validator must
+    # recompute the binding from the copied record_check.py alone,
+    # with no repo checkout.
+    _recorded_bundle(b, elsewhere)
     _write_junit_reports(b, elsewhere)
     bundle.write_text(json.dumps(b), encoding="utf-8")
     result = subprocess.run(
@@ -494,7 +606,7 @@ def test_pass_with_fail_first_not_applicable_for_bug_fix_fails():
     assert any("not-applicable" in p for p in problems)
 
 
-def test_docs_only_pass_without_fail_first_passes():
+def test_docs_only_pass_without_fail_first_passes(tmp_path):
     # A docs-only change has no behaviour to test, so no fail_first
     # is needed — but every canonical gate must still be accounted
     # for, required or waived with a reason.
@@ -509,7 +621,8 @@ def test_docs_only_pass_without_fail_first_passes():
         {"gate": "typecheck", "reason": "Docs-only change; nothing to typecheck."},
         {"gate": "test", "reason": "Docs-only change; no behaviour to test."},
     ]
-    assert _problems(b) == []
+    _recorded_bundle(b, tmp_path)
+    assert _problems(b, tmp_path) == []
 
 
 def test_finding_without_severity_fails():
@@ -576,30 +689,23 @@ def test_missing_stdout_artifact_fails(tmp_path):
     # An artifact path that does not exist (relative to the bundle)
     # must fail: a claimed output nobody can read is not evidence.
     # Since v3 the artifact also needs its sha256 recorded.
-    import hashlib
     import json
 
     b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
     b["checks"][0]["stdout_artifact"] = "logs/pytest-stdout.log"
     b["checks"][0]["stderr_artifact"] = "logs/pytest-stderr.log"
-    b["checks"][0].pop("stdout_text", None)
     bundle = tmp_path / "bundle.json"
     bundle.write_text(json.dumps(b), encoding="utf-8")
     problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
     assert any("stdout_artifact" in p for p in problems)
     assert any("stderr_artifact" in p for p in problems)
     (tmp_path / "logs").mkdir()
-    # write_bytes, not write_text: the sha256 is computed over these
-    # exact bytes, and text mode translates "\n" to "\r\n" on Windows
-    # — the bytes on disk would no longer match the recorded hash.
-    (tmp_path / "logs" / "pytest-stdout.log").write_bytes(
-        b"tests/test_capture.py::test_capture_persian_only passed\n"
-    )
-    (tmp_path / "logs" / "pytest-stderr.log").write_bytes(b"")
-    b["checks"][0]["stdout_sha256"] = hashlib.sha256(
-        b"tests/test_capture.py::test_capture_persian_only passed\n"
-    ).hexdigest()
-    b["checks"][0]["stderr_sha256"] = hashlib.sha256(b"").hexdigest()
+    # The log files get the recorded capture's bytes, so the recorded
+    # sha256 (and the binding hash over it) still match: the point
+    # here is the artifact's presence, not its content.
+    (tmp_path / "logs" / "pytest-stdout.log").write_bytes((tmp_path / "test.stdout").read_bytes())
+    (tmp_path / "logs" / "pytest-stderr.log").write_bytes((tmp_path / "test.stderr").read_bytes())
     _write_junit_reports(b, tmp_path)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
@@ -628,10 +734,14 @@ def test_week_date_timestamp_fails():
 
 
 def test_rfc3339_with_offset_passes():
+    # An offset timestamp is a valid RFC 3339 date-time: the schema
+    # layer must accept it. This is a schema-layer assertion, not a
+    # full-bundle one — record_check.py always records UTC (Z), so a
+    # recorded bundle never carries an offset timestamp.
     b = _good_bundle()
     b["checks"][0]["started_at"] = "2026-11-06T10:00:00+03:30"
     b["checks"][0]["finished_at"] = "2026-11-06T10:00:12+03:30"
-    assert _problems(b) == []
+    assert ve.validate_against_schema(b, _SCHEMA) == []
 
 
 def test_honest_incomplete_with_failed_fail_first_is_valid():
@@ -721,18 +831,18 @@ def test_artifact_with_wrong_sha256_fails(tmp_path):
 
 def test_artifact_with_correct_sha256_passes(tmp_path):
     # Control for the two tests above: artifact + matching hash is
-    # valid evidence.
-    import hashlib
-
+    # valid evidence. The artifact lives at a non-capture path
+    # (logs/...) with the recorded capture's bytes, so the recorded
+    # sha256 and the binding still match: artifact paths are not
+    # pinned to the capture filenames, only their bytes are.
     b = _good_bundle()
-    content = "2 passed in 0.12s\n"
+    _recorded_bundle(b, tmp_path)
     b["checks"][0]["stdout_artifact"] = "logs/pytest-stdout.log"
-    b["checks"][0]["stdout_sha256"] = hashlib.sha256(content.encode()).hexdigest()
     (tmp_path / "logs").mkdir()
     # write_bytes, not write_text: the sha256 is computed over these
     # exact bytes, and text mode translates "\n" to "\r\n" on Windows
     # — the bytes on disk would no longer match the recorded hash.
-    (tmp_path / "logs" / "pytest-stdout.log").write_bytes(content.encode())
+    (tmp_path / "logs" / "pytest-stdout.log").write_bytes((tmp_path / "test.stdout").read_bytes())
     _write_junit_reports(b, tmp_path)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
@@ -1057,14 +1167,15 @@ def test_pass_on_dirty_tree_without_diff_hash_fails():
     assert any("dirty" in p and "diff" in p for p in problems)
 
 
-def test_pass_on_dirty_tree_with_diff_hash_passes():
+def test_pass_on_dirty_tree_with_diff_hash_passes(tmp_path):
     # V4 control: the same dirty PASS with the diff pinned is valid.
     b = _good_bundle()
     b["working_tree_state"] = "dirty"
     b["dirty_files"] = ["skills/x/scripts/y.py"]
     b["revision"] = "working-tree"
     b["diff_sha256"] = "0" * 64
-    assert _problems(b) == []
+    _recorded_bundle(b, tmp_path)
+    assert _problems(b, tmp_path) == []
 
 
 def test_clean_tree_with_dirty_files_fails():
@@ -1154,10 +1265,13 @@ def test_iso8601_fractional_digits_pinned():
         b = _good_bundle()
         b["checks"][0]["started_at"] = f"2026-11-06T10:00:00{frac}Z"
         assert any("started_at" in p for p in _problems(b)), frac
+    # The valid fractions are a schema-layer assertion, not a
+    # full-bundle one: recording overwrites the timestamps with real
+    # UTC values, so a recorded bundle never carries these.
     for frac in (".123", ".123456"):
         b = _good_bundle()
         b["checks"][0]["started_at"] = f"2026-11-06T10:00:00{frac}Z"
-        assert _problems(b) == [], frac
+        assert ve.validate_against_schema(b, _SCHEMA) == [], frac
 
 
 def test_iso8601_year_bounds():
@@ -1169,10 +1283,12 @@ def test_iso8601_year_bounds():
     b = _good_bundle()
     b["checks"][0]["started_at"] = "2100-11-06T10:00:00Z"
     assert any("started_at" in p for p in _problems(b))
+    # The in-range year is a schema-layer assertion: recording
+    # overwrites the timestamps with real UTC values.
     b = _good_bundle()
     b["checks"][0]["started_at"] = "2099-11-06T10:00:00Z"
     b["checks"][0]["finished_at"] = "2099-11-06T10:00:12Z"
-    assert _problems(b) == []
+    assert ve.validate_against_schema(b, _SCHEMA) == []
 
 
 def test_security_finding_cannot_be_non_blocking():
@@ -1212,7 +1328,7 @@ def test_non_blocking_finding_needs_a_category():
     assert any("category" in p for p in problems)
 
 
-def test_non_blocking_finding_with_other_category_passes():
+def test_non_blocking_finding_with_other_category_passes(tmp_path):
     # 2-V7 control: a genuinely non-blocking finding with a
     # non-security category still passes.
     b = _good_bundle()
@@ -1225,7 +1341,8 @@ def test_non_blocking_finding_with_other_category_passes():
             "category": "other",
         }
     ]
-    assert _problems(b) == []
+    _recorded_bundle(b, tmp_path)
+    assert _problems(b, tmp_path) == []
 
 
 def test_old_schema_version_4_is_rejected():
@@ -1247,6 +1364,9 @@ def _run_cli_with_verdict_block(bundle, block_text):
     validator = Path(__file__).resolve().parent / "validate_evidence.py"
     with tempfile.TemporaryDirectory() as d:
         bundle_path = Path(d) / "bundle.json"
+        # Record the bundle's captures into the same directory, so
+        # the CLI run tests the block comparison — not the recording.
+        _recorded_bundle(bundle, Path(d))
         _write_junit_reports(bundle, Path(d))
         bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
         block_path = Path(d) / "response.md"
@@ -1365,6 +1485,10 @@ def test_noop_genuine_fallback_passes():
     # a pipe to a real command, a nested shell running a real
     # command, a python -c that actually runs something, and the
     # legitimate `! cmd` absence assertion must NOT be flagged.
+    # These are command strings the fixture cannot run for real
+    # (they name pytest), so they are tested at the level the rule
+    # lives — _noop_problem is a pure function of the command string
+    # — and the recorded end-to-end case is the test below.
     genuine = [
         "pytest -q || ruff check",
         "pytest -q || exit 1",
@@ -1378,9 +1502,28 @@ def test_noop_genuine_fallback_passes():
         "pytest -q || exit 1",
     ]
     for cmd in genuine:
-        b = _good_bundle()
-        b["checks"][0]["command"] = cmd
-        assert _problems(b) == [], cmd
+        assert ve._noop_problem(cmd, "check 'test'") is None, cmd
+
+
+def test_noop_recorded_shell_fallback_passes(tmp_path):
+    # F-02 control, end to end: a real recorded run of a command
+    # with a genuine fallback (the RHS is a real command, not an
+    # always-zero one) validates as PASS.
+    import shutil
+
+    if shutil.which("sh") is None:
+        import pytest
+
+        pytest.skip("sh is not installed")
+    python = sys.executable.replace("\\", "/")
+    nodeid = "tests/test_capture.py::test_capture_persian_only"
+    fallback = (
+        f"{python} -c \"print('{nodeid} passed; 45 passed in 0.42s')\" "
+        f"|| {python} -c \"print('fallback')\""
+    )
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path, commands={"test": fallback})
+    assert _problems(b, tmp_path) == []
 
 
 def test_identity_case_or_whitespace_difference_fails():
@@ -1404,12 +1547,13 @@ def test_identity_case_or_whitespace_difference_fails():
         )
 
 
-def test_identity_genuinely_different_passes():
+def test_identity_genuinely_different_passes(tmp_path):
     # F-04 control: genuinely different identities still pass.
     b = _good_bundle()
     b["reviewer_identity"] = "bob (review session)"
     b["implementer_identity"] = "alice (author session)"
-    assert _problems(b) == []
+    _recorded_bundle(b, tmp_path)
+    assert _problems(b, tmp_path) == []
 
 
 def test_behaviour_change_pass_with_empty_files_changed_fails():
@@ -1486,6 +1630,7 @@ def test_fail_first_substring_collision_fails():
 def test_fail_first_real_junit_report_accepted(tmp_path):
     # F-03 control: a real nodeid from a real JUnit fixture passes.
     b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
     _write_junit_reports(b, tmp_path)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
@@ -1555,13 +1700,27 @@ def test_fail_first_class_nodeid_links_by_classname(tmp_path):
     # F-03: a nodeid with a class (tests/test_x.py::TestFoo::
     # test_bar) derives classname tests.test_x.TestFoo — the
     # structural link uses classname + name, not the bare name.
+    # The recorded runs print the class nodeid, so the red/green
+    # corroboration still holds for it.
     b = _good_bundle()
     nodeid = "tests/test_capture.py::TestCapture::test_capture_persian_only"
     b["fail_first"]["test"] = nodeid
-    b["fail_first"]["red_check"]["stdout_text"] = (
-        f"FAILED {nodeid} - AssertionError: Persian-only idea raised"
+    _recorded_bundle(
+        b,
+        tmp_path,
+        commands={
+            "test": [
+                sys.executable,
+                "-c",
+                f"print('{nodeid} passed; 45 passed in 0.42s')",
+            ],
+            "red_check": [
+                sys.executable,
+                "-c",
+                f"import sys; print('FAILED {nodeid} - AssertionError: Persian-only idea raised'); sys.exit(1)",
+            ],
+        },
     )
-    b["checks"][0]["stdout_text"] = f"{nodeid} passed; 45 passed in 0.42s"
     _write_junit_reports(
         b,
         tmp_path,
@@ -1569,3 +1728,85 @@ def test_fail_first_class_nodeid_links_by_classname(tmp_path):
         green_cases=[("tests.test_capture.TestCapture", _CANONICAL_NAME, "passed")],
     )
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
+
+
+# --- Round-7 Track 2 regression tests (F-01 execution binding, schema v6).
+# Each of these passed on the v0.9.8 validator; they are the
+# red-first tests for this fix pass. ---
+
+
+def test_pass_with_unrecorded_check_fails():
+    # F-01: a hand-written PASS bundle is no longer evidence — every
+    # check in a PASS bundle must be recorded by record_check.py,
+    # with a binding hash the validator recomputes.
+    b = _good_bundle()
+    problems = _problems(b)
+    assert any("recorded" in p for p in problems)
+
+
+def test_pass_with_unrecorded_red_check_fails(tmp_path):
+    # F-01: the red run is part of the PASS claim, so it must be
+    # recorded too — not just the checks.
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    for field in ("recorded_by", "capture_sha256"):
+        b["fail_first"]["red_check"].pop(field, None)
+    problems = _problems(b, tmp_path)
+    assert any("red_check" in p and "recorded" in p for p in problems)
+
+
+def test_pass_with_wrong_capture_hash_fails(tmp_path):
+    # F-01: a capture whose binding hash does not recompute from the
+    # stored fields and the artifact files is rejected.
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    b["checks"][0]["capture_sha256"] = "0" * 64
+    problems = _problems(b, tmp_path)
+    assert any("capture_sha256" in p for p in problems)
+
+
+def test_pass_with_capture_reused_under_different_digest_fails(tmp_path):
+    # F-01: the content digest is inside the binding hash, so the
+    # same capture reused under a different digest cannot recompute.
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    b["checks"][0]["content_digest"] = "sha256:" + "f" * 64
+    problems = _problems(b, tmp_path)
+    assert any("capture_sha256" in p for p in problems)
+
+
+def test_pass_with_same_capture_under_two_digests_fails(tmp_path):
+    # F-01: the duplicate-capture check — one capture_sha256 under
+    # two different content_digests is a forgery, reported as such
+    # on top of the recompute failure.
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    copy = dict(b["checks"][0], name="lint")
+    copy["content_digest"] = "sha256:" + "e" * 64
+    b["checks"].append(copy)
+    problems = _problems(b, tmp_path)
+    assert any("different content_digests" in p for p in problems)
+
+
+def test_pass_with_command_not_matching_argv_fails(tmp_path):
+    # F-01: the human-readable command must be the canonical
+    # rendering of the recorded argv — otherwise the command could
+    # claim a gate the argv never ran.
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    b["checks"][0]["command"] = "python3 -m pytest -q"
+    problems = _problems(b, tmp_path)
+    assert any("does not match" in p for p in problems)
+
+
+def test_fail_bundle_with_unrecorded_checks_is_valid():
+    # The recorded-fields rule is a PASS rule, not a validity rule:
+    # an honest FAIL bundle may carry unrecorded checks — a failure
+    # report is not a success claim. (The INCOMPLETE half is already
+    # pinned by test_honest_incomplete_with_failed_fail_first_is_valid
+    # and test_honest_incomplete_without_acceptance_criteria_is_valid.)
+    b = _good_bundle()
+    b["verdict"] = "FAIL"
+    b["checks"][0]["verdict"] = "FAIL"
+    b["checks"][0]["exit_code"] = 1
+    assert _problems(b) == []
