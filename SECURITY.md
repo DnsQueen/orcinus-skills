@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---|---|
-| 0.9.x | Yes |
-| < 0.9 | No (no release was cut before 0.9.0) |
+| 0.10.x | Yes |
+| < 0.10 | No |
 
 ## Reporting a vulnerability
 

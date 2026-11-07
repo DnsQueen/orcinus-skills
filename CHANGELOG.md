@@ -3,6 +3,88 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.0] — 2026-11-08
+
+Round-7 fix pass: every confirmed defect from the independent
+live-agent audit of v0.9.8 is fixed, including the High finding
+(F-01) with the execution binding the auditor deferred to a later
+release. The evidence schema moves v5 → v6, which is a breaking
+change (see Changed below).
+
+### Added
+
+- Execution binding for evidence bundles (F-01): a new
+  `record_check.py` wrapper runs each check, writes its stdout and
+  stderr as artifacts beside the bundle, and prints a check fragment
+  (command, cwd, timestamps, exit code, stream hashes, content
+  digest, revision, `recorded_by`, `capture_sha256`) for pasting into
+  the bundle. The validator recomputes the binding hash from the
+  fragment's fields and the artifact files, so a tampered transcript
+  is rejected. This makes a recorded check tamper-evident; it does
+  not prove the commands ran — a wrapper transcript is not signing,
+  and no signing or PKI was added. ADR 0005 records the decision.
+
+### Fixed
+
+- Evidence validator: check commands that mask a failing exit code
+  are rejected (`|| true`, `; exit 0`, `; :`, `python -c 'pass'` and
+  the like) (F-02, N1); the fail-first proof now needs structured
+  JUnit XML reports, with the test identified by its pytest nodeid —
+  no report means no PASS (F-03); verifier and implementer
+  identities are compared after normalising case and whitespace on
+  both sides (F-04); a PASS for a behaviour change requires a
+  non-empty `files_changed` (F-06); the time-order check is guarded
+  against unvalidated timestamps, so it cannot raise on malformed
+  input (F-11).
+- State and content digest: `state.py` recomputes the content digest
+  in-process and never trusts a caller-supplied one — the `--digest`
+  flag is removed, use `--expect-digest` only to assert against the
+  recomputed value (F-07); VERIFIED now requires an evidence bundle
+  that exists and validates with verdict PASS, and VERIFIED /
+  RELEASE_READY are refused on a dirty tree (F-07, N2);
+  `content_digest.py` takes the revision as `--rev` and rejects a
+  bare positional revision (F-15).
+- Evals: the agent-suite grader assertions are inlined using only
+  waza-documented names (`re` plus the closed built-in list), so the
+  suite no longer raises `NameError` under the real waza binary
+  (F-05, N3); the mock suite gains a negative control as a separate
+  suite whose prompt, name, and description all omit the verdict
+  word, so the suite can fail (F-10); the router self-eval default
+  is labelled as a self-check, not an agent measurement (F-19); the
+  mutation-testing skill records that Stryker generates no
+  `Math.round` mutant, so a 100.00 mutation score does not cover the
+  rounding class (N6).
+- Docs, install, and architecture: the per-skill `scripts/` travel
+  claim is corrected — per-skill folders are copied whole on
+  npx/Hermes, only repo-root `scripts/` does not travel (F-09); the
+  install docs state the Node ≥ 22.20 requirement next to the npx
+  command and warn that an invalid `--agent` name exits 0 while
+  installing nothing (F-12); "focused sub-skill" is defined (the
+  router plus 35 focused sub-skills make 36 skills) and the
+  validator now checks the Status count against it (F-14); the stale
+  Windows/macOS CI comment is updated to record the green run on
+  v0.9.8 (F-20); the architecture checker states its npm-only scope
+  and exits 2 when nothing was checked (F-08, F-13); the dead
+  Related Skills links in monitoring-observability are fixed (N5).
+- Demo: a non-divisible percent test (79.6 of 100 rounds to 80, not
+  79) closes the rounding hole the demo tests missed (F-16); the
+  Stryker break threshold moves from 0 to 80, so the mutation gate
+  can now fail on score (F-17). The threshold is enforced when
+  `npm run mutation` runs.
+- The "done when the evidence says so" claim is narrowed to what
+  the bundle proves (F-01, Option A): the headline no longer claims
+  more than the validator mechanism delivers.
+
+### Changed
+
+- BREAKING: evidence schema v5 → v6. A v5 (or older) bundle is
+  rejected with an explicit migration message ("re-run verification
+  with the current validator"); old bundles are rejected, not
+  migrated (F-24). PASS bundles now require recorded checks
+  (hand-written PASS evidence no longer validates); fail-first now
+  requires JUnit reports; `state.py --digest` is removed (use
+  `--expect-digest` to assert).
+
 ## [0.9.8] — 2026-11-07
 
 Follow-up to the unreleased 0.9.7: the first CI run on 0.9.7 failed
