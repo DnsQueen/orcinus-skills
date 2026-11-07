@@ -390,11 +390,39 @@ def _read_lock_pid(lock_path):
     return pid if pid > 0 else None
 
 
+def _pid_is_alive_windows(pid):
+    """Windows probe: OpenProcess + GetExitCodeProcess. On Windows
+    os.kill(pid, 0) terminates the process instead of probing it,
+    so os.kill must never run here. A process that cannot be opened
+    because it does not exist (ERROR_INVALID_PARAMETER, 87) is dead;
+    any other failure to open it, or to read its exit code, is
+    treated as alive (fail-safe — the lock is held, never stolen)."""
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    STILL_ACTIVE = 259
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return kernel32.GetLastError() != 87
+    try:
+        exit_code = ctypes.c_ulong(0)
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return True  # unreadable exit code — fail-safe: alive.
+        return exit_code.value == STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _pid_is_alive(pid):
     """True when the process exists. A PermissionError means the
     process exists but belongs to another user — alive, so the lock
     is held. (A reused PID can make a stale lock look held; the cost
-    is a wait and an error, never a stolen lock.)"""
+    is a wait and an error, never a stolen lock.) On Windows the
+    probe goes through _pid_is_alive_windows: os.kill(pid, 0) would
+    terminate the process instead of probing it."""
+    if sys.platform == "win32":
+        return _pid_is_alive_windows(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

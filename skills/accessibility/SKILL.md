@@ -22,10 +22,10 @@ An automated check sees only part of accessibility. This skill owns that part wi
 ### 1. Audit
 
 ```bash
-node skills/accessibility/scripts/ultra11y.mjs audit <page-or-glob> --out <dir> --json
+python3 skills/accessibility/scripts/check_accessibility.py <page-or-glob> --out <dir>
 ```
 
-The engine is self-contained and install-free (Node only, no dependencies). It audits the page against RGAA 4.1.2, the French State's accessibility standard, on a WCAG 2.2 AA core; other country standards are pluggable packs. Read the JSON report it writes: each criterion carries a status (conforming, non-conforming, not applicable, manual), and each finding carries its rule, criterion, file, line, severity, message, and remediation.
+The audit runs through the ORCINUS gate wrapper (`scripts/check_accessibility.py`), which calls the engine (`node skills/accessibility/scripts/ultra11y.mjs audit`, `--fail-on major` by default) after pre-checking every input. A missing input, a glob that matches nothing, or an audit of zero files is INCOMPLETE (exit 2) — the engine on its own warns and exits 0 with zero files audited and 100% conformance, which is never a pass. The engine is self-contained and install-free (Node only, no dependencies). It audits the page against RGAA 4.1.2, the French State's accessibility standard, on a WCAG 2.2 AA core; other country standards are pluggable packs. Read the JSON report it writes: each criterion carries a status (conforming, non-conforming, not applicable, manual), and each finding carries its rule, criterion, file, line, severity, message, and remediation.
 
 ### 2. Classify
 
@@ -42,10 +42,10 @@ Fix one finding at a time, starting with the blocking and major ones. Prefer nat
 Re-run the audit on the fixed page. In CI, gate on it:
 
 ```bash
-node skills/accessibility/scripts/ultra11y.mjs audit <page-or-glob> --fail-on major
+python3 skills/accessibility/scripts/check_accessibility.py <page-or-glob> --fail-on major
 ```
 
-Without `--fail-on`, the command reports findings and still exits 0 — a gate that cannot fail is not a gate. With `--fail-on major`, it exits 1 when a blocking or major finding exists.
+The wrapper defaults to `--fail-on major`: it exits 1 when a blocking or major finding exists, and exits 2 (INCOMPLETE) when an input is missing or no file was audited — a missing page is never reported as passed. (The bare engine without `--fail-on` reports findings and still exits 0 — a gate that cannot fail is not a gate — which is why the audit always goes through the wrapper.)
 
 ### 5. Verdict
 

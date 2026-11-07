@@ -196,6 +196,91 @@ def test_waza_fallback_used_on_linux(monkeypatch):
     assert called == [["/tmp/waza-linux-amd64", "--version"]]
 
 
+# --- Round 6 (2026-11-07): S2 — the /tmp waza fallback is gated on
+# ownership + a pinned checksum. /tmp is world-writable: anyone can
+# plant a binary there when it is absent, and doctor used to execute
+# it and report ready. A planted binary must never be executed. ---
+
+
+def _planted_waza(tmp_path, content=b"#!/bin/sh\necho 'waza version 0.40.0'\n"):
+    """A fake /tmp fallback binary, owned by the test user."""
+    binary = tmp_path / "waza-linux-amd64"
+    binary.write_bytes(content)
+    binary.chmod(0o755)
+    return binary
+
+
+def test_waza_fallback_planted_binary_is_not_executed(tmp_path, monkeypatch):
+    """S2: a planted binary (wrong checksum, right owner) is
+    incompatible, and doctor never executes it."""
+    binary = _planted_waza(tmp_path)
+    called = []
+    monkeypatch.setattr(doctor, "_run", lambda argv, timeout=10: called.append(argv) or (0, ""))
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "WAZA_FALLBACK_PATH", str(binary))
+    result = doctor.check_waza()
+    assert result["status"] == "incompatible"
+    assert called == [], "a planted binary must never be executed"
+    assert "checksum" in result["detail"]
+
+
+def test_waza_fallback_wrong_owner_is_not_executed(tmp_path, monkeypatch):
+    """S2: a binary with the right checksum but the wrong owner is
+    still untrusted — /tmp is shared, so ownership is part of the
+    gate, not just the hash."""
+    import hashlib
+
+    binary = _planted_waza(tmp_path)
+    called = []
+    monkeypatch.setattr(doctor, "_run", lambda argv, timeout=10: called.append(argv) or (0, ""))
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "WAZA_FALLBACK_PATH", str(binary))
+    monkeypatch.setattr(
+        doctor, "WAZA_LINUX_SHA256", hashlib.sha256(binary.read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(doctor.os, "getuid", lambda: 999999)
+    result = doctor.check_waza()
+    assert result["status"] == "incompatible"
+    assert called == [], "an unowned binary must never be executed"
+
+
+def test_waza_fallback_trusted_binary_is_ready(tmp_path, monkeypatch):
+    """S2: the gate must still let the real fallback through — a
+    binary owned by the user whose hash matches the pinned release
+    hash is ready. (The pinned hash is monkeypatched here to the
+    fake file's hash; the gate logic, not the constant, is under
+    test. The constant itself is the v0.40.0 release hash, verified
+    against the downloaded binary.)"""
+    import hashlib
+
+    binary = _planted_waza(tmp_path)
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "WAZA_FALLBACK_PATH", str(binary))
+    monkeypatch.setattr(
+        doctor, "WAZA_LINUX_SHA256", hashlib.sha256(binary.read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(doctor, "_run", lambda argv, timeout=10: (0, "waza version 0.40.0"))
+    result = doctor.check_waza()
+    assert result["status"] == "ready"
+    assert "0.40.0" in result["detail"]
+
+
+def test_waza_fallback_missing_file_stays_incomplete(tmp_path, monkeypatch):
+    """S2: an absent fallback binary is incomplete (missing), not
+    incompatible — the gate only distrusts a binary that exists."""
+    called = []
+    monkeypatch.setattr(doctor, "_run", lambda argv, timeout=10: called.append(argv) or (None, ""))
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "WAZA_FALLBACK_PATH", str(tmp_path / "waza-linux-amd64"))
+    result = doctor.check_waza()
+    assert result["status"] == "incomplete"
+    assert called == [[str(tmp_path / "waza-linux-amd64"), "--version"]]
+
+
 def _all_ready(monkeypatch, override):
     """Every doctor check returns ready except the one named in
     `override` (name -> status)."""

@@ -119,8 +119,10 @@ def test_orcinus_root_files_are_excluded(monkeypatch, tmp_path):
 def test_manifest_unchanged_on_real_repo():
     """The refactor changes what the check SEES, not what it tracks:
     the manifest built from the real repo is exactly the committed
-    one (129 files)."""
+    one (130 files — 129 vendored plus the ORCINUS-authored
+    accessibility gate wrapper, recorded in the manifest in round 6
+    so a silent edit to the gate is caught)."""
     manifest = cd.build_manifest()
     committed = json.loads((REPO / "scripts" / "drift-manifest.json").read_text())
     assert manifest == committed
-    assert len(manifest) == 129
+    assert len(manifest) == 130

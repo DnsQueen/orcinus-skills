@@ -81,9 +81,11 @@ ORCINUS_ROOT_FILES: set[str] = set()
 # - webapp-testing (anthropics/skills @ ca45fc4): upstream has no
 #   test files at all.
 ORCINUS_TEST_FILES = {
+    "skills/accessibility/scripts/test_check_accessibility.py",
     "skills/database-designer/test_migration_generator.py",
     "skills/database-designer/test_migration_integration.py",
     "skills/database-designer/test_postgres_migration.py",
+    "skills/skill-creator/scripts/test_package_skill.py",
     "skills/webapp-testing/scripts/test_with_server.py",
 }
 

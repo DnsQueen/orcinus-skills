@@ -1247,6 +1247,7 @@ def test_apache_change_notices():
     modified = [
         "skills/mcp-builder/SKILL.md",
         "skills/skill-creator/SKILL.md",
+        "skills/skill-creator/scripts/package_skill.py",
         "skills/webapp-testing/SKILL.md",
         "skills/webapp-testing/scripts/with_server.py",
         "agents/analyzer.md",

@@ -27,8 +27,8 @@ Read the git diff. List every file changed. Mark every file that touches auth, s
 ### 2. Secrets
 
 - Is `.env` or any secret file tracked? Is a secret in the diff or in git history for the changed files? If yes, that is a blocking finding.
-- Run a thin pattern scan over the changed files for key-shaped values, case-insensitive: private-key headers, `AKIA`, `ghp_`, `gho_`, `ghs_`, `github_pat_`, `sk-`, `sk_live_`, `sk_test_`, `xox[baprs]-`, `AIza`, JWTs (`eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`), and `password` / `token` / `secret` / `api_key` assigned (with `=` or `:` — JSON/YAML use a colon) to a value of 8 or more characters (for example, `grep -r -n -i -E "BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{10,}|sk_live_[A-Za-z0-9]{10,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{35}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|(password|passwd|token|secret|api[_-]?key)[\"']?\s*[:=]\s*['\"][^'\"]{8,}['\"]"`). Case matters: a case-sensitive scan misses `API_KEY`. Record every match. Each match is a finding until it is proven to be a test fixture with a clearly fake value — and a "fake" label alone does not prove it; the value must be unusable (for example, a placeholder like `YOUR_KEY_HERE`).
-- If Gitleaks is installed, run `gitleaks detect` and record the output. If it is not installed, record "not run — gitleaks not installed" and do not claim the secrets check passed.
+- Run a thin pattern scan over the changed files for key-shaped values, case-insensitive: private-key headers, `AKIA`, `ghp_`, `gho_`, `ghs_`, `github_pat_`, `sk-`, `sk_live_`, `sk_test_`, `npm_`, `rk_live_`, `Bearer`, `xox[baprs]-`, `AIza`, JWTs (`eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`), and `password` / `token` / `secret` / `api_key` assigned (with `=` or `:` — JSON/YAML use a colon) to a value of 8 or more characters (for example, `grep -r -n -i -E "BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|\bsk-[A-Za-z0-9_-]{10,}|\bsk_live_[A-Za-z0-9]{10,}|\bsk_test_[A-Za-z0-9]{10,}|npm_[A-Za-z0-9]{36}|rk_live_[A-Za-z0-9]{20,}|Bearer [A-Za-z0-9._~+/=-]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{35}|eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|(password|passwd|token|secret|api[_-]?key)[\"']?\s*[:=]\s*(['\"][^'\"]{8,}['\"]|[^\s'\"]{8,})"`). Case matters: a case-sensitive scan misses `API_KEY`. Record every match. Each match is a finding until it is proven to be a test fixture with a clearly fake value — and a "fake" label alone does not prove it; the value must be unusable (for example, a placeholder like `YOUR_KEY_HERE`).
+- If Gitleaks is installed, run `gitleaks detect` and record the output. If it is not installed, record the secrets check as regex-only — the thin pattern scan ran, gitleaks did not — and do not claim the secrets check passed.
 
 ### 3. Injection
 
@@ -72,7 +72,7 @@ Always return, in this form:
 - Findings, each with file, line, and evidence.
 - Verdict (PASS, PASS WITH LIMITATIONS, FAIL, or INCOMPLETE).
 
-If a check could not run, say which one, why, and what remains unverified. Never report it as passed.
+If a check could not run, say which one, why, and what remains unverified. Never report it as passed. A secrets check run without gitleaks is reported as regex-only, never as a full secrets check.
 
 ## Sources
 

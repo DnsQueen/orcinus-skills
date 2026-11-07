@@ -1,5 +1,6 @@
 {
-  "skills/accessibility/SKILL.md": "cf6ce3b60d2b536f1f67471c547ef975de4baee6610743fe9405438f594b7b51",
+  "skills/accessibility/SKILL.md": "0a2c926387956614636d11f0f2bfa9711c635064c928c9e284cfab8c9d7bf119",
+  "skills/accessibility/scripts/check_accessibility.py": "30fa90e9b63e6491ba1ad1a535d7221e6f243231a734047f2d347371afbdf59e",
   "skills/accessibility/scripts/ultra11y.mjs": "1ce54dbda93127e38f575ce27cec5b3ca593b249a7501f66ef44f6bc294e248f",
   "skills/api-and-interface-design/SKILL.md": "2c33797bfa81a56e345ec4fb5fb6509605daad67bbcc4bd496ac90711f8ab0b6",
   "skills/ask-questions-if-underspecified/SKILL.md": "125e628a33e51c711c2534bea6064aba43285aaa6c9c61878d5cb05ba78ee323",
@@ -107,7 +108,7 @@
   "skills/skill-creator/scripts/aggregate_benchmark.py": "123ef128ea5ccc01a4b1ac212ef5567f21e9c13d3d240609780beeb3200c49aa",
   "skills/skill-creator/scripts/generate_report.py": "13df7118a3c50c83c4c3250a606d5f2b20b25a3d44cbc392b3d669ec75281453",
   "skills/skill-creator/scripts/improve_description.py": "87d864570220b699fac52da309d2d6efdb060647bfebc74f768128e646accf80",
-  "skills/skill-creator/scripts/package_skill.py": "1a33059b0db1ef73375d46d513e5ea81369d2e8838c970597b0d52ddef8d1c0f",
+  "skills/skill-creator/scripts/package_skill.py": "c2a85891ba0410060fc9c396ce83fda2aefacede870c33c8397bfd2895e99604",
   "skills/skill-creator/scripts/quick_validate.py": "67cf5703402013936c8fb75ad6a1afecd8841d45cc5e606b634eb05825fde365",
   "skills/skill-creator/scripts/run_eval.py": "43e3b8f80dbf69c343967ba77e268fae991d9fa3ed68b32a0ff02532cd48657f",
   "skills/skill-creator/scripts/run_loop.py": "7bd6f674203168520517eec94c55f493c0d154339b061b4d7c0f0dad187d0f21",

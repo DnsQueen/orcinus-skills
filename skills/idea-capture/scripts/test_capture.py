@@ -672,3 +672,109 @@ def test_killed_holder_recovery(tmp_path):
     rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
     assert rc == 0, err
     assert list(store.glob(".*.lock")) == []
+
+
+# --- Round 6 (2026-11-07): S1 — _pid_is_alive must not kill the lock
+# holder on Windows. On Windows os.kill(pid, 0) terminates the
+# process instead of probing it, so the Windows path must use
+# OpenProcess + GetExitCodeProcess (STILL_ACTIVE) and never call
+# os.kill. No Windows host exists here: the Windows surface is
+# faked (sys.platform + a ctypes stand-in) and the tests assert the
+# probe's answer is used, not os.kill's. ---
+
+
+class _FakeKernel32:
+    """Stand-in for ctypes.windll.kernel32."""
+
+    def __init__(self, *, handle=1, exit_code=259, get_exit_ok=True, last_error=0):
+        self._handle = handle
+        self._exit_code = exit_code
+        self._get_exit_ok = get_exit_ok
+        self._last_error = last_error
+        self.opened = []
+        self.closed = []
+
+    def OpenProcess(self, access, inherit, pid):
+        self.opened.append(pid)
+        return self._handle
+
+    def GetExitCodeProcess(self, handle, code_ref):
+        if self._get_exit_ok:
+            code_ref._obj.value = self._exit_code
+        return 1 if self._get_exit_ok else 0
+
+    def CloseHandle(self, handle):
+        self.closed.append(handle)
+        return 1
+
+    def GetLastError(self):
+        return self._last_error
+
+
+def _as_windows(monkeypatch, kernel32):
+    """Pretend this process runs on Windows with a fake kernel32."""
+    import ctypes as _real_ctypes
+    import types
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    fake_ctypes = types.SimpleNamespace(
+        windll=types.SimpleNamespace(kernel32=kernel32),
+        # The probe builds its exit-code cell with the real ctypes;
+        # only the Win32 API surface is faked.
+        c_ulong=_real_ctypes.c_ulong,
+        byref=_real_ctypes.byref,
+    )
+    monkeypatch.setitem(sys.modules, "ctypes", fake_ctypes)
+
+
+def test_pid_is_alive_windows_never_calls_os_kill(monkeypatch):
+    """S1: the Windows probe must not call os.kill at all — on
+    Windows os.kill(pid, 0) terminates the live lock holder."""
+    kernel32 = _FakeKernel32(exit_code=259)
+    _as_windows(monkeypatch, kernel32)
+
+    def _no_kill(pid, sig):
+        raise AssertionError("os.kill must not run on Windows")
+
+    monkeypatch.setattr(os, "kill", _no_kill)
+    assert cap._pid_is_alive(os.getpid()) is True
+    assert kernel32.opened == [os.getpid()]
+    assert kernel32.closed == [1]
+
+
+def test_pid_is_alive_windows_exited_process_is_dead(monkeypatch):
+    """S1: a live Linux PID whose Windows exit code is 0 is dead —
+    the probe's answer, not os.kill's, decides."""
+    kernel32 = _FakeKernel32(exit_code=0)
+    _as_windows(monkeypatch, kernel32)
+    assert cap._pid_is_alive(os.getpid()) is False
+
+
+def test_pid_is_alive_windows_running_process_is_alive(monkeypatch):
+    """S1: a dead PID whose exit code is STILL_ACTIVE (259) is alive."""
+    kernel32 = _FakeKernel32(exit_code=259)
+    _as_windows(monkeypatch, kernel32)
+    assert cap._pid_is_alive(_dead_pid()) is True
+
+
+def test_pid_is_alive_windows_unopenable_nonexistent_is_dead(monkeypatch):
+    """S1: OpenProcess failing with ERROR_INVALID_PARAMETER (87)
+    means no such process — dead, not fail-safe alive."""
+    kernel32 = _FakeKernel32(handle=0, last_error=87)
+    _as_windows(monkeypatch, kernel32)
+    assert cap._pid_is_alive(os.getpid()) is False
+
+
+def test_pid_is_alive_windows_unopenable_other_error_is_alive(monkeypatch):
+    """S1: OpenProcess failing any other way (e.g. access denied, 5)
+    is fail-safe alive — the lock is held, never stolen."""
+    kernel32 = _FakeKernel32(handle=0, last_error=5)
+    _as_windows(monkeypatch, kernel32)
+    assert cap._pid_is_alive(os.getpid()) is True
+
+
+def test_pid_is_alive_windows_unreadable_exit_code_is_alive(monkeypatch):
+    """S1: GetExitCodeProcess failing is fail-safe alive."""
+    kernel32 = _FakeKernel32(exit_code=259, get_exit_ok=False)
+    _as_windows(monkeypatch, kernel32)
+    assert cap._pid_is_alive(os.getpid()) is True

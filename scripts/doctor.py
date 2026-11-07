@@ -19,8 +19,11 @@ installs anything, and never claims a check passed. It tells the
 user what to install before they trust a verification run.
 """
 
+import hashlib
+import os
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -36,6 +39,16 @@ MIN_PYTEST = (8, 4)
 MIN_RUFF = (0, 17)
 MIN_WAZA = (0, 40, 0)
 WAZA_VERSION = "0.40.0"
+# The Linux fallback binary lives in world-writable /tmp, so it is
+# only trusted when it is the released binary: a regular file owned
+# by the current user whose SHA256 matches the pinned v0.40.0
+# release hash. The hash is the waza-linux-amd64 entry of the
+# v0.40.0 release checksums.txt (the same file CI verifies at
+# download, ci.yml:57-62) — verified against the downloaded binary.
+# It proves the file is the released one, not a planted one; it
+# does not prove the release itself was not forged (2-S6).
+WAZA_FALLBACK_PATH = "/tmp/waza-linux-amd64"
+WAZA_LINUX_SHA256 = "d09117a3c631f44a00a6c362462c951aed83c87751e8c25f39916a77d1013802"
 
 
 def _run(argv, timeout=10):
@@ -155,13 +168,36 @@ def check_node():
     return _check("node", "ready", f"node {out.strip()}")
 
 
+def _waza_fallback_is_trusted(path):
+    """True only when the /tmp fallback binary is a regular file
+    owned by the current user whose SHA256 matches the pinned
+    release hash. /tmp is world-writable (mode 1777): anyone can
+    plant a file there when it is absent, so an unowned or
+    mismatched binary is never executed."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return False
+    if not stat.S_ISREG(st.st_mode):
+        return False
+    if st.st_uid != os.getuid():
+        return False
+    try:
+        digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return digest == WAZA_LINUX_SHA256
+
+
 def check_waza():
     binary = shutil.which("waza")
+    fallback = False
     if binary is None and sys.platform.startswith("linux"):
         # CI downloads the Linux binary to /tmp; it is not on PATH.
         # The fallback is Linux-only: on any other platform a
         # missing waza is incomplete without probing a Linux path.
-        binary = "/tmp/waza-linux-amd64"
+        binary = WAZA_FALLBACK_PATH
+        fallback = True
     if binary is None:
         return _check(
             "waza",
@@ -169,6 +205,17 @@ def check_waza():
             "waza is not installed or does not run (needed for "
             "the eval suites, not for the Python gates)",
             fix=f"Download v{WAZA_VERSION} from github.com/microsoft/waza/releases and verify the checksum (see .github/workflows/ci.yml).",
+        )
+    if fallback and os.path.exists(binary) and not _waza_fallback_is_trusted(binary):
+        # Present but untrusted: never execute it. An absent file
+        # stays incomplete (the run below reports it as missing).
+        return _check(
+            "waza",
+            "incompatible",
+            f"the {binary} fallback is present but untrusted "
+            "(not owned by you, or its checksum does not match the "
+            f"pinned v{WAZA_VERSION} release hash) — it will not be executed",
+            fix=f"Remove {binary}, then re-download v{WAZA_VERSION} from github.com/microsoft/waza/releases and verify the checksum (see .github/workflows/ci.yml).",
         )
     # `waza --version` prints "waza version 0.40.0" (verified live
     # against the v0.40.0 binary). Report the version read from the
