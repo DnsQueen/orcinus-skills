@@ -25,12 +25,15 @@ permissions:
 jobs:
   test:
     # Portability claim (round 6, CI-1): the test job runs on
-    # ubuntu, Windows, and macOS. Python 3.10 was dropped 2026-11-07
-    # (round 6, 2-S7): end-of-life 2026-10-01 (PEP 619). The
-    # windows/macOS jobs have never run in this VM and are likely
-    # red at first — POSIX assumptions in the tests (shell paths,
-    # /tmp, signal handling) — so a red win/mac job is a real
-    # finding to fix, not a reason to drop the platform.
+    # ubuntu, Windows, and macOS, because the suite must pass where
+    # the user runs it — POSIX assumptions in the tests (shell paths,
+    # /tmp, signal handling) are the usual way a platform breaks.
+    # Python 3.10 was dropped 2026-11-07 (round 6, 2-S7):
+    # end-of-life 2026-10-01 (PEP 619). Run 42407636694 (2026-11-07,
+    # commit e80ed62, v0.9.8) was green on all 14 jobs, including
+    # windows-latest and macos-latest — the POSIX assumptions held.
+    # A red win/mac job is still a real finding to fix, not a reason
+    # to drop the platform.
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
