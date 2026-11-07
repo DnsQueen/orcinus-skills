@@ -222,7 +222,7 @@ After that, keep working. ORCINUS detects the stage; you confirm each major gate
 - `docs/project-state.md` — the persistent project state spec (`.orcinus/state.json`): BUILDING / VERIFYING / BLOCKED / VERIFIED / AWAITING_APPROVAL / RELEASE_READY, each bound to a revision and an evidence bundle; the schema is `scripts/state_schema.json` and transitions are enforced by `scripts/state.py`.
 - `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v0.9 does and does not do.
 
-Later sub-skills (idea, architecture, coding, security, eval) are listed in `docs/MAP.md` with their source and status. They are added one at a time, each proven on a demo repo before it ships. No stage is empty in the map, but not every sub-skill is fully built in v0.9.
+Later sub-skills (idea, architecture, coding, security, eval) are listed in `docs/MAP.md` with their source and status. They are added one at a time, each proven on a demo repo before it ships. No stage is empty in the map. All 36 shipped skills are fully built; the 3 MAP needs with no implementing skill yet (Benchmark, Sandbox runtime, Skill eval) are the ones still to build.
 ## Boundaries (non-negotiable)
 
 - No auto-merge. A human decides the merge.
@@ -250,7 +250,7 @@ Sources that shaped v0.9 include Anthropic (Effective Harnesses, Agent Skills, c
 
 ## Status
 
-v0.9 foundation: the router, the verifier, and 34 focused sub-skills — all listed above. The map (`docs/MAP.md`) covers every micro-step, so no stage is empty, but not every sub-skill is fully built; the rest are built in order, each proven before it ships.
+v0.9 foundation: the router and 35 focused sub-skills — all listed above. The map (`docs/MAP.md`) covers every micro-step, so no stage is empty. All 36 shipped skills are built (see `skills/manifest.json`); the 3 MAP needs with no implementing skill yet — Benchmark (SWE-bench), Sandbox runtime (SWE-agent/swe-rex), and Skill eval (plugin-eval) — are built in order, each proven before it ships.
 
 Eval honesty: the 33 scenario evals in `evals/*.md` are manual text scenarios, not scored harness runs. 32 of them carry a dated "Last run" note from a run on throwaway /tmp paths, not a harness re-run. By exact file-stem match, 9 of the 36 skills have no matching `*-01.md` eval file, and 6 eval files have no matching skill directory. One of the six is `router-01.md`, which evaluates the Router in `skills/orcinus`. The only harness-scored evals are the two waza suites, and both grade only `orcinus-verify`. The mock suite ran 2/2 with the real waza v0.40.0 binary, but a mock pass proves the harness runs, never the skill. The agent-behaviour suite (`evals/waza-orcinus-verify-agent/`, executor copilot-sdk, 9 tasks, 1 trial each) has never run with a real executor, so its results are unproven. 9 tasks × 1 trial at a 0.8 threshold cannot measure an LLM. At least 5 trials per task with a real executor is future work (see `SCOPE.md`).
 

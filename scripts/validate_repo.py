@@ -1259,7 +1259,18 @@ def check_plugin_manifests():
 def check_skill_counts():
     """The skill counts stated in plugin.json and README.md must match
     the actual number of skill folders. A stale number is a real
-    inconsistency (plugin.json once said "Router + 34" for 36 folders)."""
+    inconsistency (plugin.json once said "Router + 34" for 36 folders).
+    "Focused sub-skill" means every skill except the router (see
+    GLOSSARY.md), verifier included: plugin.json N == folders − 1,
+    README "all N skills" N == folders, and the README Status
+    paragraph's "N focused sub-skills" N == folders − 1. The Status
+    wording used to say 34 (router + verifier + 34), which used the
+    term the other way — and no check read it, so it drifted
+    silently. The counts are asserted here, in the validator; the
+    skill table itself is generated from the manifest by
+    scripts/generate_readme_table.py, but these three prose counts
+    are hand-written, so the validator is their single source of
+    truth."""
     skills = [d for d in sorted((ROOT / "skills").iterdir()) if d.is_dir()]
     count = len(skills)
     plugin = ROOT / ".claude-plugin" / "plugin.json"
@@ -1288,6 +1299,18 @@ def check_skill_counts():
             fail("README.md does not state the skill count as 'all N skills'")
         elif int(m.group(1)) != count:
             fail(f"README.md says 'all {m.group(1)} skills' but there are {count} skill folders")
+        m = re.search(r"(\d+) focused sub-skills", text)
+        if m is None:
+            fail(
+                "README.md does not state the focused sub-skill count "
+                "as 'N focused sub-skills' (Status paragraph)"
+            )
+        elif int(m.group(1)) != count - 1:
+            fail(
+                f"README.md says '{m.group(1)} focused sub-skills' but "
+                f"there are {count} skill folders (router + {count - 1} "
+                f"focused sub-skills, verifier included)"
+            )
 
 
 def check_docs_numbers():

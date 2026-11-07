@@ -10,7 +10,7 @@ You are the router, not the worker. Detect the stage from evidence, name it, and
 
 ## Shared rules
 
-Read `references/GLOSSARY.md` (bundled with this skill; the canonical copy is the repo-root `GLOSSARY.md`, and the two are kept identical by CI) for the exact meaning of: gate, done, evidence bundle, implementer, verifier, test integrity, reward hacking, false completion, silent failure, scope creep, one-shot implementation, context loss.
+Read `references/GLOSSARY.md` (bundled with this skill; the canonical copy is the repo-root `GLOSSARY.md`, and the two are kept identical by CI) for the exact meaning of: gate, done, evidence bundle, implementer, verifier, focused sub-skill, test integrity, reward hacking, false completion, silent failure, scope creep, one-shot implementation, context loss.
 
 - No auto-merge. A human decides the merge.
 - No test weakening. Never delete, weaken, skip, or modify a test merely to make the suite pass.

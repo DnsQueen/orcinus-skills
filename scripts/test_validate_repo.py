@@ -106,7 +106,9 @@ def _minimal_repo(tmp_path):
         encoding="utf-8",
     )
     (root / ".claude-plugin" / "icon.png").write_bytes(b"")
-    (root / "README.md").write_text("all 2 skills\n", encoding="utf-8")
+    (root / "README.md").write_text(
+        "all 2 skills\nthe router and 1 focused sub-skills\n", encoding="utf-8"
+    )
     (root / "CHANGELOG.md").write_text(
         "# Changelog\n\n## [1.0.0] — 2026-11-06\n\nThe first release.\n",
         encoding="utf-8",
@@ -180,9 +182,29 @@ def test_skill_counts_match_actual_folders(tmp_path, monkeypatch):
     # A stale count in README.md must fail too.
     data["description"] = "Router + 1 focused sub-skills."
     plugin.write_text(json.dumps(data), encoding="utf-8")
-    (root / "README.md").write_text("all 99 skills\n", encoding="utf-8")
+    (root / "README.md").write_text(
+        "all 99 skills\nthe router and 1 focused sub-skills\n", encoding="utf-8"
+    )
     failures = _run_with_root(monkeypatch, root, vr.check_skill_counts)
     assert len(failures) == 1 and "99" in failures[0]
+
+
+def test_skill_counts_status_paragraph_must_match(tmp_path, monkeypatch):
+    """Round 7 (F-14): the README Status paragraph's 'N focused
+    sub-skills' is a counted claim too — 'focused sub-skill' means
+    every skill except the router (folders − 1), verifier included.
+    The old '34' (router + verifier + 34 = 36) used the term the
+    other way and passed nothing, because no check read it."""
+    root = _minimal_repo(tmp_path)
+    readme = root / "README.md"
+    readme.write_text("all 2 skills\nthe router and 1 focused sub-skills\n", encoding="utf-8")
+    assert _run_with_root(monkeypatch, root, vr.check_skill_counts) == []
+    readme.write_text(
+        "all 2 skills\nthe router, the verifier, and 0 focused sub-skills\n",
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_skill_counts)
+    assert len(failures) == 1 and "0" in failures[0]
 
 
 def test_stage_ranges_cover_idea_and_finalize(tmp_path, monkeypatch):

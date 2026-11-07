@@ -5,6 +5,7 @@ Shared vocabulary for ORCINUS. A term means what is written here, nowhere else.
 - **ORCINUS**: one integrated nervous system, one install, one entry (`orcinus`), routing to focused sub-skills from idea (0) to publish (100).
 - **Router**: the `orcinus` skill. Detects the stage from evidence and routes to the right sub-skill. It does not do the work itself.
 - **Sub-skill**: a focused skill for one stage or need, under 500 lines, with its own `SKILL.md`. The user never picks one directly mid-work.
+- **Focused sub-skill**: every skill except the router — 35 of the 36 skills, including the verifier (`orcinus-verify`). "Router + N focused sub-skills" counts N = skills − 1; "all N skills" counts N = skills.
 - **Stage**: a named phase with an entry condition and an exit gate. Example: Idea, Architecture, Build, Verify, Finalize.
 - **Gate**: a check that must pass before moving to the next stage. Major gates (idea → code, code → done) need explicit human confirmation.
 - **Done**: a claim that a feature works. It is accepted only with evidence: the acceptance criteria, the commands run, their real outputs, and the changed files.
