@@ -379,13 +379,31 @@ def _read_lock_pid(lock_path):
     """The PID recorded in a lock file, or None when it cannot be read
     (empty file, torn write, non-numeric content, or the file is gone).
     A missing PID means the lock cannot be proven stale, so the caller
-    must treat it as held."""
+    must treat it as held.
+
+    The PID starts at offset 1 (byte 0 is the locked region), and
+    the read starts there too: on Windows a read of byte 0 fails
+    while the holder holds the lock, so a whole-file read would
+    return None exactly when the PID is needed most (the
+    contender's "blocked by pid N" message, and the stale-lock
+    note). The read uses os.open + lseek + os.read so the offset
+    is explicit — never Path.read_text, which always starts at 0."""
     try:
-        text = lock_path.read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeDecodeError):
+        fd = os.open(lock_path, os.O_RDONLY)
+    except OSError:
         return None
     try:
-        pid = int(text)
+        os.lseek(fd, 1, os.SEEK_SET)
+        data = os.read(fd, 32)
+    except OSError:
+        return None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    try:
+        pid = int(data.decode("utf-8").strip())
     except ValueError:
         return None
     return pid if pid > 0 else None
@@ -510,7 +528,11 @@ def _acquire_lock(path: Path, timeout_s: float = 2.0):
     0), and on Windows a read of that byte fails while the holder
     holds it — so a contender waiting on the lock could never read
     the PID for the "blocked by pid N" message if it lived at
-    offset 0. _read_lock_pid strips, so both layouts parse.
+    offset 0. _read_lock_pid reads from offset 1 only, so it never
+    touches the locked byte. A lock file written before this layout
+    (PID at offset 0) yields a truncated PID in the diagnostic
+    message only — the PID is advisory, the flock is the lock, so
+    a wrong PID can never steal a lock or block a recovery.
 
     Crash behaviour: a holder killed mid-change leaves the file
     (with a dead PID) and releases the lock; the next acquirer

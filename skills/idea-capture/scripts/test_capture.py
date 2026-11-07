@@ -606,13 +606,18 @@ def _dead_pid():
     with no handle to it left open in this process.
 
     On Windows a PID stays allocated — OpenProcess succeeds on it,
-    so os.kill(pid, 0) reports it alive — while any handle to the
-    exited process is open, and a Popen keeps its handle until it
-    is finalized; wait() alone does not close it. The child
-    therefore prints its own PID and subprocess.run (whose Popen is
-    destroyed on return) leaves no handle behind. A bounded retry
-    covers the genuine race of the PID being reused by another
-    process between exit and the probe."""
+    so the probe reports it alive — while any handle to the exited
+    process is open, and a Popen keeps its handle until it is
+    finalized; wait() alone does not close it. The child therefore
+    prints its own PID and subprocess.run (whose Popen is destroyed
+    on return) leaves no handle behind. A bounded retry covers the
+    genuine race of the PID being reused by another process between
+    exit and the probe.
+
+    The probe goes through cap._pid_is_alive, never os.kill(pid, 0)
+    directly: on Windows os.kill with sig 0 is invalid and raises
+    OSError [WinError 87] instead of ProcessLookupError (CI 0.9.6
+    failed three tests inside this helper on exactly that)."""
     for _ in range(50):
         result = subprocess.run(
             [sys.executable, "-c", "import os; print(os.getpid())"],
@@ -621,11 +626,26 @@ def _dead_pid():
             timeout=30,
         )
         pid = int(result.stdout.strip())
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not cap._pid_is_alive(pid):
             return pid
     raise AssertionError("no dead PID found after 50 attempts")
+
+
+def test_dead_pid_survives_windows_os_kill_winerror_87(monkeypatch):
+    """Windows: os.kill(pid, 0) raises OSError [WinError 87] for a
+    dead PID instead of ProcessLookupError — _dead_pid must not call
+    it. The fake kernel32 (no such process) and the raising os.kill
+    emulate the Windows behaviour on Linux; _dead_pid must still
+    return a dead PID, via cap._pid_is_alive."""
+    kernel32 = _FakeKernel32(handle=0, last_error=87)
+    _as_windows(monkeypatch, kernel32)
+
+    def _win_os_kill(pid, sig):
+        raise OSError(87, "The parameter is incorrect")
+
+    monkeypatch.setattr(os, "kill", _win_os_kill)
+    pid = _dead_pid()
+    assert pid > 0
 
 
 def test_dead_pid_holds_no_open_handle_to_the_child(monkeypatch):
@@ -680,7 +700,7 @@ def test_stale_lock_from_dead_process_is_recovered(tmp_path):
     rc, out, err = capture(store, "stale lock idea")
     assert rc == 0, err
     idea_id = out.strip()
-    _lock_path(store, idea_id).write_text(f"{_dead_pid()}\n", encoding="utf-8")
+    _lock_path(store, idea_id).write_text(f" {_dead_pid()}\n", encoding="utf-8")
     rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
     assert rc == 0, err
     assert "stale lock" in err
@@ -713,13 +733,25 @@ def test_live_holder_still_blocks_promote(tmp_path):
         cap._release_lock(fd, lock)
 
 
-def test_holder_pid_is_readable_without_reading_the_locked_byte(tmp_path):
+def _fail_whole_file_read(*args, **kwargs):
+    """Emulate the Windows rule: a read starting at byte 0 of a lock
+    file fails while the holder holds it (msvcrt.locking locks byte
+    0). Monkeypatched onto Path.read_text / Path.read_bytes, it
+    makes a test fail on Linux exactly as CI failed on Windows when
+    code reads the lock file from offset 0."""
+    raise PermissionError(13, "Permission denied")
+
+
+def test_holder_pid_is_readable_without_reading_the_locked_byte(tmp_path, monkeypatch):
     """Round-6 follow-up (Windows): the "being changed" error must
     name the holder PID. On Windows msvcrt.locking locks byte 0 of
     the lock file, and a read of that locked byte fails while the
     holder holds it — so the PID is recorded starting at offset 1,
     and byte 0 is reserved for the lock. A contender reads the PID
-    from offset 1, never touching the locked byte."""
+    from offset 1, never touching the locked byte. The test reads
+    the PID the same way (open + seek(1)); a whole-file read would
+    fail on Windows, and the patched read_text/read_bytes prove the
+    test never takes that path."""
     store = tmp_path / "ideas"
     rc, out, err = capture(store, "layout idea")
     assert rc == 0, err
@@ -727,10 +759,58 @@ def test_holder_pid_is_readable_without_reading_the_locked_byte(tmp_path):
     idea_path = store / f"{idea_id}.md"
     fd, lock_path, _ = cap._acquire_lock(idea_path)
     assert fd is not None
+    monkeypatch.setattr(Path, "read_text", _fail_whole_file_read)
+    monkeypatch.setattr(Path, "read_bytes", _fail_whole_file_read)
     try:
-        data = lock_path.read_bytes()
-        assert int(data[1:].strip()) == os.getpid()
+        with lock_path.open("rb") as f:
+            f.seek(1)
+            data = f.read()
+        assert int(data.strip()) == os.getpid()
         assert cap._read_lock_pid(lock_path) == os.getpid()
+    finally:
+        cap._release_lock(fd, lock_path)
+
+
+def test_read_lock_pid_never_reads_the_locked_byte(tmp_path, monkeypatch):
+    """_read_lock_pid must read the PID from offset 1 only. With
+    whole-file reads emulating the Windows failure, the old
+    implementation (read_text from offset 0) returns None; the
+    offset-1 read returns the holder's PID. (CI 0.9.6: the
+    contender's PID read failed this way, so the 'blocked by pid N'
+    message lost the PID.)"""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "locked byte idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    idea_path = store / f"{idea_id}.md"
+    fd, lock_path, _ = cap._acquire_lock(idea_path)
+    assert fd is not None
+    monkeypatch.setattr(Path, "read_text", _fail_whole_file_read)
+    monkeypatch.setattr(Path, "read_bytes", _fail_whole_file_read)
+    try:
+        assert cap._read_lock_pid(lock_path) == os.getpid()
+    finally:
+        cap._release_lock(fd, lock_path)
+
+
+def test_acquire_lock_reports_holder_pid_without_reading_locked_byte(tmp_path, monkeypatch):
+    """Failure 3 (CI 0.9.6): a live holder blocked promote, but the
+    error named no PID — the contender's _read_lock_pid read byte 0
+    and failed. With whole-file reads emulating the Windows
+    failure, the contender must still learn the holder's PID."""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "contender idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    idea_path = store / f"{idea_id}.md"
+    fd, lock_path, _ = cap._acquire_lock(idea_path)
+    assert fd is not None
+    monkeypatch.setattr(Path, "read_text", _fail_whole_file_read)
+    monkeypatch.setattr(Path, "read_bytes", _fail_whole_file_read)
+    try:
+        fd2, _, holder_pid = cap._acquire_lock(idea_path, timeout_s=0.5)
+        assert fd2 is None, "acquired a lock another process holds"
+        assert holder_pid == os.getpid()
     finally:
         cap._release_lock(fd, lock_path)
 
@@ -881,9 +961,13 @@ def test_pid_is_alive_windows_exited_process_is_dead(monkeypatch):
 
 def test_pid_is_alive_windows_running_process_is_alive(monkeypatch):
     """S1: a dead PID whose exit code is STILL_ACTIVE (259) is alive."""
+    # The dead PID is found BEFORE faking Windows: under the fake
+    # kernel32 every PID probes alive, so _dead_pid could never
+    # return there.
+    dead_pid = _dead_pid()
     kernel32 = _FakeKernel32(exit_code=259)
     _as_windows(monkeypatch, kernel32)
-    assert cap._pid_is_alive(_dead_pid()) is True
+    assert cap._pid_is_alive(dead_pid) is True
 
 
 def test_pid_is_alive_windows_unopenable_nonexistent_is_dead(monkeypatch):
@@ -933,7 +1017,9 @@ def test_flock_holder_blocks_acquire_despite_dead_pid(tmp_path):
     idea_id = out.strip()
     idea_path = store / f"{idea_id}.md"
     lock_path = _lock_path(store, idea_id)
-    lock_path.write_text(f"{_dead_pid()}\n", encoding="utf-8")
+    # The planted PID uses the product's layout: a leading space at
+    # offset 0 (the locked byte), the PID starting at offset 1.
+    lock_path.write_text(f" {_dead_pid()}\n", encoding="utf-8")
     holder_fd = os.open(lock_path, os.O_RDWR)
     try:
         assert cap._try_lock(holder_fd), "could not take the holder lock"
