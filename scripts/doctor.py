@@ -201,10 +201,20 @@ def check_node():
 
 
 def _windows_owned_by_current_user(path):
-    """Windows ownership check: the file owner's SID must equal the
-    current user's SID. Any failure to read either SID fails closed
-    (untrusted). ctypes.windll exists only on Windows; without it
-    there is no owner to compare, so the file is untrusted."""
+    """Windows ownership check: the file owner's SID must equal one
+    of the SIDs that identify the current user as an owner — the
+    token's user SID (TokenUser) or its default-owner SID
+    (TokenOwner). A file's owner is assigned from the token's
+    default owner, not from the user account: for a member of the
+    Administrators group the default owner is the Administrators
+    group, not the user (Microsoft KB 126629), so comparing only
+    against TokenUser rejects an administrator's own files — that
+    is the Windows CI failure (runneradmin). Either SID matching
+    trusts the file: a non-elevated file is owned by the user SID,
+    an elevated admin file by the default-owner SID. Any failure
+    to read a SID fails closed (untrusted). ctypes.windll exists
+    only on Windows; without it there is no owner to compare, so
+    the file is untrusted."""
     import ctypes
     from ctypes import wintypes
 
@@ -215,6 +225,7 @@ def _windows_owned_by_current_user(path):
     kernel32 = windll.kernel32
     TOKEN_QUERY = 0x0008
     TokenUser = 1
+    TokenOwner = 4
     OWNER_SECURITY_INFORMATION = 0x00000001
 
     advapi32.OpenProcessToken.argtypes = [
@@ -250,20 +261,33 @@ def _windows_owned_by_current_user(path):
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
     kernel32.CloseHandle.restype = wintypes.BOOL
 
+    def _token_sid(token, info_class):
+        """One SID out of the token (TokenUser or TokenOwner), via
+        the two-call GetTokenInformation pattern. Returns (sid,
+        buf): the SID pointer and the buffer it points into — the
+        caller must keep buf alive while using sid. Returns
+        (None, None) when the read fails. TOKEN_USER is
+        { SID_AND_ATTRIBUTES User; } and TOKEN_OWNER is
+        { PSID Owner; }: both start with the SID pointer."""
+        size = wintypes.DWORD(0)
+        advapi32.GetTokenInformation(token, info_class, None, 0, ctypes.byref(size))
+        buf = ctypes.create_string_buffer(size.value)
+        if not advapi32.GetTokenInformation(token, info_class, buf, size, ctypes.byref(size)):
+            return None, None
+        return ctypes.cast(buf, ctypes.POINTER(wintypes.LPVOID)).contents, buf
+
     token = wintypes.HANDLE()
     if not advapi32.OpenProcessToken(
         kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(token)
     ):
         return False
     try:
-        size = wintypes.DWORD(0)
-        advapi32.GetTokenInformation(token, TokenUser, None, 0, ctypes.byref(size))
-        buf = ctypes.create_string_buffer(size.value)
-        if not advapi32.GetTokenInformation(token, TokenUser, buf, size, ctypes.byref(size)):
+        user_sid, user_buf = _token_sid(token, TokenUser)
+        if user_sid is None:
             return False
-        # TOKEN_USER is { SID_AND_ATTRIBUTES User; } and
-        # SID_AND_ATTRIBUTES starts with the SID pointer.
-        user_sid = ctypes.cast(buf, ctypes.POINTER(wintypes.LPVOID)).contents
+        default_owner_sid, default_owner_buf = _token_sid(token, TokenOwner)
+        if default_owner_sid is None:
+            return False
         size = wintypes.DWORD(0)
         advapi32.GetFileSecurityW(
             str(path), OWNER_SECURITY_INFORMATION, None, 0, ctypes.byref(size)
@@ -279,7 +303,9 @@ def _windows_owned_by_current_user(path):
             sec, ctypes.byref(owner_sid), ctypes.byref(defaulted)
         ):
             return False
-        return bool(advapi32.EqualSid(user_sid, owner_sid))
+        return bool(advapi32.EqualSid(user_sid, owner_sid)) or bool(
+            advapi32.EqualSid(default_owner_sid, owner_sid)
+        )
     finally:
         kernel32.CloseHandle(token)
 
@@ -287,8 +313,10 @@ def _windows_owned_by_current_user(path):
 def _owned_by_current_user(st, path):
     """True when the file is owned by the current user. POSIX
     compares st_uid with os.getuid(); Windows has no getuid, so the
-    file owner's SID is compared with the current user's SID. Any
-    failure fails closed (untrusted)."""
+    file owner's SID is compared with the current user's SID or the
+    token's default-owner SID (an administrator's files are owned
+    by the Administrators group, not the account). Any failure
+    fails closed (untrusted)."""
     getuid = getattr(os, "getuid", None)
     if getuid is not None:
         return st.st_uid == getuid()

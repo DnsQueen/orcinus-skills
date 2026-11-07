@@ -418,13 +418,19 @@ def test_windows_ownership_check_fails_closed_without_windll():
     assert doctor._windows_owned_by_current_user("whatever") is False
 
 
-def _fake_windll(*, user_sid, owner_sid):
+def _fake_windll(*, user_sid, owner_sid, token_owner_sid=None):
     """A stand-in for ctypes.windll: canned user and file-owner
     SIDs, so the Windows ownership comparison can be exercised
-    without Windows. The SID bytes are 8 bytes each."""
+    without Windows. The SID bytes are 8 bytes each.
+    token_owner_sid is the token's default-owner SID (TokenOwner,
+    class 4): for a standard user it is the user SID; for an
+    administrator it is the Administrators group SID. Defaults to
+    user_sid."""
     import ctypes
     import types
 
+    if token_owner_sid is None:
+        token_owner_sid = user_sid
     kept = []  # buffers handed out as SID pointers must stay alive
 
     def sid_pointer(sid):
@@ -440,7 +446,12 @@ def _fake_windll(*, user_sid, owner_sid):
         if buf is None:
             ret_size._obj.value = 16
             return 0
-        ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p)).contents.value = sid_pointer(user_sid)
+        # TokenUser (1) is the account SID; TokenOwner (4) is the
+        # default-owner SID stamped on objects the token creates.
+        sid = {1: user_sid, 4: token_owner_sid}.get(_cls)
+        if sid is None:
+            return 0
+        ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p)).contents.value = sid_pointer(sid)
         return 1
 
     def get_file_security(_path, _info, _sec, _size, ret_size):
@@ -496,6 +507,130 @@ def test_windows_ownership_check_compares_sids(monkeypatch):
         _fake_windll(user_sid=b"USER-SID", owner_sid=b"OTHER-ID"),
         raising=False,
     )
+    assert doctor._windows_owned_by_current_user("whatever") is False
+
+
+# --- Round-6 follow-up (2026-11-07): the Windows SID comparison
+# compared the file owner only against the token's user SID
+# (TokenUser). But a file's owner is assigned from the token's
+# DEFAULT OWNER (TokenOwner), not from the user account: for a
+# member of the Administrators group the default owner is the
+# Administrators group, not the user (Microsoft KB 126629; local
+# security policy "System objects: Default owner for objects
+# created by members of the Administrators group"). The Windows CI
+# runner runs as runneradmin, an administrator, so a file it
+# creates is owned by BUILTIN\Administrators — and the doctor
+# reported the trusted fallback binary "incompatible" instead of
+# "ready". The file owner must also match the token's
+# default-owner SID. ---
+
+
+def test_waza_fallback_trusted_binary_is_ready_for_admin_owner(tmp_path, monkeypatch):
+    """The Windows CI failure, reproduced on Linux: no os.getuid,
+    a fake windll whose TokenUser is the runner and whose TokenOwner
+    — and the planted file's owner — is the Administrators group.
+    The trusted fallback must be ready, not incompatible."""
+    import ctypes
+    import hashlib
+
+    binary = _planted_waza(tmp_path)
+    monkeypatch.delattr(doctor.os, "getuid", raising=False)
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        _fake_windll(
+            user_sid=b"RUNNER-1",
+            owner_sid=b"ADMIN-GR",
+            token_owner_sid=b"ADMIN-GR",
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    monkeypatch.setattr(doctor, "WAZA_FALLBACK_PATH", str(binary))
+    monkeypatch.setattr(
+        doctor, "WAZA_LINUX_SHA256", hashlib.sha256(binary.read_bytes()).hexdigest()
+    )
+    monkeypatch.setattr(doctor, "_run", lambda argv, timeout=10: (0, "waza version 0.40.0"))
+    result = doctor.check_waza()
+    assert result["status"] == "ready"
+    assert "0.40.0" in result["detail"]
+
+
+def test_windows_ownership_check_trusts_default_owner_sid(monkeypatch):
+    """An administrator's own file is owned by the Administrators
+    group (the token's default owner), not by the account SID — the
+    check must trust it."""
+    import ctypes
+
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        _fake_windll(
+            user_sid=b"RUNNER-1",
+            owner_sid=b"ADMIN-GR",
+            token_owner_sid=b"ADMIN-GR",
+        ),
+        raising=False,
+    )
+    assert doctor._windows_owned_by_current_user("whatever") is True
+
+
+def test_windows_ownership_check_trusts_user_sid_for_non_elevated_file(monkeypatch):
+    """A file the same user created without elevation is owned by
+    the user SID itself — the user-SID comparison must keep working
+    alongside the default-owner one (mixed elevation: creator
+    non-elevated, checker elevated)."""
+    import ctypes
+
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        _fake_windll(
+            user_sid=b"RUNNER-1",
+            owner_sid=b"RUNNER-1",
+            token_owner_sid=b"ADMIN-GR",
+        ),
+        raising=False,
+    )
+    assert doctor._windows_owned_by_current_user("whatever") is True
+
+
+def test_windows_ownership_check_rejects_other_owner_even_for_admin(monkeypatch):
+    """Fail closed: a file owned by someone else is untrusted even
+    when the current user is an administrator — neither the user SID
+    nor the default-owner SID matches."""
+    import ctypes
+
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        _fake_windll(
+            user_sid=b"RUNNER-1",
+            owner_sid=b"OTHER-US",
+            token_owner_sid=b"ADMIN-GR",
+        ),
+        raising=False,
+    )
+    assert doctor._windows_owned_by_current_user("whatever") is False
+
+
+def test_windows_ownership_check_fails_closed_when_default_owner_unreadable(monkeypatch):
+    """If the token's default-owner SID cannot be read, the check
+    fails closed instead of trusting the file on the user SID
+    alone."""
+    import ctypes
+
+    windll = _fake_windll(user_sid=b"RUNNER-1", owner_sid=b"ADMIN-GR", token_owner_sid=b"ADMIN-GR")
+    orig = windll.advapi32.GetTokenInformation
+
+    def broken(_token, _cls, buf, _size, ret_size):
+        if _cls == 4 and buf is not None:
+            return 0
+        return orig(_token, _cls, buf, _size, ret_size)
+
+    windll.advapi32.GetTokenInformation = broken
+    monkeypatch.setattr(ctypes, "windll", windll, raising=False)
     assert doctor._windows_owned_by_current_user("whatever") is False
 
 
