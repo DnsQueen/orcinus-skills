@@ -55,22 +55,47 @@ def port_is_open(port):
         return False
 
 
+STARTUP_AFTER_IMPORT = "print('STARTUP after-import', flush=True)\n"
+
+
+def _http_server_construct_snippet(port, handler_expr):
+    """Build an HTTPServer step by step, printing a flushed marker
+    after each step. Constructing with bind_and_activate=False and
+    calling server_bind() / server_activate() explicitly is the
+    same sequence the constructor runs; splitting it only names
+    the step a stalled server reached. On macOS CI 0.9.6 every
+    http.server child stalled with no output and READY never
+    printed — but the log-heavy child printed its 2000 lines,
+    which come after the import, so the import is exonerated and
+    the stall is at or after this constructor call. The markers
+    say which step: socket-created, bound, or listening."""
+    return (
+        f"srv = http.server.HTTPServer(('127.0.0.1', {port}), {handler_expr}, "
+        "bind_and_activate=False)\n"
+        "print('STARTUP socket-created', flush=True)\n"
+        "srv.server_bind()\n"
+        "print('STARTUP bound', flush=True)\n"
+        "srv.server_activate()\n"
+        "print('STARTUP listening', flush=True)\n"
+        f"print('READY {port}', flush=True)\n"
+    )
+
+
 def http_server_script(port, log_lines=0):
     """A small HTTP server that optionally prints many lines on startup.
 
-    It prints READY once the HTTPServer constructor returns — bind
-    and listen are done by then — and before serve_forever: on macOS
-    CI the servers never listened with no output anywhere (CI 0.9.5,
-    8 tests), so the marker is what separates 'stuck before listen'
-    from 'listening but the port check fails'."""
+    It prints a STARTUP marker after each startup step (see
+    _http_server_construct_snippet) and READY once the server is
+    listening: on macOS CI the servers never listened with no
+    output anywhere (CI 0.9.5, 8 tests), so the markers are what
+    separate 'stuck before listen' from 'listening but the port
+    check fails' — and, since CI 0.9.6, which step inside the
+    constructor it stuck on."""
     return (
-        "import http.server, sys\n"
-        f"for _ in range({log_lines}):\n"
+        "import http.server, sys\n" + STARTUP_AFTER_IMPORT + f"for _ in range({log_lines}):\n"
         "    print('log line ' + 'x' * 60, flush=True)\n"
-        f"srv = http.server.HTTPServer(('127.0.0.1', {port}), "
-        "http.server.SimpleHTTPRequestHandler)\n"
-        f"print('READY {port}', flush=True)\n"
-        "srv.serve_forever()\n"
+        + _http_server_construct_snippet(port, "http.server.SimpleHTTPRequestHandler")
+        + "srv.serve_forever()\n"
     )
 
 
@@ -246,9 +271,9 @@ def _status_server_script(port, status, healthy_path=None):
         )
     return (
         "import http.server\n"
+        + STARTUP_AFTER_IMPORT
         + body
-        + f"srv = http.server.HTTPServer(('127.0.0.1', {port}), H)\n"
-        + f"print('READY {port}', flush=True)\n"
+        + _http_server_construct_snippet(port, "H")
         + "srv.serve_forever()\n"
     )
 
@@ -284,8 +309,9 @@ def _server_detail(proc, err_file, out_file=None):
     is still alive or exited (with its code), whether it printed
     READY after binding — READY means it was listening, so the port
     check itself failed; no READY means it never reached listen —
-    plus the tails of its stdout and stderr. A crash and a slow
-    start must not look the same."""
+    plus the last STARTUP marker it reached, so a stalled server
+    names the step it stuck on, plus the tails of its stdout and
+    stderr. A crash and a slow start must not look the same."""
     if proc.poll() is None:
         state = "process still alive"
     else:
@@ -300,6 +326,9 @@ def _server_detail(proc, err_file, out_file=None):
             state += "; server printed READY (it was listening)"
         else:
             state += "; server never printed READY (stuck before listen)"
+        startup = [line for line in out_lines if line.startswith("STARTUP")]
+        if startup:
+            state += f"; last startup step: {startup[-1]}"
         tail = out_lines[-2:]
         if tail:
             state += "; stdout: " + " | ".join(tail)
@@ -524,11 +553,10 @@ def _termination_resistant_child_script(port, pidfile, os_name=os.name):
         imports = "import http.server, signal, subprocess\n"
     return (
         imports
+        + STARTUP_AFTER_IMPORT
         + spawn
         + f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
-        + f"srv = http.server.HTTPServer(('127.0.0.1', {port}), "
-        "http.server.SimpleHTTPRequestHandler)\n"
-        + f"print('READY {port}', flush=True)\n"
+        + _http_server_construct_snippet(port, "http.server.SimpleHTTPRequestHandler")
         + "srv.serve_forever()\n"
     )
 
@@ -786,13 +814,12 @@ def _tree_server_script(port, pidfile):
     cleanup killed the tree or just the leader."""
     return (
         "import http.server, subprocess, sys\n"
-        "child = subprocess.Popen([sys.executable, '-c', "
+        + STARTUP_AFTER_IMPORT
+        + "child = subprocess.Popen([sys.executable, '-c', "
         "'import time; time.sleep(120)'])\n"
         f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
-        f"srv = http.server.HTTPServer(('127.0.0.1', {port}), "
-        "http.server.SimpleHTTPRequestHandler)\n"
-        f"print('READY {port}', flush=True)\n"
-        "srv.serve_forever()\n"
+        + _http_server_construct_snippet(port, "http.server.SimpleHTTPRequestHandler")
+        + "srv.serve_forever()\n"
     )
 
 
@@ -924,3 +951,115 @@ def test_windows_cleanup_kills_whole_tree(tmp_path, monkeypatch):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+
+
+# --- Round-6 follow-up (2026-11-07): macOS startup-step diagnostics ---
+
+
+def _raw_socket_after_import_script(port):
+    """Discriminating probe for the macOS CI failures: import
+    http.server, then bind and listen a plain raw socket (the exact
+    steps the passing raw-socket test uses, without the import).
+    On macOS CI 0.9.6 every http.server child stalled at or after
+    the HTTPServer constructor while a raw socket bound and listened
+    fine — but that raw test never imported http.server, so the two
+    observations do not separate 'the import poisons the process'
+    from 'the HTTPServer constructor itself blocks'. This probe
+    does: it passes on macOS only if a raw bind/listen still works
+    after the import (blocker inside the HTTPServer constructor);
+    it fails with 'after-import' printed but no 'raw-listening' if
+    the import breaks bind/listen; it fails with neither marker if
+    the import itself stalls (which CI 0.9.6 already contradicts:
+    the log-heavy child printed its 2000 lines, which come after
+    the import). A failure here is diagnostic, not a product
+    regression — it names the step, which is the whole point."""
+    return (
+        "import http.server, socket\n"
+        "print('STARTUP after-import', flush=True)\n"
+        f"s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)\n"
+        f"s.bind(('127.0.0.1', {port})); s.listen(1)\n"
+        "print('STARTUP raw-listening', flush=True)\n"
+        "while True:\n"
+        "    conn, _ = s.accept()\n"
+        "    conn.close()\n"
+    )
+
+
+def test_startup_markers_appear_in_order(tmp_path):
+    """The test servers report each startup step with a flushed
+    STARTUP marker — after the import, after the HTTPServer socket
+    is created, after bind, after listen — so the next macOS CI
+    failure names the exact step it stuck on instead of repeating
+    'stuck before listen' (CI 0.9.6: 11 tests, process alive, empty
+    stderr, READY never printed)."""
+    port = free_port()
+    proc, err_file, out_file = _start_server(tmp_path, "marked.py", http_server_script(port))
+    try:
+        assert _wait_port_open(port), (
+            f"server on {port} never listened ({_server_detail(proc, err_file, out_file)})"
+        )
+        out = out_file.read_text(encoding="utf-8", errors="replace")
+        markers = [
+            "STARTUP after-import",
+            "STARTUP socket-created",
+            "STARTUP bound",
+            "STARTUP listening",
+            f"READY {port}",
+        ]
+        positions = [out.index(marker) for marker in markers]
+        assert positions == sorted(positions), f"markers out of order in: {out!r}"
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_server_detail_names_last_startup_step(tmp_path):
+    """_server_detail must name the last STARTUP marker a stuck
+    server reached, as its own field: the stdout tail is only the
+    last 2 lines, so the stuck step should not depend on nothing
+    printing after the markers — without it a server stuck after
+    bind reports only 'never printed READY'."""
+    port = free_port()
+    proc, err_file, out_file = _start_server(
+        tmp_path,
+        "stuck-mid-startup.py",
+        "import http.server\n"
+        "print('STARTUP after-import', flush=True)\n"
+        "print('STARTUP socket-created', flush=True)\n"
+        "import time; time.sleep(30)\n",
+    )
+    try:
+        assert not _wait_port_open(port, timeout=5)
+        detail = _server_detail(proc, err_file, out_file)
+        assert "still alive" in detail
+        assert "never printed READY" in detail
+        assert "last startup step: STARTUP socket-created" in detail
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_raw_socket_listens_after_http_server_import(tmp_path):
+    """Probe (see _raw_socket_after_import_script): a raw socket
+    must bind and listen after importing http.server. Passes on
+    Linux; on macOS CI its outcome separates the two remaining
+    suspects for the 0.9.6 failures — pass means the blocker is
+    inside the HTTPServer constructor, fail-after-import means the
+    import breaks bind/listen."""
+    port = free_port()
+    proc, err_file, out_file = _start_server(
+        tmp_path, "probe.py", _raw_socket_after_import_script(port)
+    )
+    try:
+        assert _wait_port_open(port), (
+            f"server on {port} never listened ({_server_detail(proc, err_file, out_file)})"
+        )
+        out = out_file.read_text(encoding="utf-8", errors="replace")
+        assert "STARTUP after-import" in out
+        assert "STARTUP raw-listening" in out
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait(timeout=10)
