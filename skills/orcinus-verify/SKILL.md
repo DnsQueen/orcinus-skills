@@ -89,7 +89,7 @@ End every verification response with the verdict block below, as the last thing 
 Known limit: the validator checks that a bundle is complete and self-consistent, and since v6 that every check in a PASS bundle was recorded by `record_check.py` with a binding hash the validator recomputes. It cannot prove the commands really ran as claimed: a local writer can run the wrapper on a lying command (`record_check.py -- true`, or a script printing fake output and exiting 0) and file the genuine capture. What recording buys is that fabrication now requires deliberately invoking the wrapper on a fake command; accidental inconsistency and capture reuse across trees are caught mechanically. The bundle is tamper-evident recording, not proof of execution. Harness-executed evidence — the harness itself running the commands and writing the bundle, instead of trusting the agent's report — is still not built and is not claimed here.
 
 ```verdict
-{"verdict": "PASS", "checks": {"build": "PASS", "lint": "PASS", "typecheck": "PASS", "test": "PASS"}, "file": null, "finding": "7 tests pass"}
+{"verdict": "PASS", "checks": {"build": "PASS", "lint": "PASS", "typecheck": "PASS", "test": "PASS"}, "file": null, "finding": "8 tests pass"}
 ```
 
 ## Evidence bundle

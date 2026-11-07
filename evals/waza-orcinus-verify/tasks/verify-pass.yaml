@@ -2,7 +2,7 @@ id: verify-pass
 name: "A passing slice verifies PASS"
 description: |
   The weekly-summary slice in the demo passes build, lint, typecheck, and
-  all 7 tests. orcinus-verify must return verdict PASS with the evidence.
+  all 8 tests. orcinus-verify must return verdict PASS with the evidence.
 tags:
   - verify
   - pass
