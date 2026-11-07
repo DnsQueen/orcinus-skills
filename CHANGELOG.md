@@ -3,6 +3,55 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.4] — 2026-11-07
+
+The sixth review round (three independent reviewers on 0.9.3):
+every confirmed bug is fixed here, each with a red-first
+regression test, and the first CI run on the new code surfaced two
+further fixes (mypy, Windows install) that ship in this version
+too. No new skills; the 36-skill system stays whole.
+
+### Fixed
+
+- Migration safety: SQL injection in the migration generator
+  (parameterised identifiers), the `tablez` schema typo, the
+  zero-downtime data-loss bug (a backfilled value was reverted by
+  the migration), and the index-validation query that used MySQL's
+  `information_schema.statistics` instead of PostgreSQL's.
+- Validator: artifact paths can no longer escape the bundle,
+  `red_check` fails first on a failing gate, graders are
+  programmatic instead of keyword-matching, and vacuous witnesses
+  are rejected.
+- Secret scanning: the allowlist regex no longer misses real
+  secrets or flags `sk-` false positives; skill packaging no
+  longer includes `.env` files or follows symlinks out of the
+  bundle; the accessibility gate no longer passes silently on
+  missing input; the capture lock race is closed; the doctor gates
+  the waza binary by hash instead of running whatever sits in
+  `/tmp`.
+- Verifier: evidence is checked against the bundle instead of
+  trusted, test names must exist, empty witnesses are rejected,
+  and the verdict block is compared programmatically.
+- Router: the `fa` locale no longer falls through to French, the
+  state schema is enforced, and the router eval is runnable.
+- Evaluation: fixtures are runnable, graders reject invalid
+  verdict blocks, and unproven claims are labelled unproven.
+- Scripts, security, CI: `with_server` readiness, `verify.sh`
+  false passes, the MCP builder, Python 3.10 removal, the demo CI
+  jobs, CodeQL, Dependabot, and CODEOWNERS.
+- `quick_validate`: the ORCINUS frontmatter field
+  `user-invocable` is accepted again (it rejected 35 of 36
+  skills).
+- CI: `mypy` failed with `import-not-found` for `tomli` in
+  `scripts/clean_copy_check.py` — the fallback import for Python
+  < 3.11, which no supported Python needs since 3.10 was dropped
+  (round 6, 2-S7). The fallback is removed; `tomllib` from the
+  standard library is used directly.
+- CI: the Windows job failed because `tzdata` — a Windows-only
+  dependency of `psycopg[binary]` — was not pinned, so `pip
+  install --require-hashes` rejected it. It is now pinned with
+  hashes in `requirements-ci.in` and `requirements-ci.txt`.
+
 ## [0.9.3] — 2026-11-07
 
 Follow-up to the unreleased 0.9.2: the 0.9.2 tree was pushed to main

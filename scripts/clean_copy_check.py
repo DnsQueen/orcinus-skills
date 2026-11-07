@@ -80,12 +80,12 @@ def _mypy_scope():
     [tool.mypy] files in pyproject.toml (round 6, S8). mypy reads
     the same list natively, and CI passes no paths at all — the list
     used to be hand-copied in three places. tomllib is stdlib on
-    3.11+, the lowest version this repo supports; tomli is the
-    fallback for an older local Python."""
-    try:
-        import tomllib
-    except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
-        import tomli as tomllib
+    3.11+, the lowest version this repo supports; the tomli fallback
+    for older Pythons was removed with the Python 3.10 drop (round
+    6, 2-S7), because no supported Python needs the shim — and
+    keeping the import broke mypy on 3.11+, where tomli is not
+    installed (CI run 42384742442)."""
+    import tomllib
 
     with open(ROOT / "pyproject.toml", "rb") as f:
         data = tomllib.load(f)

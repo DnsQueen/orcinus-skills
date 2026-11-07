@@ -9,6 +9,12 @@ ruff==0.17.4
 pyyaml==6.0.1
 mypy==1.18.2
 psycopg[binary]==3.3.8
+# tzdata is psycopg[binary]'s dependency on Windows only
+# (sys_platform == "win32"), so a plain `pip-compile` on Linux
+# omits it — and then the Windows CI job resolves it unpinned,
+# which --require-hashes rejects (run 42384742442). Pin it
+# explicitly so every supported platform installs from hashes.
+tzdata==2026.6
 # tomli and exceptiongroup were pinned here explicitly because they
 # are conditional dependencies on Python < 3.11 only (tomli for
 # mypy, exceptiongroup for pytest) and a plain `pip-compile` on

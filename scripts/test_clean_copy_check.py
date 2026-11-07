@@ -278,6 +278,11 @@ def test_ci_requirements_are_hashed():
         "pyyaml": "6.0.1",
         "mypy": "1.18.2",
         "psycopg": "3.3.8",
+        # tzdata is psycopg[binary]'s dependency on Windows only,
+        # pinned here because a plain `pip-compile` on Linux omits
+        # it and then the Windows CI job resolves it unpinned (run
+        # 42384742442).
+        "tzdata": "2026.6",
         # tomli and exceptiongroup were < 3.11 shims, pinned here
         # only because the 3.10 CI job resolved them unpinned (runs
         # 42298838900, 42300115306). Both pins were removed
