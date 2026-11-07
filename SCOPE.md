@@ -100,10 +100,14 @@ and the persistent project state spec (`docs/project-state.md`,
 AWAITING_APPROVAL / RELEASE_READY, VERIFIED bound to evidence for a
 specific content digest, approval bound to a specific content
 digest/artifact).
-What is still v1.1 is the *enforcement* itself: a policy evaluator
-that refuses a transition the evidence does not support, session
-isolation for the verifier, and a tamper-proof state file. The specs
-above define what that layer must enforce; they do not enforce it.
+What is still v1.1 is the *tamper-proof* layer: a policy evaluator
+backed by the verifier's signature, session isolation for the
+verifier, and a tamper-proof state file. The specs above define
+what that layer must enforce; a local check already enforces the
+state machine's own rules (scripts/state.py refuses a transition
+the evidence does not support — round 7), but it is not the
+tamper-proof layer: anyone with write access can still edit the
+state file, and the next validate only detects the edit.
 Harness-executed evidence (the harness, not the LLM, running the
 commands and writing the bundle — reviewer 2's 2-V8/Rec2) is 0.10
 scope, not v1.1: the validator proves a bundle is complete and

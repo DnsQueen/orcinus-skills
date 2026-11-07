@@ -1,9 +1,11 @@
 # Persistent project state — `.orcinus/state.json`
 
 Date: 2026-11-06
-Status: spec (v0.9.1). The router reads and writes this file; the
-enforcement layer that would make it tamper-proof is v1.1 (see
-SCOPE.md). This spec defines the file so the router, the verifier,
+Status: spec (v0.9.1), enforced locally by scripts/state.py since
+round 7. Nothing else reads or writes this file: the router does
+not — no code path calls the state machine, so there is no router
+integration to claim. The enforcement layer that would make it
+tamper-proof is v1.1 (see SCOPE.md). This spec defines the file so the router, the verifier,
 and the human all agree on what "verified" means. v0.9.1 fixes the
 v0.9 self-contradiction: VERIFIED is bound to the *content digest*,
 not to the commit SHA (see Rule 2 and "The content digest").
@@ -22,8 +24,12 @@ and an evidence bundle.
 
 `.orcinus/state.json` in the project root. It is committed with the
 project (it is the project's own record, not the agent's). It is
-never written by hand — the router and the verifier update it, and
-the human approves transitions that need approval.
+updated through scripts/state.py (run by the agent or the human),
+which enforces the transition rules and recomputes the content
+digest; the human approves transitions that need approval. It is
+never written by hand in the normal flow — but anyone with write
+access still can (Rule 4), and the next `validate` detects a
+hand-edited digest by recomputation.
 
 ```json
 {
@@ -77,8 +83,11 @@ trees v1 and v2 agree byte for byte, so nothing already recorded
 there changes.
 
 Reference implementation: `scripts/content_digest.py` (standard
-library only; `python3 scripts/content_digest.py [repo] [rev]`).
-Its docstring states the same algorithm — keep the two in agreement.
+library only; `python3 scripts/content_digest.py [repo] [--rev REV]`,
+`[repo] [rev]` also works). Its docstring states the same algorithm
+— keep the two in agreement. scripts/state.py imports it and
+recomputes the digest on every transition and validate: the digest
+is never a caller-supplied value.
 
 The digest covers committed content only: a dirty working tree is
 never VERIFIED, because the digest would not describe what was
@@ -113,7 +122,8 @@ verified. Record VERIFIED only when the tree is clean.
 1. **VERIFIED is bound to a content digest and an evidence bundle.** A
    state file that says VERIFIED without an `evidence_bundle` that
    validates (see `skills/orcinus-verify/scripts/validate_evidence.py`) is corrupt, not
-   verified.
+   verified. scripts/state.py enforces this: VERIFIED requires a
+   bundle that exists and validates with verdict PASS.
 2. **A content change resets the stage.** When the content digest
    changes, the stage goes back to BUILDING. A commit that leaves the
    digest unchanged — for example a commit that only records the
@@ -129,16 +139,18 @@ verified. Record VERIFIED only when the tree is clean.
    (v1.1, in SCOPE.md) would make transitions checkable — the
    verifier's signature, the evidence bundle's hash, the approval's
    binding. Until then, the state file is a record the human can
-   audit, not a lock.
+   audit, not a lock. Hand-editing is still possible — but the next
+   `validate` detects an edited digest, because the stored value is
+   compared with the digest recomputed from the revision's tree.
 
 ## Schema and transitions
 
 The machine-readable form of this spec is `scripts/state_schema.json`,
 enforced by `scripts/state.py` (standard library only):
 
-- `python3 scripts/state.py validate <state.json>` — checks the file against the schema (exit 0 when valid).
-- `python3 scripts/state.py transition <state.json> --to <stage> --revision <sha> --digest sha256:<hex> [--evidence <bundle>] [--note <text>]` — moves the file to a new stage, appending one history entry.
+- `python3 scripts/state.py validate <state.json> [--repo <repo>]` — checks the file against the schema and recomputes the stored digest from the state's revision (exit 0 when valid).
+- `python3 scripts/state.py transition <state.json> --to <stage> --revision <sha> [--expect-digest sha256:<hex>] [--evidence <bundle>] [--note <text>] [--repo <repo>]` — moves the file to a new stage, appending one history entry. The digest is recomputed from the revision's tree; there is no `--digest` flag anymore (a caller-supplied digest was trusted input — round 7, F-07). `--expect-digest` only asserts against the recomputed digest and is never stored.
 
-Allowed transitions: BUILDING → VERIFYING → BLOCKED / VERIFIED → AWAITING_APPROVAL → RELEASE_READY; any stage returns to BUILDING on rework, and a content-digest change forces BUILDING from any stage (Rule 2). VERIFIED requires an evidence bundle; RELEASE_READY requires an approval bound to the same content digest. A transition from an invalid state, or to a stage the table does not allow, is refused.
+Allowed transitions: BUILDING → VERIFYING → BLOCKED / VERIFIED → AWAITING_APPROVAL → RELEASE_READY; any stage returns to BUILDING on rework, and a content-digest change forces BUILDING from any stage (Rule 2). VERIFIED requires an evidence bundle that exists and validates with verdict PASS — the `--evidence` flag, or the stored value when it names an existing validating file (a stale stored path never silently satisfies the gate; the flag is required only when the stored value is absent or blank). VERIFIED and RELEASE_READY refuse on a dirty tree at HEAD (the digest describes committed content only). RELEASE_READY requires an approval bound to the recomputed content digest. A transition from an invalid state, or to a stage the table does not allow, is refused.
 
-This is a local check, not the v1.1 enforcement layer (Rule 4): it refuses an impossible transition instead of silently recording it, but anyone with write access can still edit the file.
+This is a local check, not the v1.1 enforcement layer (Rule 4): it refuses an impossible transition instead of silently recording it, but anyone with write access can still edit the file — and the next `validate` detects an edited digest by recomputation.
