@@ -70,6 +70,11 @@ def test_normal_flow_and_server_is_stopped(tmp_path):
     port = free_port()
     server = tmp_path / "server.py"
     server.write_text(http_server_script(port), encoding="utf-8")
+    # Startup waits are 30s throughout these tests — the tool's own
+    # default. 15s failed on the slower macOS CI runner (CI 0.9.4,
+    # macos job: 8 tests, 'failed to start within 15s'). The short
+    # timeouts below (6s, 20s) are deliberate: they test failure
+    # paths, where a short wait is the point.
     rc, out, err = run_with_server(
         f"{sys.executable} {server}",
         port,
@@ -78,7 +83,7 @@ def test_normal_flow_and_server_is_stopped(tmp_path):
             "-c",
             f"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:{port}/').status)",
         ],
-        timeout=15,
+        timeout=30,
     )
     assert rc == 0, err
     assert "200" in out
@@ -97,7 +102,7 @@ def test_log_heavy_server_does_not_block(tmp_path):
     # 2000 lines x ~70 bytes = ~140KB, well over the 64KB pipe buffer.
     server.write_text(http_server_script(port, log_lines=2000), encoding="utf-8")
     rc, out, err = run_with_server(
-        f"{sys.executable} {server}", port, [sys.executable, "-c", "print('test done')"], timeout=15
+        f"{sys.executable} {server}", port, [sys.executable, "-c", "print('test done')"], timeout=30
     )
     assert rc == 0, err
     assert "test done" in out
@@ -122,7 +127,7 @@ def test_ready_path_rejects_a_non_http_service(tmp_path):
     # Without --ready-path the port check alone says ready (and the
     # command runs). That is the documented limitation of the port check.
     rc, out, err = run_with_server(
-        f"{sys.executable} {raw}", port, [sys.executable, "-c", "print('ran')"], timeout=10
+        f"{sys.executable} {raw}", port, [sys.executable, "-c", "print('ran')"], timeout=30
     )
     assert rc == 0, err
     assert "ran" in out
@@ -165,7 +170,7 @@ def test_test_command_timeout(tmp_path):
         f"{sys.executable} {server}",
         port,
         [sys.executable, "-c", "import time; time.sleep(60)"],
-        timeout=15,
+        timeout=30,
         extra=["--test-timeout", "3"],
     )
     elapsed = time.time() - start
@@ -237,19 +242,48 @@ def _status_server_script(port, status, healthy_path=None):
 
 
 def _start_server(tmp_path, name, code):
-    """Start a server script as a subprocess; wait until its port
-    accepts a connection. Returns (proc, port-freeing cleanup)."""
+    """Start a server script as a subprocess. Returns (proc,
+    err_file): the server's stderr goes to err_file, not DEVNULL —
+    a server that crashes on startup used to be indistinguishable
+    from a slow one, because its traceback was discarded (which is
+    what the macOS CI failures looked like: 'never listened' with
+    no server output anywhere in the log)."""
     script = tmp_path / name
     script.write_text(code, encoding="utf-8")
-    proc = subprocess.Popen(
-        [sys.executable, str(script)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return proc
+    err_file = tmp_path / (name + ".stderr")
+    with open(err_file, "w", encoding="utf-8") as err_handle:
+        proc = subprocess.Popen(
+            [sys.executable, str(script)],
+            stdout=subprocess.DEVNULL,
+            stderr=err_handle,
+        )
+    return proc, err_file
 
 
-def _wait_port_open(port, timeout=10):
+def _server_detail(proc, err_file):
+    """One line on why a server never listened: whether the process
+    is still alive or exited (with its code), plus the tail of its
+    stderr. A crash and a slow start must not look the same."""
+    if proc.poll() is None:
+        state = "process still alive"
+    else:
+        state = f"process exited with code {proc.returncode}"
+    try:
+        err = err_file.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        err = ""
+    tail = [line for line in err.strip().splitlines() if line.strip()][-3:]
+    if tail:
+        state += "; stderr: " + " | ".join(tail)
+    return state
+
+
+def _wait_port_open(port, timeout=30):
+    """Wait until the port accepts a connection. 30s, not 10s: the
+    tool's own startup default is 30s, and a 10s budget failed on
+    the slower macOS CI runner even though the same servers start
+    in ~1s on Linux (CI 0.9.4, macos job: 8 tests, 'never
+    listened' / 'failed to start within 15s')."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         if port_is_open(port):
@@ -271,9 +305,13 @@ def test_http_ready_requires_2xx(tmp_path):
         (503, False),
     ):
         port = free_port()
-        proc = _start_server(tmp_path, f"s{status}.py", _status_server_script(port, status))
+        proc, err_file = _start_server(
+            tmp_path, f"s{status}.py", _status_server_script(port, status)
+        )
         try:
-            assert _wait_port_open(port), f"server on {port} never listened"
+            assert _wait_port_open(port), (
+                f"server on {port} never listened ({_server_detail(proc, err_file)})"
+            )
             assert with_server._http_ready(port, "/health") is expected, f"status {status}"
         finally:
             proc.terminate()
@@ -285,9 +323,11 @@ def test_ready_status_range_is_configurable(tmp_path):
     whose health endpoint answers 503 while warming up can say so
     explicitly instead of the gate silently accepting every status."""
     port = free_port()
-    proc = _start_server(tmp_path, "s503.py", _status_server_script(port, 503))
+    proc, err_file = _start_server(tmp_path, "s503.py", _status_server_script(port, 503))
     try:
-        assert _wait_port_open(port)
+        assert _wait_port_open(port), (
+            f"server on {port} never listened ({_server_detail(proc, err_file)})"
+        )
         assert with_server._http_ready(port, "/health", ok_statuses={503}) is True
         assert with_server._http_ready(port, "/health", ok_statuses={200}) is False
         assert with_server._parse_ready_status("2xx") == set(range(200, 300))
@@ -304,12 +344,14 @@ def test_busy_port_is_rejected_before_starting(tmp_path):
     The run must fail before starting, and the test command must
     never run against the wrong service."""
     port = free_port()
-    proc = _start_server(
+    proc, err_file = _start_server(
         tmp_path, "other.py", _status_server_script(port, 503, healthy_path="/health")
     )
     marker = tmp_path / "ran.txt"
     try:
-        assert _wait_port_open(port)
+        assert _wait_port_open(port), (
+            f"server on {port} never listened ({_server_detail(proc, err_file)})"
+        )
         rc, out, err = run_with_server(
             "sleep 10",
             port,
@@ -352,7 +394,7 @@ def test_ready_path_is_repeatable_per_server(tmp_path):
             "--port",
             str(port_b),
             "--timeout",
-            "15",
+            "30",
             "--ready-path",
             "/health-a",
             "--ready-path",
@@ -452,7 +494,7 @@ def test_sigterm_ignoring_child_does_not_survive_cleanup(tmp_path):
         f"{sys.executable} {server}",
         port,
         [sys.executable, "-c", "print('ran')"],
-        timeout=15,
+        timeout=30,
     )
     assert rc == 0, err
     assert "ran" in out
@@ -473,3 +515,23 @@ def test_sigterm_ignoring_child_does_not_survive_cleanup(tmp_path):
             os.kill(child_pid, 9)
         except OSError:
             pass
+
+
+def test_crashing_server_reports_its_stderr(tmp_path):
+    """A server that crashes on startup must say so in the failure:
+    _start_server used to discard the server's stderr, so a crash
+    looked exactly like a slow start ('never listened') and the cause
+    was invisible — which is what the macOS CI failures looked like
+    (8 tests, 'server failed to start within 15s', no server output
+    anywhere in the log)."""
+    port = free_port()
+    proc, err_file = _start_server(tmp_path, "crash.py", "raise RuntimeError('boom')\n")
+    try:
+        assert not _wait_port_open(port, timeout=5)
+        detail = _server_detail(proc, err_file)
+        assert "exited" in detail
+        assert "boom" in detail
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait(timeout=10)

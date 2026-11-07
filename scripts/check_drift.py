@@ -98,6 +98,16 @@ EXCLUDED_SUFFIXES = (".pyc",)
 EXCLUDED_DIRS = {"__pycache__"}
 
 
+def _manifest_key(rel: Path) -> str:
+    """Manifest keys are always forward-slash (posix) paths. The
+    manifest is recorded on Linux, and str() of a relative path
+    uses the OS separator — backslashes on Windows — so a Windows
+    build produced keys that never matched the manifest and every
+    vendored file was reported 'unrecorded' (CI 0.9.4, windows job:
+    130 unrecorded)."""
+    return rel.as_posix()
+
+
 def _is_vendored(path: Path) -> bool:
     rel = path.relative_to(ROOT)
     parts = rel.parts
@@ -130,7 +140,7 @@ def build_manifest() -> dict:
             continue
         for path in sorted(skill_dir.rglob("*")):
             if path.is_file() and _is_vendored(path):
-                manifest[str(path.relative_to(ROOT))] = _sha256(path)
+                manifest[_manifest_key(path.relative_to(ROOT))] = _sha256(path)
     for root_dir in ("agents", "commands"):
         dir_path = ROOT / root_dir
         if not dir_path.is_dir():
@@ -138,7 +148,7 @@ def build_manifest() -> dict:
         for path in sorted(dir_path.rglob("*")):
             if not path.is_file():
                 continue
-            rel = str(path.relative_to(ROOT))
+            rel = _manifest_key(path.relative_to(ROOT))
             if rel in ORCINUS_ROOT_FILES:
                 continue
             manifest[rel] = _sha256(path)

@@ -126,3 +126,34 @@ def test_manifest_unchanged_on_real_repo():
     committed = json.loads((REPO / "scripts" / "drift-manifest.json").read_text())
     assert manifest == committed
     assert len(manifest) == 130
+
+
+def test_manifest_keys_are_posix_for_windows_paths():
+    """Manifest keys are forward-slash paths: on Windows, str() of
+    a relative path uses backslashes, so a Windows build produced
+    keys that never matched the recorded manifest and every vendored
+    file was reported 'unrecorded' (CI 0.9.4, windows job: 130
+    unrecorded, all of them)."""
+    from pathlib import PureWindowsPath
+
+    assert cd._manifest_key(PureWindowsPath("skills") / "a" / "b.md") == "skills/a/b.md"
+    assert cd._manifest_key(PureWindowsPath("agents") / "x.md") == "agents/x.md"
+
+
+def test_gitattributes_forces_lf_line_endings():
+    """The repo must check out LF on every platform: with no
+    .gitattributes, a Windows checkout converts LF to CRLF, so every
+    text file's bytes differ from the recorded hash and the drift
+    check reports them all 'drifted' (CI 0.9.4, windows job: 129
+    drifted — every file with a newline; the one survivor was the
+    empty __init__.py, which has no line endings to convert).
+    .gitattributes with eol=lf makes checkouts byte-identical."""
+    attrs = (REPO / ".gitattributes").read_text(encoding="utf-8")
+    rules = [
+        line.split()
+        for line in attrs.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    assert any(parts[0] == "*" and "eol=lf" in parts[1:] for parts in rules), (
+        ".gitattributes must force LF checkouts (a '*' rule with eol=lf)"
+    )

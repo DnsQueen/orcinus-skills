@@ -1,0 +1,9 @@
+# Line endings: LF on every platform. The drift check hashes file
+# bytes against a manifest recorded on Linux; with no rule here, a
+# Windows checkout converts LF to CRLF, so every text file's bytes
+# differ and the check reports them all 'drifted' (CI 0.9.4, windows
+# job: 129 drifted — every file with a newline; the one survivor was
+# the empty __init__.py, which has no line endings to convert).
+# text=auto only applies to files git detects as text, so binary
+# files are unaffected.
+* text=auto eol=lf

@@ -3,6 +3,29 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.5] — 2026-11-07
+
+Follow-up to the unreleased 0.9.4: the first CI run on 0.9.4 failed
+on two jobs (macOS, Windows), and the fixes below change shipped
+files, so the releasable version moves to 0.9.5 (the version-bump
+gate requires an increase whenever shipped content changes).
+
+### Fixed
+
+- CI: the Windows job reported all 130 vendored files 'unrecorded'
+  and 129 'drifted'. Two causes: `build_manifest()` in
+  `scripts/check_drift.py` built manifest keys with `str()`, which
+  uses backslashes on Windows and never matched the forward-slash
+  recorded manifest — keys are now normalised with `as_posix()` —
+  and, with no `.gitattributes`, a Windows checkout converts LF to
+  CRLF, so every text file's bytes differed from the recorded hash.
+  The repo now forces LF checkouts (`* text=auto eol=lf`).
+- CI: the macOS job failed 8 `with_server` tests — the test server
+  never became ready within 15s. The startup waits in the tests
+  are now 30s, the tool's own default, and a server that crashes on
+  startup now reports its stderr instead of looking like a slow
+  start ('never listened' with no clue why).
+
 ## [0.9.4] — 2026-11-07
 
 The sixth review round (three independent reviewers on 0.9.3):
