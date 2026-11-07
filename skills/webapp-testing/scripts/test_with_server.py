@@ -59,64 +59,73 @@ STARTUP_AFTER_IMPORT = "print('STARTUP after-import', flush=True)\n"
 
 
 def _http_server_construct_snippet(port, handler_expr):
-    """Build an HTTPServer step by step, printing a flushed marker
-    after each step. Constructing with bind_and_activate=False and
-    calling server_bind() / server_activate() explicitly is the
-    same sequence the constructor runs; splitting it only names
-    the step a stalled server reached. On macOS CI 0.9.6 every
-    http.server child stalled with no output and READY never
-    printed — but the log-heavy child printed its 2000 lines,
-    which come after the import, so the import is exonerated and
-    the stall is at or after this constructor call. The markers
-    say which step: socket-created, bound, or listening.
+    """Build a LoopbackHTTPServer step by step, printing a flushed
+    marker after each step. Constructing with
+    bind_and_activate=False and calling server_bind() /
+    server_activate() explicitly is the same sequence the
+    constructor runs; splitting it only names the step a stalled
+    server reached. On macOS CI 0.9.6 every http.server child
+    stalled with no output and READY never printed — but the
+    log-heavy child printed its 2000 lines, which come after the
+    import, so the import is exonerated and the stall is at or
+    after this constructor call. The markers say which step:
+    socket-created, bound, or listening.
 
-    Since CI 0.9.7 the markers prove the stall is INSIDE
+    Since CI 0.9.7 the markers proved the stall is INSIDE
     server_bind() (socket-created printed, bound never reached),
-    so server_bind() itself is inlined here step by step instead
-    of called whole: the steps mirror socketserver.TCPServer.
-    server_bind (CPython 3.12, socketserver.py:463-475) — the two
-    guarded setsockopt calls, socket.bind(), getsockname() — each
-    followed by a flushed marker. The HTTPServer.server_bind
-    override's final step is deliberately NOT reproduced:
-    socket.getfqdn(host) does a reverse DNS lookup via
-    gethostbyaddr('127.0.0.1') (socket.py:781-805), and
-    gethostbyaddr has no timeout, so a hanging resolver stalls
-    exactly there while a raw socket binds fine. That was the
-    prime suspect by elimination (verified locally with a blocked
-    gethostbyaddr: the child hangs after getsockname, a raw socket
-    binds, and skipping getfqdn reaches READY), and on macOS CI
-    0.9.7 it stalled all 12 with_server tests — so the snippet
-    sets server_name from the literal bound address ('127.0.0.1')
-    instead of the reverse lookup, and there is no getfqdn marker:
-    markers name steps that actually run. WHY the macOS 26
-    runner's resolver hangs is still unproven; the fix removes
-    the resolver dependency, it does not prove the resolver was
-    at fault. Nothing depends on server_name being the FQDN:
-    BaseHTTPRequestHandler.address_string returns the raw client
-    IP, and readiness is an HTTP GET expecting a 2xx status. If a
-    future CI failure still stalls here, its last marker names the
-    exact step (setsockopt / socket-bound / getsockname) instead
-    of just 'inside server_bind()'."""
+    and the step inside it is HTTPServer.server_bind's
+    socket.getfqdn(host) — a reverse DNS lookup via
+    gethostbyaddr('127.0.0.1') (socket.py:781-805) with no
+    timeout, so a hanging resolver stalls exactly there while a
+    raw socket binds fine. WHY the macOS 26 runner's resolver
+    hangs is still unproven; the fix removes the resolver
+    dependency, it does not prove the resolver was at fault.
+
+    The fix is a LoopbackHTTPServer subclass, defined in the
+    generated child script itself (the snippet is a string
+    executed as a script file, so the class definition must
+    travel with it — and every fixture builder calls this one
+    function, so this is the single change point). It overrides
+    server_bind to call socketserver.TCPServer.server_bind and
+    set server_name/server_port from the literal bound address
+    ('127.0.0.1') instead of the reverse lookup. This is the
+    shape ikamensh/kodo (commit 1933f9a) and pywbem/pywbem
+    (commit 9ee28e6) used for the identical stall on GitHub
+    Actions macOS — it keeps the stdlib call structure instead
+    of re-implementing the bind steps inline. The finer-grained
+    per-step markers from the Track 1 diagnostics (setsockopt /
+    socket-bound / getsockname / getfqdn) are removed: they
+    served their purpose once the step was identified, and the
+    subclass calls TCPServer.server_bind as one call, so
+    per-step markers no longer fit. The marker sequence is
+    back to the 0.9.7 one: after-import, socket-created, bound,
+    listening, READY. Nothing depends on server_name being the
+    FQDN: BaseHTTPRequestHandler.address_string returns the raw
+    client IP, and readiness is an HTTP GET expecting a 2xx
+    status. The fixture still serves real HTTP via a real
+    HTTPServer, so the tool's readiness path is exercised
+    unchanged. No sitecustomize.py getfqdn monkeypatch: the
+    subclass is sufficient, since the fixture controls the
+    server class directly."""
     return (
-        f"srv = http.server.HTTPServer(('127.0.0.1', {port}), {handler_expr}, "
+        "import socketserver\n"
+        "\n"
+        "class LoopbackHTTPServer(http.server.HTTPServer):\n"
+        '    """An HTTPServer for 127.0.0.1 that never resolves its own hostname.\n'
+        "\n"
+        "    HTTPServer.server_bind calls socket.getfqdn(), a reverse DNS lookup\n"
+        "    that stalls on hosts without working reverse DNS (e.g. macOS CI\n"
+        "    runners) before the server can accept a single request.\n"
+        '    """\n'
+        "\n"
+        "    def server_bind(self) -> None:\n"
+        "        socketserver.TCPServer.server_bind(self)\n"
+        "        self.server_name, self.server_port = self.server_address[:2]\n"
+        "\n"
+        f"srv = LoopbackHTTPServer(('127.0.0.1', {port}), {handler_expr}, "
         "bind_and_activate=False)\n"
         "print('STARTUP socket-created', flush=True)\n"
-        "import socket as _socket\n"
-        "if srv.allow_reuse_address and hasattr(_socket, 'SO_REUSEADDR'):\n"
-        "    srv.socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)\n"
-        "if srv.allow_reuse_port and hasattr(_socket, 'SO_REUSEPORT'):\n"
-        "    srv.socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEPORT, 1)\n"
-        "print('STARTUP setsockopt', flush=True)\n"
-        "srv.socket.bind(srv.server_address)\n"
-        "print('STARTUP socket-bound', flush=True)\n"
-        "srv.server_address = srv.socket.getsockname()\n"
-        "print('STARTUP getsockname', flush=True)\n"
-        "_host, _port = srv.server_address[:2]\n"
-        "# No getfqdn here: the reverse lookup has no timeout and\n"
-        "# hung the macOS CI 0.9.7 runner's resolver (12 tests).\n"
-        "# server_name is the literal bound address instead.\n"
-        "srv.server_name = _host\n"
-        "srv.server_port = _port\n"
+        "srv.server_bind()\n"
         "print('STARTUP bound', flush=True)\n"
         "srv.server_activate()\n"
         "print('STARTUP listening', flush=True)\n"
@@ -132,7 +141,7 @@ def http_server_script(port, log_lines=0):
     listening: on macOS CI the servers never listened with no
     output anywhere (CI 0.9.5, 8 tests), so the markers are what
     separate 'stuck before listen' from 'listening but the port
-    check fails' — and, since CI 0.9.6, which step inside the
+    check fails' — and, since CI 0.9.6, which step of the
     constructor it stuck on."""
     return (
         "import http.server, sys\n" + STARTUP_AFTER_IMPORT + f"for _ in range({log_lines}):\n"
@@ -1031,17 +1040,17 @@ def _raw_socket_after_import_script(port):
 def test_startup_markers_appear_in_order(tmp_path):
     """The test servers report each startup step with a flushed
     STARTUP marker — after the import, after the HTTPServer socket
-    is created, after each step inside server_bind() (setsockopt,
-    socket bind, getsockname), after bind, after listen — so the
-    next macOS CI failure names the exact step it stuck on
-    instead of repeating 'stuck before listen' (CI 0.9.6: 11 tests,
-    process alive, empty stderr, READY never printed) or even
-    'inside server_bind()' (CI 0.9.7: 12 tests, socket-created
-    printed, bound never reached). There is deliberately no
-    getfqdn marker: the fixture skips the reverse DNS lookup
-    (CI 0.9.7 fix — the lookup hung the runner's resolver), so
-    the bind steps end at getsockname; see
-    _http_server_construct_snippet."""
+    is created, after bind, after listen — so the next macOS CI
+    failure names the step it stuck on instead of repeating
+    'stuck before listen' (CI 0.9.6: 11 tests, process alive,
+    empty stderr, READY never printed) or even 'inside
+    server_bind()' (CI 0.9.7: 12 tests, socket-created printed,
+    bound never reached). The finer-grained per-step markers
+    inside server_bind() (setsockopt / socket-bound / getsockname)
+    were removed once the step was identified: the fixture now
+    binds through a LoopbackHTTPServer subclass that calls
+    TCPServer.server_bind as one call, so per-step markers no
+    longer fit; see _http_server_construct_snippet."""
     port = free_port()
     proc, err_file, out_file = _start_server(tmp_path, "marked.py", http_server_script(port))
     try:
@@ -1052,9 +1061,6 @@ def test_startup_markers_appear_in_order(tmp_path):
         markers = [
             "STARTUP after-import",
             "STARTUP socket-created",
-            "STARTUP setsockopt",
-            "STARTUP socket-bound",
-            "STARTUP getsockname",
             "STARTUP bound",
             "STARTUP listening",
             f"READY {port}",
@@ -1068,24 +1074,23 @@ def test_startup_markers_appear_in_order(tmp_path):
 
 
 def _dns_blocked_server_script(port):
-    """The standard fixture server, but with reverse DNS blocked:
-    socket.gethostbyaddr is patched to sleep 60s before the
-    fixture's server construction runs, modelling a resolver that
-    hangs on the reverse lookup of 127.0.0.1 (the macOS CI 0.9.7
-    failure: 12 tests, every server stuck inside
+    """The standard fixture server, but with reverse DNS made
+    impossible: socket.getfqdn is patched to raise AssertionError
+    before the fixture's server construction runs, modelling a
+    resolver that hangs on the reverse lookup of 127.0.0.1 (the
+    macOS CI 0.9.7 failure: 12 tests, every server stuck inside
     HTTPServer.server_bind, after 'STARTUP socket-created', never
-    reaching 'STARTUP bound'). The patch is on gethostbyaddr, the
-    call socket.getfqdn makes — not on getfqdn itself — so the
-    child exercises the exact stdlib path the fixture used to take.
-    60s is longer than any wait in the test, so a server that still
-    does the lookup cannot reach READY in time."""
+    reaching 'STARTUP bound'). The patch is on getfqdn itself —
+    the call HTTPServer.server_bind makes — so any code path that
+    still does the lookup fails loudly instead of hanging: if
+    getfqdn is never called, a blocked resolver cannot matter.
+    This subsumes Track 2's gethostbyaddr-sleep version of the
+    same test, which only modelled a slow resolver."""
     patch = (
-        "import socket as _blocked_socket, time as _blocked_time\n"
-        "_orig_gethostbyaddr = _blocked_socket.gethostbyaddr\n"
-        "def _blocked_gethostbyaddr(host):\n"
-        "    _blocked_time.sleep(60)\n"
-        "    return _orig_gethostbyaddr(host)\n"
-        "_blocked_socket.gethostbyaddr = _blocked_gethostbyaddr\n"
+        "import socket as _blocked_socket\n"
+        "def _blocked_getfqdn(host=None, *args, **kwargs):\n"
+        "    raise AssertionError('getfqdn must not be called: reverse DNS lookup')\n"
+        "_blocked_socket.getfqdn = _blocked_getfqdn\n"
     )
     script = http_server_script(port)
     head, sep, tail = script.partition(STARTUP_AFTER_IMPORT)
@@ -1099,12 +1104,15 @@ def test_server_starts_when_reverse_dns_hangs(tmp_path):
     cause: every fixture server stalled inside
     HTTPServer.server_bind(), which calls socket.getfqdn(host) — a
     reverse DNS lookup via gethostbyaddr('127.0.0.1') with no
-    timeout. The fix removes that lookup from the fixture's bind
-    (server_name is set from the literal address instead), so a
-    blocked resolver must not delay startup at all: the wait here
-    is 10s, not the tool's 30s, because the point is the server
-    starts promptly despite the blocked resolver, not that it
-    eventually starts."""
+    timeout. The fix is a LoopbackHTTPServer subclass whose
+    server_bind never calls getfqdn (server_name is set from the
+    literal address instead), so a getfqdn patched to raise must
+    not delay startup at all: the wait here is 10s, not the
+    tool's 30s, because the point is the server starts promptly
+    despite the blocked resolver, not that it eventually starts.
+    No HTTP request is made here: the handler's log path calls
+    getfqdn on the client address too, which is unrelated to the
+    bind lookup this test pins."""
     port = free_port()
     proc, err_file, out_file = _start_server(
         tmp_path, "dns-blocked.py", _dns_blocked_server_script(port)
@@ -1115,7 +1123,6 @@ def test_server_starts_when_reverse_dns_hangs(tmp_path):
         )
         out = out_file.read_text(encoding="utf-8", errors="replace")
         assert f"READY {port}" in out
-        assert "STARTUP getfqdn" not in out
     finally:
         if proc.poll() is None:
             proc.terminate()
