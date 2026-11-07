@@ -639,18 +639,33 @@ def check_noop_commands(bundle, problems):
                 problems.append(problem)
 
 
+def _normalise_identity(identity):
+    """One normalisation for both sides of an identity comparison:
+    strip surrounding whitespace and casefold. casefold, not lower:
+    it is the stronger Unicode case-insensitive comparison (for
+    example the German 'ß' casefolds to 'ss', where lower leaves it
+    unchanged), so two spellings of the same identity cannot differ
+    only by case."""
+    return identity.strip().casefold()
+
+
 def check_identities(bundle, problems):
     """The verifier must differ from the implementer: a verifier
     cannot verify their own work (2-V2: reviewer_identity
     "implementer" used to pass — there was no implementer field to
-    compare against at all)."""
+    compare against at all). Both sides are normalised in both
+    comparisons, so case or whitespace cannot defeat the check."""
     reviewer = bundle.get("reviewer_identity")
     implementer = bundle.get("implementer_identity")
-    if isinstance(reviewer, str) and reviewer.strip().lower() == "implementer":
+    if isinstance(reviewer, str) and _normalise_identity(reviewer) == "implementer":
         problems.append(
             "reviewer_identity is 'implementer': the verifier must differ from the implementer"
         )
-    if isinstance(reviewer, str) and isinstance(implementer, str) and reviewer == implementer:
+    if (
+        isinstance(reviewer, str)
+        and isinstance(implementer, str)
+        and _normalise_identity(reviewer) == _normalise_identity(implementer)
+    ):
         problems.append(
             "reviewer_identity is the same as implementer_identity: "
             "the verifier must differ from the implementer"

@@ -1307,3 +1307,32 @@ def test_noop_genuine_fallback_passes():
         b = _good_bundle()
         b["checks"][0]["command"] = cmd
         assert _problems(b) == [], cmd
+
+
+def test_identity_case_or_whitespace_difference_fails():
+    # F-04: reviewer/implementer independence is a comparison of
+    # identities, not of spellings — case and surrounding whitespace
+    # must not defeat it.
+    for reviewer, implementer in [
+        ("Alice", "alice"),
+        ("alice ", "alice"),
+        (" Alice ", "ALICE"),
+        (" IMPLEMENTER ", "someone-else"),
+        ("Implementer", "someone-else"),
+    ]:
+        b = _good_bundle()
+        b["reviewer_identity"] = reviewer
+        b["implementer_identity"] = implementer
+        problems = _problems(b)
+        assert any("differ" in p or "implementer" in p for p in problems), (
+            reviewer,
+            implementer,
+        )
+
+
+def test_identity_genuinely_different_passes():
+    # F-04 control: genuinely different identities still pass.
+    b = _good_bundle()
+    b["reviewer_identity"] = "bob (review session)"
+    b["implementer_identity"] = "alice (author session)"
+    assert _problems(b) == []
