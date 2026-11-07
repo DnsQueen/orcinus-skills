@@ -23,13 +23,17 @@ def _decode_output(raw: bytes) -> str:
     encoding yields NUL-separated garbage (``W\\x00i\\x00n...``) and
     every assertion on it fails unreadably. NUL bytes are the tell:
     decode those as UTF-16LE so a failure caused by invoking the WSL
-    launcher reports a readable message instead.
+    launcher reports a readable message instead. A UTF-16LE BOM
+    (``FF FE``) decodes to a leading U+FEFF, which is not part of
+    the message, so it is stripped.
     """
     if b"\x00" in raw:
         try:
-            return raw.decode("utf-16-le")
+            text = raw.decode("utf-16-le")
         except UnicodeDecodeError:
             pass
+        else:
+            return text[1:] if text.startswith("\ufeff") else text
     return raw.decode("utf-8", errors="replace")
 
 
@@ -41,15 +45,43 @@ def _bash_exe() -> str:
     With no WSL distribution installed it fails with "Windows
     Subsystem for Linux has no installed distributions" instead of
     running the script (that is what broke all six tests on the
-    Windows runner). Git for Windows ships a real bash, so prefer it:
-    via the git install, the usual Program Files locations, or any
-    non-System32 bash on PATH. Only fall back to bare ``bash`` when
-    no usable one was found, so the failure is loud, not a silent
-    WSL error.
+    Windows runner). Git for Windows ships a real bash, so prefer
+    one that can run the script: first a bash on PATH, then via the
+    git install or the usual Program Files locations. Only fall back
+    to bare ``bash`` when no usable one was found, so the failure is
+    loud, not a silent WSL error. PATH is checked first so a stub
+    planted first on PATH wins (that is how the tests fake bash).
+    The PATH scan is PATHEXT-aware, so a ``bash.cmd`` shim is found
+    as well as ``bash.exe`` — but an extensionless ``bash`` is never
+    a candidate: Windows cannot execute it (CreateProcess only
+    tries the exact name and ``.exe``), so it must never be picked.
+    Any System32/SysWOW64 bash.exe is the WSL launcher, not a shell,
+    and is skipped wherever it appears.
     """
     if sys.platform != "win32":
         return "bash"
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    wsl_dirs = {system_root / "System32", system_root / "SysWOW64"}
     candidates: list[Path] = []
+    # PATHEXT is semicolon-separated even when the platform is
+    # stubbed on Linux (os.pathsep is ":" there); split on ";".
+    pathext = [
+        ext.strip().lower()
+        for ext in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(";")
+        if ext.strip()
+    ]
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        for ext in pathext:
+            candidate = Path(entry) / ("bash" + ext)
+            if not candidate.is_file():
+                continue
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved.parent in wsl_dirs:
+                continue  # the WSL launcher, not a shell
+            candidates.append(candidate)
     git = shutil.which("git")
     if git:
         # git.exe lives in <root>\\cmd or <root>\\bin; bash is in <root>\\bin.
@@ -57,19 +89,6 @@ def _bash_exe() -> str:
     for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
         if base:
             candidates.append(Path(base) / "Git" / "bin" / "bash.exe")
-    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
-    wsl_dirs = {system_root / "System32", system_root / "SysWOW64"}
-    for entry in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = Path(entry) / "bash.exe"
-        if not candidate.is_file():
-            continue
-        try:
-            resolved = candidate.resolve()
-        except OSError:
-            continue
-        if resolved.parent in wsl_dirs:
-            continue  # the WSL launcher, not a shell
-        candidates.append(candidate)
     for candidate in candidates:
         if candidate.is_file():
             return str(candidate)
@@ -77,7 +96,19 @@ def _bash_exe() -> str:
 
 
 def _run(target):
-    proc = subprocess.run([_bash_exe(), str(SCRIPT), str(target)], capture_output=True, timeout=30)
+    bash = _bash_exe()
+    argv = [bash, str(SCRIPT), str(target)]
+    if sys.platform == "win32" and os.path.splitext(bash)[1].lower() in (".bat", ".cmd"):
+        # A batch-file bash cannot be started by CreateProcess
+        # directly; it has to go through the command interpreter
+        # (same rule as run_eval._resolve_claude).
+        comspec = os.environ.get("ComSpec")
+        if not comspec:
+            comspec = os.path.join(
+                os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe"
+            )
+        argv = [comspec, "/c", bash, str(SCRIPT), str(target)]
+    proc = subprocess.run(argv, capture_output=True, timeout=30)
     return proc.returncode, _decode_output(proc.stdout + proc.stderr)
 
 
@@ -194,25 +225,56 @@ def test_wsl_launcher_output_is_decoded_readably(tmp_path, monkeypatch):
     fails, and wsl.exe writes UTF-16LE — the old text=True decode
     produced NUL-separated garbage, so every assertion on the output
     failed unreadably. The harness must surface the message readably.
-    Reproduced on Linux by stubbing ``bash`` on PATH with a script
-    that emits the exact WSL message in UTF-16LE."""
+    Reproduced by stubbing ``bash`` on PATH with a script that emits
+    the WSL message in UTF-16LE (with a BOM, the wide-char shape
+    Windows tools produce). The stub is planted in both forms: the
+    POSIX script (``bash``) and the Windows form (``bash.cmd``
+    forwarding to a Python impl) — Windows cannot execute an
+    extensionless file, so the script alone is never started there
+    (same rule as run_eval's fake claude) and the test failed on the
+    Windows runner with the real Git Bash running verify.sh instead
+    (rc 2, INCOMPLETE)."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    fake_bash = fake_bin / "bash"
-    fake_bash.write_text(
-        "#!/usr/bin/env python3\n"
+    body = (
         "import sys\n"
         "sys.stderr.buffer.write(\n"
-        "    'Windows Subsystem for Linux has no installed distributions.\\n'.encode('utf-16-le')\n"
+        "    b'\\xff\\xfe' + 'Windows Subsystem for Linux has no installed distributions.\\n'.encode('utf-16-le')\n"
         ")\n"
-        "sys.exit(1)\n",
+        "sys.exit(1)\n"
+    )
+    text = "#!/usr/bin/env python3\n" + body
+    fake_bash = fake_bin / "bash"
+    fake_bash.write_text(text, encoding="utf-8")
+    fake_bash.chmod(0o755)
+    impl = fake_bin / "fake_bash.py"
+    impl.write_text(text, encoding="utf-8")
+    wrapper = fake_bin / "bash.cmd"
+    wrapper.write_text(
+        f'@echo off\r\n"{sys.executable}" "%~dp0fake_bash.py" %*\r\n',
         encoding="utf-8",
     )
-    fake_bash.chmod(0o755)
     monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ["PATH"])
     rc, out = _run(tmp_path / "does-not-exist")
     assert rc == 1, out
     assert "no installed distributions" in out
+    assert "\x00" not in out
+    assert "\ufeff" not in out
+    assert "\ufffd" not in out
+
+
+def test_decode_output_strips_utf16le_bom_and_keeps_ansi():
+    """_decode_output on the WSL launcher's real byte shape: UTF-16LE
+    with a BOM, mixed with ANSI escapes. The BOM is not part of the
+    message and the escapes must survive decoding — the result is
+    the exact message text, with no BOM, NUL, or replacement char."""
+    raw = b"\xff\xfe" + (
+        "\x1b[33mWindows Subsystem for Linux has no installed distributions.\x1b[0m\n"
+    ).encode("utf-16-le")
+    out = _decode_output(raw)
+    assert out == "\x1b[33mWindows Subsystem for Linux has no installed distributions.\x1b[0m\n"
+    assert "\ufeff" not in out
+    assert "\ufffd" not in out
     assert "\x00" not in out
 
 
@@ -239,3 +301,75 @@ def test_windows_prefers_git_bash_over_wsl_launcher(tmp_path, monkeypatch):
     monkeypatch.delenv("ProgramFiles(x86)", raising=False)
     monkeypatch.setattr(shutil, "which", lambda name: str(fake_git) if name == "git" else None)
     assert _bash_exe() == str(git_bash)
+
+
+def _win32_no_git(tmp_path, monkeypatch):
+    """Simulate a Windows box with no Git Bash: platform win32,
+    no git on PATH, empty Program Files dirs. What remains is the
+    PATH scan — the only way a planted stub can win."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    monkeypatch.setenv("SystemRoot", str(tmp_path))
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "no-git-here"))
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+    monkeypatch.delenv("PATHEXT", raising=False)
+
+
+def test_windows_path_bash_cmd_stub_wins(tmp_path, monkeypatch):
+    """The PATH scan is PATHEXT-aware: a ``bash.cmd`` stub planted
+    first on PATH is picked, while the extensionless ``bash`` script
+    next to it is not — Windows cannot execute it, so it must never
+    be selected. Simulated on Linux by stubbing the platform and
+    environment; the candidates are only checked for existence,
+    never executed here."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "bash").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
+    stub = fake_bin / "bash.cmd"
+    stub.write_text("@echo off\r\n", encoding="utf-8")
+    _win32_no_git(tmp_path, monkeypatch)
+    monkeypatch.setenv("PATH", str(fake_bin))
+    assert _bash_exe() == str(stub)
+
+
+def test_run_wraps_cmd_bash_via_comspec_on_windows(tmp_path, monkeypatch):
+    """A ``bash.cmd`` cannot be started by CreateProcess directly —
+    it has to go through the command interpreter (same rule as
+    run_eval._resolve_claude). ``_run`` must invoke it as
+    ``[ComSpec, /c, bash.cmd, ...]``. The subprocess is stubbed, so
+    only the argv construction and the decode of its UTF-16LE
+    output are exercised here; real execution is covered by
+    test_wsl_launcher_output_is_decoded_readably on Windows CI."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    stub = fake_bin / "bash.cmd"
+    stub.write_text("@echo off\r\n", encoding="utf-8")
+    _win32_no_git(tmp_path, monkeypatch)
+    monkeypatch.setenv("PATH", str(fake_bin))
+    monkeypatch.setenv("ComSpec", r"C:\Windows\System32\cmd.exe")
+    seen: dict = {}
+
+    def _fake_run(argv, **kwargs):
+        seen["argv"] = argv
+        return subprocess.CompletedProcess(
+            argv,
+            1,
+            b"",
+            b"\xff\xfe"
+            + "Windows Subsystem for Linux has no installed distributions.\n".encode("utf-16-le"),
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    target = tmp_path / "does-not-exist"
+    rc, out = _run(target)
+    assert seen["argv"] == [
+        r"C:\Windows\System32\cmd.exe",
+        "/c",
+        str(stub),
+        str(SCRIPT),
+        str(target),
+    ]
+    assert rc == 1, out
+    assert "no installed distributions" in out
+    assert "\ufeff" not in out
+    assert "\ufffd" not in out
