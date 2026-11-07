@@ -355,7 +355,7 @@ def test_waza_fallback_wrong_owner_is_not_executed(tmp_path, monkeypatch):
     monkeypatch.setattr(
         doctor, "WAZA_LINUX_SHA256", hashlib.sha256(binary.read_bytes()).hexdigest()
     )
-    monkeypatch.setattr(doctor.os, "getuid", lambda: 999999)
+    monkeypatch.setattr(doctor.os, "getuid", lambda: 999999, raising=False)
     result = doctor.check_waza()
     assert result["status"] == "incompatible"
     assert called == [], "an unowned binary must never be executed"
@@ -394,6 +394,109 @@ def test_waza_fallback_missing_file_stays_incomplete(tmp_path, monkeypatch):
     result = doctor.check_waza()
     assert result["status"] == "incomplete"
     assert called == [[str(tmp_path / "waza-linux-amd64"), "--version"]]
+
+
+# --- Round-6 follow-up (2026-11-07): the /tmp waza trust check is
+# POSIX-only — os.getuid does not exist on Windows, so the check
+# crashed with AttributeError instead of answering. Ownership is
+# now compared through _owned_by_current_user: st_uid vs getuid on
+# POSIX, the file owner's SID vs the current user's SID on Windows.
+# Either side failing fails closed (untrusted), never raises. ---
+
+
+def test_waza_fallback_without_getuid_is_untrusted(tmp_path, monkeypatch):
+    """Windows has no os.getuid: the trust check must answer
+    untrusted, not raise AttributeError."""
+    binary = _planted_waza(tmp_path)
+    monkeypatch.delattr(doctor.os, "getuid", raising=False)
+    assert doctor._waza_fallback_is_trusted(str(binary)) is False
+
+
+def test_windows_ownership_check_fails_closed_without_windll():
+    """The Windows SID comparison has no windll outside Windows:
+    it must fail closed, never raise."""
+    assert doctor._windows_owned_by_current_user("whatever") is False
+
+
+def _fake_windll(*, user_sid, owner_sid):
+    """A stand-in for ctypes.windll: canned user and file-owner
+    SIDs, so the Windows ownership comparison can be exercised
+    without Windows. The SID bytes are 8 bytes each."""
+    import ctypes
+    import types
+
+    kept = []  # buffers handed out as SID pointers must stay alive
+
+    def sid_pointer(sid):
+        buf = ctypes.create_string_buffer(sid, len(sid))
+        kept.append(buf)
+        return ctypes.addressof(buf)
+
+    def open_process_token(_process, _access, token_ref):
+        token_ref._obj.value = 1
+        return 1
+
+    def get_token_information(_token, _cls, buf, _size, ret_size):
+        if buf is None:
+            ret_size._obj.value = 16
+            return 0
+        ctypes.cast(buf, ctypes.POINTER(ctypes.c_void_p)).contents.value = sid_pointer(user_sid)
+        return 1
+
+    def get_file_security(_path, _info, _sec, _size, ret_size):
+        if _sec is None:
+            ret_size._obj.value = 16
+            return 0
+        return 1
+
+    def get_security_descriptor_owner(_sec, owner_ref, defaulted_ref):
+        owner_ref._obj.value = sid_pointer(owner_sid)
+        defaulted_ref._obj.value = 0
+        return 1
+
+    def equal_sid(a, b):
+        return 1 if ctypes.string_at(a.value, 8) == ctypes.string_at(b.value, 8) else 0
+
+    def get_current_process():
+        return 1234
+
+    def close_handle(_handle):
+        return 1
+
+    return types.SimpleNamespace(
+        advapi32=types.SimpleNamespace(
+            OpenProcessToken=open_process_token,
+            GetTokenInformation=get_token_information,
+            GetFileSecurityW=get_file_security,
+            GetSecurityDescriptorOwner=get_security_descriptor_owner,
+            EqualSid=equal_sid,
+        ),
+        kernel32=types.SimpleNamespace(
+            GetCurrentProcess=get_current_process,
+            CloseHandle=close_handle,
+        ),
+    )
+
+
+def test_windows_ownership_check_compares_sids(monkeypatch):
+    """The Windows ownership check trusts the file only when the
+    owner's SID equals the current user's SID."""
+    import ctypes
+
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        _fake_windll(user_sid=b"USER-SID", owner_sid=b"USER-SID"),
+        raising=False,
+    )
+    assert doctor._windows_owned_by_current_user("whatever") is True
+    monkeypatch.setattr(
+        ctypes,
+        "windll",
+        _fake_windll(user_sid=b"USER-SID", owner_sid=b"OTHER-ID"),
+        raising=False,
+    )
+    assert doctor._windows_owned_by_current_user("whatever") is False
 
 
 def _all_ready(monkeypatch, override):

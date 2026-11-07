@@ -14,7 +14,6 @@ import hashlib
 import importlib.util
 import json
 import shutil
-import signal
 import subprocess
 import sys
 import time
@@ -140,10 +139,25 @@ def test_killed_run_leaves_source_intact(tmp_path):
     )
     time.sleep(2)
     assert proc.poll() is None, "the run finished before the kill"
-    proc.send_signal(signal.SIGKILL)
+    clean_copy_check._kill_process(proc)
     proc.wait(timeout=10)
     assert _snapshot(src) == before
     assert not src.with_name(src.name + ".orcinus-hidden").exists()
+
+
+def test_kill_process_terminates_a_running_process():
+    """The kill helper terminates a running process with no
+    cleanup — the killed-run test depends on it. It must not name
+    signal.SIGKILL (there is none on Windows): Popen.kill is
+    SIGKILL on POSIX and TerminateProcess on Windows."""
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        clean_copy_check._kill_process(proc)
+        assert proc.wait(timeout=10) is not None
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+            proc.wait(timeout=10)
 
 
 def _git_repo(tmp_path):

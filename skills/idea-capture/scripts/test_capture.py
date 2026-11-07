@@ -649,9 +649,10 @@ def test_lock_without_pid_is_not_stolen(tmp_path):
 
 
 def test_killed_holder_recovery(tmp_path):
-    """F7, end to end: a holder SIGKILLed mid-change leaves a lock
-    file, but the next promote must succeed."""
-    import signal
+    """F7, end to end: a holder killed mid-change leaves a lock
+    file, but the next promote must succeed. The kill is
+    Popen.kill — SIGKILL on POSIX, TerminateProcess on Windows —
+    because signal.SIGKILL does not exist on Windows."""
     import time
 
     store = tmp_path / "ideas"
@@ -681,7 +682,7 @@ def test_killed_holder_recovery(tmp_path):
         while not lock_path.is_file() and time.monotonic() < deadline:
             time.sleep(0.05)
         assert lock_path.is_file(), "the holder never acquired the lock"
-        proc.send_signal(signal.SIGKILL)
+        proc.kill()
         proc.wait(timeout=10)
     finally:
         if proc.poll() is None:
@@ -816,9 +817,10 @@ def test_pid_is_alive_windows_unreadable_exit_code_is_alive(monkeypatch):
 def test_flock_holder_blocks_acquire_despite_dead_pid(tmp_path):
     """3-P2-7: a lock file with a dead recorded PID but a LIVE flock
     holder must block acquisition. The old code unlinked on the
-    dead PID alone and acquired the lock out from under the holder."""
-    import fcntl
-
+    dead PID alone and acquired the lock out from under the holder.
+    The holder is taken through cap._try_lock — flock on POSIX,
+    msvcrt.locking on Windows — never through fcntl directly, which
+    does not exist on Windows."""
     store = tmp_path / "ideas"
     rc, out, err = capture(store, "flock holder idea")
     assert rc == 0, err
@@ -828,17 +830,51 @@ def test_flock_holder_blocks_acquire_despite_dead_pid(tmp_path):
     lock_path.write_text(f"{_dead_pid()}\n", encoding="utf-8")
     holder_fd = os.open(lock_path, os.O_RDWR)
     try:
-        fcntl.flock(holder_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert cap._try_lock(holder_fd), "could not take the holder lock"
         fd, _, _ = cap._acquire_lock(idea_path, timeout_s=0.5)
         assert fd is None, "acquired a lock another process holds via flock"
         if fd is not None:
             cap._release_lock(fd, lock_path)
     finally:
-        try:
-            fcntl.flock(holder_fd, fcntl.LOCK_UN)
-        except OSError:
-            pass
+        cap._unlock(holder_fd)
         os.close(holder_fd)
+
+
+def test_try_lock_windows_branch_uses_msvcrt(tmp_path, monkeypatch):
+    """Round-6 follow-up: the Windows branch of _try_lock must use
+    msvcrt.locking and never touch fcntl (which does not exist on
+    Windows): a second holder is refused while the first holds, and
+    the lock is releasable."""
+    import types
+
+    LK_NBLCK, LK_UNLCK = 1, 0
+    locked = set()
+
+    def locking(fd, mode, _nbytes):
+        key = os.fstat(fd)[:2]  # (st_dev, st_ino) — the locked file
+        if mode == LK_NBLCK:
+            if key in locked:
+                raise OSError("file is locked")
+            locked.add(key)
+        else:
+            locked.discard(key)
+        return 0
+
+    fake = types.SimpleNamespace(LK_NBLCK=LK_NBLCK, LK_UNLCK=LK_UNLCK, locking=locking)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setitem(sys.modules, "fcntl", None)  # absent, as on Windows
+    path = tmp_path / "lock"
+    fd1 = os.open(path, os.O_CREAT | os.O_RDWR)
+    fd2 = os.open(path, os.O_CREAT | os.O_RDWR)
+    try:
+        assert cap._try_lock(fd1) is True
+        assert cap._try_lock(fd2) is False
+        cap._unlock(fd1)
+        assert cap._try_lock(fd2) is True
+    finally:
+        os.close(fd1)
+        os.close(fd2)
 
 
 def test_lock_file_persists_after_release(tmp_path):
@@ -862,10 +898,11 @@ def test_lock_file_persists_after_release(tmp_path):
 def test_concurrent_recovery_of_killed_holder_lock(tmp_path):
     """3-P2-7, race-hunting (not a red-first proof — the window it
     hunts is microseconds wide): N processes racing to recover a
-    SIGKILLed holder's lock must serialise — no lost History
+    killed holder's lock must serialise — no lost History
     entries, no tracebacks, and the lock file stays reacquirable
-    afterwards."""
-    import signal
+    afterwards. The kill is Popen.kill — SIGKILL on POSIX,
+    TerminateProcess on Windows — because signal.SIGKILL does not
+    exist on Windows."""
     import threading
     import time
 
@@ -896,7 +933,7 @@ def test_concurrent_recovery_of_killed_holder_lock(tmp_path):
         while not lock_path.is_file() and time.monotonic() < deadline:
             time.sleep(0.05)
         assert lock_path.is_file(), "the holder never acquired the lock"
-        proc.send_signal(signal.SIGKILL)
+        proc.kill()
         proc.wait(timeout=10)
     finally:
         if proc.poll() is None:

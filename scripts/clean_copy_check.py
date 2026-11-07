@@ -162,6 +162,15 @@ def _run(argv, cwd, timeout=300):
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
+def _kill_process(proc):
+    """Kill a process the way the platform allows: Popen.kill sends
+    SIGKILL on POSIX and calls TerminateProcess on Windows —
+    signal.SIGKILL does not exist on Windows, so no caller may name
+    it. A kill is a kill either way: no cleanup runs, which is the
+    point of the killed-run test."""
+    proc.kill()
+
+
 def _step(results, name, ok, detail=""):
     results.append((name, ok, detail))
     mark = "ok  " if ok else "FAIL"

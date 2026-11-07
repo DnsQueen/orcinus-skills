@@ -200,6 +200,101 @@ def check_node():
     return _check("node", "ready", f"node {out.strip()}")
 
 
+def _windows_owned_by_current_user(path):
+    """Windows ownership check: the file owner's SID must equal the
+    current user's SID. Any failure to read either SID fails closed
+    (untrusted). ctypes.windll exists only on Windows; without it
+    there is no owner to compare, so the file is untrusted."""
+    import ctypes
+    from ctypes import wintypes
+
+    windll = getattr(ctypes, "windll", None)
+    if windll is None:
+        return False
+    advapi32 = windll.advapi32
+    kernel32 = windll.kernel32
+    TOKEN_QUERY = 0x0008
+    TokenUser = 1
+    OWNER_SECURITY_INFORMATION = 0x00000001
+
+    advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.GetFileSecurityW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.GetFileSecurityW.restype = wintypes.BOOL
+    advapi32.GetSecurityDescriptorOwner.argtypes = [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    advapi32.GetSecurityDescriptorOwner.restype = wintypes.BOOL
+    advapi32.EqualSid.argtypes = [wintypes.LPVOID, wintypes.LPVOID]
+    advapi32.EqualSid.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    token = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(
+        kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(token)
+    ):
+        return False
+    try:
+        size = wintypes.DWORD(0)
+        advapi32.GetTokenInformation(token, TokenUser, None, 0, ctypes.byref(size))
+        buf = ctypes.create_string_buffer(size.value)
+        if not advapi32.GetTokenInformation(token, TokenUser, buf, size, ctypes.byref(size)):
+            return False
+        # TOKEN_USER is { SID_AND_ATTRIBUTES User; } and
+        # SID_AND_ATTRIBUTES starts with the SID pointer.
+        user_sid = ctypes.cast(buf, ctypes.POINTER(wintypes.LPVOID)).contents
+        size = wintypes.DWORD(0)
+        advapi32.GetFileSecurityW(
+            str(path), OWNER_SECURITY_INFORMATION, None, 0, ctypes.byref(size)
+        )
+        sec = ctypes.create_string_buffer(size.value)
+        if not advapi32.GetFileSecurityW(
+            str(path), OWNER_SECURITY_INFORMATION, sec, size, ctypes.byref(size)
+        ):
+            return False
+        owner_sid = wintypes.LPVOID()
+        defaulted = wintypes.BOOL()
+        if not advapi32.GetSecurityDescriptorOwner(
+            sec, ctypes.byref(owner_sid), ctypes.byref(defaulted)
+        ):
+            return False
+        return bool(advapi32.EqualSid(user_sid, owner_sid))
+    finally:
+        kernel32.CloseHandle(token)
+
+
+def _owned_by_current_user(st, path):
+    """True when the file is owned by the current user. POSIX
+    compares st_uid with os.getuid(); Windows has no getuid, so the
+    file owner's SID is compared with the current user's SID. Any
+    failure fails closed (untrusted)."""
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None:
+        return st.st_uid == getuid()
+    return _windows_owned_by_current_user(path)
+
+
 def _waza_fallback_is_trusted(path):
     """True only when the /tmp fallback binary is a regular file
     owned by the current user whose SHA256 matches the pinned
@@ -212,7 +307,7 @@ def _waza_fallback_is_trusted(path):
         return False
     if not stat.S_ISREG(st.st_mode):
         return False
-    if st.st_uid != os.getuid():
+    if not _owned_by_current_user(st, path):
         return False
     try:
         digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
