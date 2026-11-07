@@ -25,7 +25,7 @@ def _problems(bundle):
 
 def _good_bundle():
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "revision": "abc1234",
         "working_tree_state": "clean",
         "requirement": "Fix the Persian capture crash.",
@@ -167,6 +167,7 @@ def test_fail_first_not_applicable_needs_a_note():
     b["fail_first"]["note"] = "Docs-only change; no behaviour to test."
     b["fail_first"]["failed_before"] = False
     b["fail_first"]["passed_after"] = False
+    b["files_changed"] = ["README.md"]
     b["verification_plan"]["change_type"] = "docs-only"
     b["verification_plan"]["required_gates"] = []
     b["verification_plan"]["not_applicable_gates"] = [
@@ -430,6 +431,7 @@ def test_docs_only_pass_without_fail_first_passes():
     # for, required or waived with a reason.
     b = _good_bundle()
     b.pop("fail_first", None)
+    b["files_changed"] = ["README.md"]
     b["verification_plan"]["change_type"] = "docs-only"
     b["verification_plan"]["required_gates"] = []
     b["verification_plan"]["not_applicable_gates"] = [
@@ -889,3 +891,324 @@ def test_reviewer_is_implementer_fails():
     b["reviewer_identity"] = "implementer"
     problems = _problems(b)
     assert any("implementer" in p for p in problems)
+
+
+# --- Round-6 Track 4 regression tests (P1 verifier: V2, V4, V5, V8,
+# 2-V4, 2-V5, 2-V6, 2-V7). Each of these passed on the old validator;
+# they are the red-first tests for this fix pass. ---
+
+
+def _docs_only_no_checks_bundle():
+    """A docs-only PASS with no checks at all: every canonical gate
+    waived with a reason, so there is nothing to run — the 2-V5 case.
+    """
+    b = _good_bundle()
+    b.pop("fail_first", None)
+    b["checks"] = []
+    b["files_changed"] = ["README.md"]
+    b["verification_plan"]["change_type"] = "docs-only"
+    b["verification_plan"]["required_gates"] = []
+    b["verification_plan"]["not_applicable_gates"] = [
+        {"gate": "build", "reason": "Docs-only change; nothing to build."},
+        {"gate": "lint", "reason": "Docs-only change; no code to lint."},
+        {"gate": "typecheck", "reason": "Docs-only change; nothing to typecheck."},
+        {"gate": "test", "reason": "Docs-only change; no behaviour to test."},
+    ]
+    return b
+
+
+def test_config_only_with_code_file_fails():
+    # V2: a behavioural change labelled config-only used to escape
+    # both fail-first and the test gate — the validator never read
+    # files_changed at all.
+    b = _good_bundle()
+    b["verification_plan"]["change_type"] = "config-only"
+    b["files_changed"] = ["src/a.py"]
+    problems = _problems(b)
+    assert any("config-only" in p and "src/a.py" in p for p in problems)
+
+
+def test_docs_only_with_code_file_fails():
+    # V2, docs-only half: same bypass with a .py file.
+    b = _good_bundle()
+    b["verification_plan"]["change_type"] = "docs-only"
+    b["files_changed"] = ["skills/x/scripts/y.py"]
+    problems = _problems(b)
+    assert any("docs-only" in p for p in problems)
+
+
+def test_docs_only_with_docs_files_passes():
+    # V2 control: a docs-only change touching only docs is fine.
+    b = _docs_only_no_checks_bundle()
+    b["files_changed"] = ["README.md", "docs/guide.md"]
+    assert _problems(b) == []
+
+
+def test_pass_on_dirty_tree_without_diff_hash_fails():
+    # V4: PASS on a dirty tree used to be accepted although the
+    # schema ties PASS to a revision and a dirty tree has none. The
+    # PASS must pin the diff it ran on (git diff HEAD | sha256sum).
+    b = _good_bundle()
+    b["working_tree_state"] = "dirty"
+    b["dirty_files"] = ["skills/x/scripts/y.py"]
+    b["revision"] = "working-tree"
+    problems = _problems(b)
+    assert any("dirty" in p and "diff" in p for p in problems)
+
+
+def test_pass_on_dirty_tree_with_diff_hash_passes():
+    # V4 control: the same dirty PASS with the diff pinned is valid.
+    b = _good_bundle()
+    b["working_tree_state"] = "dirty"
+    b["dirty_files"] = ["skills/x/scripts/y.py"]
+    b["revision"] = "working-tree"
+    b["diff_sha256"] = "0" * 64
+    assert _problems(b) == []
+
+
+def test_clean_tree_with_dirty_files_fails():
+    # V5, second half: dirty_files is "empty otherwise" per the
+    # schema, but a clean tree with non-empty dirty_files passed.
+    b = _good_bundle()
+    b["dirty_files"] = ["skills/x/scripts/y.py"]
+    problems = _problems(b)
+    assert any("dirty_files" in p for p in problems)
+
+
+def test_gate_in_both_required_and_waived_fails():
+    # V5 / 2-V7 overlap half: a gate in both required_gates and
+    # not_applicable_gates used to be accepted.
+    b = _good_bundle()
+    b["verification_plan"]["not_applicable_gates"] = [
+        {"gate": "lint", "reason": "Waived and required at once."},
+        {"gate": "build", "reason": "Python scripts have no build step."},
+        {"gate": "typecheck", "reason": "No typechecker in this Python project."},
+    ]
+    problems = _problems(b)
+    assert any("lint" in p and ("both" in p or "required" in p) for p in problems)
+
+
+def _run_cli_bytes(raw):
+    """Run the validator CLI on a temp file with these exact bytes."""
+    import subprocess
+    import tempfile
+
+    validator = Path(__file__).resolve().parent / "validate_evidence.py"
+    with tempfile.NamedTemporaryFile("wb", suffix=".json", delete=False) as f:
+        f.write(raw)
+        path = f.name
+    proc = subprocess.run([sys.executable, str(validator), path], capture_output=True, text=True)
+    Path(path).unlink()
+    return proc
+
+
+def test_non_utf8_bundle_exits_2_without_traceback():
+    # 2-V4: a non-UTF-8 file raised an uncaught UnicodeDecodeError
+    # with a traceback and exit 1, against the "never a traceback"
+    # docstring. It is a controlled error: exit 2, no traceback.
+    proc = _run_cli_bytes(b'{"schema_version": 4, "bad": "\xff\xfe"}')
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_deeply_nested_json_exits_2_without_traceback():
+    # 2-V4: 20,000 levels of nesting raised an uncaught
+    # RecursionError with a traceback and exit 1.
+    proc = _run_cli_bytes(("[" * 20000 + "]" * 20000).encode())
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_docs_only_pass_with_no_checks_passes():
+    # 2-V5: docs-only with all gates waived and no checks used to be
+    # forced INCOMPLETE, while the schema says required_gates may be
+    # empty and the SKILL says "do not fabricate a check".
+    assert _problems(_docs_only_no_checks_bundle()) == []
+
+
+def test_config_only_pass_with_no_checks_passes():
+    # 2-V5, config-only half.
+    b = _docs_only_no_checks_bundle()
+    b["verification_plan"]["change_type"] = "config-only"
+    assert _problems(b) == []
+
+
+def test_docs_only_pass_with_no_checks_needs_all_gates_waived():
+    # 2-V5 boundary: the empty-checks PASS is only for a fully
+    # waived plan — a docs-only change with a gate never mentioned
+    # still fails (silence is not a waiver).
+    b = _docs_only_no_checks_bundle()
+    b["verification_plan"]["not_applicable_gates"] = [
+        {"gate": "build", "reason": "Docs-only change; nothing to build."},
+    ]
+    problems = _problems(b)
+    assert any("lint" in p or "test" in p for p in problems)
+
+
+def test_iso8601_fractional_digits_pinned():
+    # 2-V6: the regex accepted any number of fractional digits and
+    # fromisoformat then behaved differently on 3.10 (only 3 or 6
+    # digits) vs 3.12. Only 3 or 6 digits are accepted now.
+    for frac in (".1", ".12", ".1234", ".12345", ".1234567"):
+        b = _good_bundle()
+        b["checks"][0]["started_at"] = f"2026-11-06T10:00:00{frac}Z"
+        assert any("started_at" in p for p in _problems(b)), frac
+    for frac in (".123", ".123456"):
+        b = _good_bundle()
+        b["checks"][0]["started_at"] = f"2026-11-06T10:00:00{frac}Z"
+        assert _problems(b) == [], frac
+
+
+def test_iso8601_year_bounds():
+    # 2-V6: years 1999 / 2100 are outside the sane range for a
+    # verification timestamp (2000-2099).
+    b = _good_bundle()
+    b["checks"][0]["started_at"] = "1999-11-06T10:00:00Z"
+    assert any("started_at" in p for p in _problems(b))
+    b = _good_bundle()
+    b["checks"][0]["started_at"] = "2100-11-06T10:00:00Z"
+    assert any("started_at" in p for p in _problems(b))
+    b = _good_bundle()
+    b["checks"][0]["started_at"] = "2099-11-06T10:00:00Z"
+    b["checks"][0]["finished_at"] = "2099-11-06T10:00:12Z"
+    assert _problems(b) == []
+
+
+def test_security_finding_cannot_be_non_blocking():
+    # 2-V7: a "SQL injection" finding labelled non-blocking used to
+    # PASS — the findings schema had no category, so severity was
+    # purely self-declared. Security / data-loss categories are
+    # automatically blocking.
+    for category in ("security", "data-loss"):
+        b = _good_bundle()
+        b["findings"] = [
+            {
+                "file": "src/x.py",
+                "line": 12,
+                "evidence": "SQL injection via string concat",
+                "severity": "non-blocking",
+                "category": category,
+            }
+        ]
+        problems = _problems(b)
+        assert any("blocking" in p for p in problems), category
+
+
+def test_non_blocking_finding_needs_a_category():
+    # 2-V7: without a category the auto-blocking rule could be
+    # dodged by omitting it — a non-blocking claim must say what
+    # kind of finding it is.
+    b = _good_bundle()
+    b["findings"] = [
+        {
+            "file": "src/x.py",
+            "line": 12,
+            "evidence": "typo in a comment",
+            "severity": "non-blocking",
+        }
+    ]
+    problems = _problems(b)
+    assert any("category" in p for p in problems)
+
+
+def test_non_blocking_finding_with_other_category_passes():
+    # 2-V7 control: a genuinely non-blocking finding with a
+    # non-security category still passes.
+    b = _good_bundle()
+    b["findings"] = [
+        {
+            "file": "src/x.py",
+            "line": 12,
+            "evidence": "typo in a comment",
+            "severity": "non-blocking",
+            "category": "other",
+        }
+    ]
+    assert _problems(b) == []
+
+
+def test_old_schema_version_4_is_rejected():
+    # The Track-4 schema change (category + diff hash + new rules)
+    # bumps schema_version 4 -> 5; a v4 bundle must not silently
+    # pass under v5.
+    b = _good_bundle()
+    b["schema_version"] = 4
+    problems = _problems(b)
+    assert any("schema_version" in p for p in problems)
+
+
+def _run_cli_with_verdict_block(bundle, block_text):
+    """Run the validator CLI with --verdict-block on temp files."""
+    import json
+    import subprocess
+    import tempfile
+
+    validator = Path(__file__).resolve().parent / "validate_evidence.py"
+    with tempfile.TemporaryDirectory() as d:
+        bundle_path = Path(d) / "bundle.json"
+        bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
+        block_path = Path(d) / "response.md"
+        block_path.write_text(block_text, encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(validator), str(bundle_path), "--verdict-block", str(block_path)],
+            capture_output=True,
+            text=True,
+        )
+        return proc
+
+
+def _matching_verdict_block():
+    # The good bundle's checks are test + lint, both PASS.
+    return (
+        "Some prose.\n\n```verdict\n"
+        '{"verdict": "PASS", "checks": {"test": "PASS", "lint": "PASS"}, '
+        '"file": null, "finding": "test and lint pass"}\n```\n'
+    )
+
+
+def test_verdict_block_matching_passes():
+    # V8: the prose verdict block and the bundle must agree.
+    proc = _run_cli_with_verdict_block(_good_bundle(), _matching_verdict_block())
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_verdict_block_wrong_verdict_fails():
+    # V8: a block saying FAIL while the bundle says PASS disagrees.
+    block = _matching_verdict_block().replace('"verdict": "PASS"', '"verdict": "FAIL"')
+    proc = _run_cli_with_verdict_block(_good_bundle(), block)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "verdict" in proc.stdout
+
+
+def test_verdict_block_wrong_check_fails():
+    # V8: a block saying the test gate FAILED while the bundle says
+    # it passed disagrees.
+    block = _matching_verdict_block().replace('"test": "PASS"', '"test": "FAIL"')
+    proc = _run_cli_with_verdict_block(_good_bundle(), block)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "test" in proc.stdout
+
+
+def test_verdict_block_missing_fence_fails():
+    # V8: no ```verdict fence at all — there is nothing to compare.
+    proc = _run_cli_with_verdict_block(_good_bundle(), "No verdict block here.\n")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "verdict" in proc.stdout.lower()
+    assert "Traceback" not in proc.stderr
+
+
+def test_verdict_block_not_json_fails():
+    # V8: a ```verdict fence that is not JSON cannot agree with the
+    # bundle (the 3-P1-6 attack shape, applied to the block itself).
+    proc = _run_cli_with_verdict_block(_good_bundle(), "```verdict\nnot JSON\n```\n")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "Traceback" not in proc.stderr
+
+
+def test_verdict_block_file_not_in_findings_fails():
+    # V8: the block names a finding file the bundle has no finding
+    # for — the two formats disagree about what was found.
+    block = _matching_verdict_block().replace('"file": null', '"file": "src/x.ts"')
+    proc = _run_cli_with_verdict_block(_good_bundle(), block)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "src/x.ts" in proc.stdout

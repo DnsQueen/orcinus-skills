@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — every trial is three-state (TRIGGERED / NOT_TRIGGERED / ERROR): an infrastructure failure (missing `claude` CLI, timeout, non-zero exit, unparseable output) is an ERROR, never a NOT_TRIGGERED, so an error cannot pass a should_trigger: false case; trigger rates are computed only over valid trials, a query with no valid trial cannot pass, errors are surfaced in the JSON output, and the CLI exits non-zero when any query has none. The rest is verbatim; see ATTRIBUTION.md.
 """Run trigger evaluation for a skill description.
 
 Tests whether a skill's description causes Claude to trigger (read the skill)
 for a set of queries. Outputs results as JSON.
+
+Every trial is three-state — TRIGGERED, NOT_TRIGGERED, or ERROR.
+An infrastructure failure (missing `claude` CLI, timeout, non-zero
+exit, unparseable output) is an ERROR, never a NOT_TRIGGERED: an
+error must not pass a should_trigger: false case. Trigger rates are
+computed only over valid trials; a query with no valid trial cannot
+pass, and the CLI exits non-zero when any query has none.
 """
 
 import argparse
@@ -39,8 +47,15 @@ def run_single_query(
     timeout: int,
     project_root: str,
     model: str | None = None,
-) -> bool:
-    """Run a single query and return whether the skill was triggered.
+) -> tuple[str, str | None]:
+    """Run a single query and return its three-state outcome.
+
+    Returns (status, error): status is TRIGGERED, NOT_TRIGGERED, or
+    ERROR; error is None unless the trial itself failed (missing
+    CLI, timeout, non-zero exit, unparseable output), in which case
+    it says why. A model that uses a different tool, or finishes
+    without touching the skill, is a real NOT_TRIGGERED — only a
+    failure to run or read the trial is an ERROR.
 
     Creates a command file in .claude/commands/ so it appears in Claude's
     available_skills list, then runs `claude -p` with the raw query.
@@ -82,15 +97,23 @@ def run_single_query(
         # programmatic subprocess usage is safe.
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            cwd=project_root,
-            env=env,
-        )
+        process = None
+        try:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                cwd=project_root,
+                env=env,
+            )
+        except OSError as e:
+            # The CLI is missing (or cannot start): an infrastructure
+            # error, never a NOT_TRIGGERED.
+            return ("ERROR", f"could not start 'claude': {e}")
 
         triggered = False
+        timed_out = False
+        events_seen = 0
         start_time = time.time()
         buffer = ""
         # Track state for stream event detection
@@ -124,6 +147,7 @@ def run_single_query(
                         event = json.loads(line)
                     except json.JSONDecodeError:
                         continue
+                    events_seen += 1
 
                     # Early detection via stream events
                     if event.get("type") == "stream_event":
@@ -138,20 +162,24 @@ def run_single_query(
                                     pending_tool_name = tool_name
                                     accumulated_json = ""
                                 else:
-                                    return False
+                                    return ("NOT_TRIGGERED", None)
 
                         elif se_type == "content_block_delta" and pending_tool_name:
                             delta = se.get("delta", {})
                             if delta.get("type") == "input_json_delta":
                                 accumulated_json += delta.get("partial_json", "")
                                 if clean_name in accumulated_json:
-                                    return True
+                                    return ("TRIGGERED", None)
 
                         elif se_type in ("content_block_stop", "message_stop"):
                             if pending_tool_name:
-                                return clean_name in accumulated_json
+                                return (
+                                    ("TRIGGERED", None)
+                                    if clean_name in accumulated_json
+                                    else ("NOT_TRIGGERED", None)
+                                )
                             if se_type == "message_stop":
-                                return False
+                                return ("NOT_TRIGGERED", None)
 
                     # Fallback: full assistant message
                     elif event.get("type") == "assistant":
@@ -165,17 +193,26 @@ def run_single_query(
                                 triggered = True
                             elif tool_name == "Read" and clean_name in tool_input.get("file_path", ""):
                                 triggered = True
-                            return triggered
+                            return ("TRIGGERED", None) if triggered else ("NOT_TRIGGERED", None)
 
                     elif event.get("type") == "result":
-                        return triggered
+                        return ("TRIGGERED", None) if triggered else ("NOT_TRIGGERED", None)
+            # The loop ended without an early return: either the
+            # process finished (break above) or the timeout expired.
+            timed_out = process.poll() is None and time.time() - start_time >= timeout
         finally:
             # Clean up process on any exit path (return, exception, timeout)
             if process.poll() is None:
                 process.kill()
                 process.wait()
 
-        return triggered
+        if timed_out:
+            return ("ERROR", f"claude timed out after {timeout}s")
+        if process.returncode not in (0, None) and not triggered:
+            return ("ERROR", f"claude exited with code {process.returncode}")
+        if not triggered and events_seen == 0:
+            return ("ERROR", "claude produced no parseable stream-json events")
+        return ("TRIGGERED", None) if triggered else ("NOT_TRIGGERED", None)
     finally:
         if command_file.exists():
             command_file.unlink()
@@ -191,8 +228,18 @@ def run_eval(
     runs_per_query: int = 1,
     trigger_threshold: float = 0.5,
     model: str | None = None,
+    runner=None,
 ) -> dict:
-    """Run the full eval set and return results."""
+    """Run the full eval set and return results.
+
+    Each trial is three-state (see run_single_query). Rates are
+    computed only over valid (non-ERROR) trials; a query with no
+    valid trial has trigger_rate None and pass False. `runner` is
+    the trial function (run_single_query by default); tests pass a
+    fake.
+    """
+    if runner is None:
+        runner = run_single_query
     results = []
 
     with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -200,7 +247,7 @@ def run_eval(
         for item in eval_set:
             for run_idx in range(runs_per_query):
                 future = executor.submit(
-                    run_single_query,
+                    runner,
                     item["query"],
                     skill_name,
                     description,
@@ -210,25 +257,31 @@ def run_eval(
                 )
                 future_to_info[future] = (item, run_idx)
 
-        query_triggers: dict[str, list[bool]] = {}
+        query_trials: dict[str, list[tuple[str, str | None]]] = {}
         query_items: dict[str, dict] = {}
         for future in as_completed(future_to_info):
             item, _ = future_to_info[future]
             query = item["query"]
             query_items[query] = item
-            if query not in query_triggers:
-                query_triggers[query] = []
+            if query not in query_trials:
+                query_trials[query] = []
             try:
-                query_triggers[query].append(future.result())
+                query_trials[query].append(future.result())
             except Exception as e:
                 print(f"Warning: query failed: {e}", file=sys.stderr)
-                query_triggers[query].append(False)
+                query_trials[query].append(("ERROR", str(e)))
 
-    for query, triggers in query_triggers.items():
+    for query, trials in query_trials.items():
         item = query_items[query]
-        trigger_rate = sum(triggers) / len(triggers)
+        valid = [s for s, _ in trials if s != "ERROR"]
+        errors = [e for s, e in trials if s == "ERROR" and e]
+        triggers = sum(1 for s in valid if s == "TRIGGERED")
+        valid_runs = len(valid)
+        trigger_rate = (triggers / valid_runs) if valid_runs else None
         should_trigger = item["should_trigger"]
-        if should_trigger:
+        if valid_runs == 0:
+            did_pass = False
+        elif should_trigger:
             did_pass = trigger_rate >= trigger_threshold
         else:
             did_pass = trigger_rate < trigger_threshold
@@ -236,8 +289,10 @@ def run_eval(
             "query": query,
             "should_trigger": should_trigger,
             "trigger_rate": trigger_rate,
-            "triggers": sum(triggers),
-            "runs": len(triggers),
+            "triggers": triggers,
+            "valid_runs": valid_runs,
+            "runs": len(trials),
+            "errors": errors,
             "pass": did_pass,
         })
 
@@ -252,6 +307,7 @@ def run_eval(
             "total": total,
             "passed": passed,
             "failed": total - passed,
+            "errored": sum(1 for r in results if r["errors"]),
         },
     }
 
@@ -304,6 +360,15 @@ def main():
             print(f"  [{status}] rate={rate_str} expected={r['should_trigger']}: {r['query'][:70]}", file=sys.stderr)
 
     print(json.dumps(output, indent=2))
+
+    # A query with no valid trial is an infrastructure failure, not
+    # a result: the eval cannot pass, and the exit code must say so.
+    if any(r["valid_runs"] == 0 for r in output["results"]):
+        print(
+            "Error: some queries had no valid trials (infrastructure failure)",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":

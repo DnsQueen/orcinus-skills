@@ -36,18 +36,30 @@ Two layers, kept separate:
    inside the bundle directory (no absolute paths, no `..` escape,
    no symlinks) and are hashed by streaming from a descriptor with
    a size cap; without a bundle directory an artifact is recorded
-   as unverified, never as passed.
-   A bundle with no checks at all is valid only as INCOMPLETE, with
-   a stop_reason saying why the verification stopped. An honest FAIL
-   or INCOMPLETE report is a valid bundle: the fail-first and plan
+   as unverified, never as passed. A change that touches code
+   cannot call itself docs-only or config-only to escape the test
+   gate and the fail-first proof. A PASS on a dirty tree must pin
+   the diff it ran on (diff_sha256 of `git diff HEAD`): a dirty
+   tree has no revision to bind the PASS to. A gate cannot be both
+   required and waived. Security and data-loss findings are
+   automatically blocking, whatever their severity says, and a
+   non-blocking finding must declare its category. A bundle with
+   no checks at all is valid only as INCOMPLETE, with a stop_reason
+   saying why the verification stopped — except a docs-only /
+   config-only PASS with every gate waived, which may have no
+   checks. An honest FAIL or INCOMPLETE report is a valid bundle: the fail-first and plan
    rules are PASS rules, never validity rules — only a PASS must
-   satisfy them.
+   satisfy them. The prose ```verdict block is a second form of
+   the same verdict: --verdict-block compares it against the
+   bundle, so the two cannot disagree.
 
 Structural validation runs first. If it finds any problem, the
 semantic checks do not run at all: a malformed bundle produces a
-controlled report and exit 1, never a traceback.
+controlled report and exit 1, never a traceback. A bundle file
+that cannot even be read as JSON (not UTF-8, nested too deeply)
+is a controlled error with exit 2, never a traceback.
 
-Usage: python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json>
+Usage: python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json> [--verdict-block <response.md>]
 Exit 0 when the bundle is valid and consistent; exit 1 otherwise,
 with each problem on its own line; exit 2 for a usage error, a
 missing or unreadable schema, or an internal validator error.
@@ -55,8 +67,10 @@ missing or unreadable schema, or an internal validator error.
 The validator and its schema live inside the orcinus-verify skill
 folder and resolve relative to this file, so they work from a user
 project with no repo checkout (in a plugin install, the skill folder
-is ${CLAUDE_PLUGIN_ROOT}/skills/orcinus-verify; in a standalone
-install it is the skill folder itself).
+is skills/orcinus-verify under the plugin root; in a standalone
+install it is the skill folder itself). The plugin-root variable is
+named here only to describe that layout — the validator never reads
+it, and no skill text relies on the host substituting it.
 
 The validator does not prove the evidence is true — a bundle can
 claim a command passed while the command never ran. It proves the
@@ -67,6 +81,7 @@ reviewable output is rejected — but the output itself can still be
 fabricated, which is what the agent-behaviour eval measures.
 """
 
+import argparse
 import hashlib
 import json
 import os
@@ -154,12 +169,14 @@ def _is_iso8601(value):
     accepts date-only strings and naive datetimes, and on 3.11+ it
     accepts week/basic formats that 3.10 rejects — so the same bundle
     would validate differently across the CI matrix. The regex makes
-    acceptance identical on every Python >= 3.10; fromisoformat then
-    only validates the ranges."""
+    acceptance identical on every Python >= 3.10: it pins the
+    fractional seconds to 3 or 6 digits (3.10's fromisoformat
+    accepts only those) and the year to 2000-2099, and
+    fromisoformat then only validates the ranges."""
     if type(value) is not str:
         return False
     if not re.fullmatch(
-        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?"
+        r"20\d{2}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3}|\.\d{6})?"
         r"(Z|[+-]\d{2}:\d{2})",
         value,
     ):
@@ -252,17 +269,44 @@ def _findings(bundle):
     return [f for f in findings if isinstance(f, dict)]
 
 
+def _is_blocking(finding):
+    """A finding is blocking unless it is explicitly non-blocking
+    AND not a security / data-loss finding: those categories are
+    automatically blocking, whatever their severity says (2-V7) —
+    a security finding cannot label itself non-blocking."""
+    if finding.get("category") in ("security", "data-loss"):
+        return True
+    return finding.get("severity") != "non-blocking"
+
+
+def _docs_only_no_checks_pass(bundle):
+    """True when a docs-only/config-only PASS may have no checks at
+    all (2-V5): the plan names the change type, requires no gate,
+    and waives every canonical gate with a reason. Anything else
+    with no checks is an incomplete verification, never a PASS."""
+    plan = bundle.get("verification_plan")
+    if not isinstance(plan, dict):
+        return False
+    if plan.get("change_type") not in ("docs-only", "config-only"):
+        return False
+    if plan.get("required_gates"):
+        return False
+    waived = {e.get("gate") for e in plan.get("not_applicable_gates") or [] if isinstance(e, dict)}
+    return all(g in waived for g in CANONICAL_GATES)
+
+
 def expected_verdict(bundle):
     """The single verdict computation. A blocking finding or a failed
     check forces FAIL; otherwise incomplete evidence forces
     INCOMPLETE; otherwise PASS. A check that claims PASS with a
     non-zero exit code counts as failed. Fail-closed: a finding whose
     severity is anything other than "non-blocking" counts as
-    blocking. No acceptance criteria means the verification stopped:
+    blocking — and a security / data-loss finding counts as blocking
+    whatever its severity says. No acceptance criteria means the verification stopped:
     INCOMPLETE, never PASS."""
     checks = _checks(bundle)
     findings = _findings(bundle)
-    blocking = [f for f in findings if f.get("severity") != "non-blocking"]
+    blocking = [f for f in findings if _is_blocking(f)]
     failed = [
         c
         for c in checks
@@ -276,7 +320,7 @@ def expected_verdict(bundle):
         or (isinstance(unverified, list) and bool(unverified))
         or [c for c in checks if c.get("unverified_items")]
         or (isinstance(criteria, list) and not criteria)
-        or not checks
+        or (not checks and not _docs_only_no_checks_pass(bundle))
     )
     if blocking or failed:
         return "FAIL"
@@ -304,7 +348,7 @@ def check_verdict_consistency(bundle, problems):
             problems.append("verdict is PASS but a check has verdict FAIL")
         if any(c.get("verdict") == "INCOMPLETE" for c in checks):
             problems.append("verdict is PASS but a check has verdict INCOMPLETE")
-        if any(f.get("severity") != "non-blocking" for f in _findings(bundle)):
+        if any(_is_blocking(f) for f in _findings(bundle)):
             problems.append("verdict is PASS but there is a blocking finding")
         if bundle.get("unverified_items"):
             problems.append("verdict is PASS but unverified_items is non-empty")
@@ -565,6 +609,11 @@ def check_plan_coverage(bundle, problems):
     checks = _checks(bundle)
     passing = {c.get("name") for c in checks if c.get("verdict") == "PASS"}
     for gate in required:
+        if gate in waived:
+            problems.append(
+                f"gate {gate!r} is in both required_gates and "
+                f"not_applicable_gates: a gate cannot be both required and waived"
+            )
         if gate not in passing:
             problems.append(f"required gate {gate!r} has no passing check")
     for gate in CANONICAL_GATES:
@@ -582,6 +631,77 @@ def check_plan_coverage(bundle, problems):
             f"required_gates: a behaviour change cannot waive its "
             f"test gate"
         )
+
+
+# File suffixes that mean the change touches code: a change that
+# touches one cannot call itself docs-only or config-only.
+CODE_SUFFIXES = (
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".go",
+    ".rs",
+    ".java",
+    ".kt",
+    ".rb",
+    ".php",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".cs",
+    ".swift",
+    ".sh",
+    ".sql",
+)
+
+
+def check_change_type_files(bundle, problems):
+    """A docs-only/config-only PASS whose files_changed lists a code
+    file is a behaviour change escaping the test gate and the
+    fail-first proof (V2): the validator never read files_changed
+    at all. A PASS rule only — an honest FAIL or INCOMPLETE bundle
+    may still describe the mismatch."""
+    if bundle.get("verdict") != "PASS":
+        return
+    plan = bundle.get("verification_plan")
+    if not isinstance(plan, dict):
+        return
+    change_type = plan.get("change_type")
+    if change_type not in ("docs-only", "config-only"):
+        return
+    for f in bundle.get("files_changed") or []:
+        if isinstance(f, str) and f.endswith(CODE_SUFFIXES):
+            problems.append(
+                f"change_type is {change_type!r} but files_changed lists code file {f!r}: "
+                f"a change touching code is a behaviour change, not {change_type}"
+            )
+
+
+def check_finding_categories(bundle, problems):
+    """Security and data-loss findings are automatically blocking
+    (2-V7): the category, not the self-declared severity, decides.
+    And a non-blocking claim must declare its category, or the
+    auto-blocking rule could be dodged by omitting it. A PASS rule
+    only — an honest FAIL bundle may still report the finding."""
+    if bundle.get("verdict") != "PASS":
+        return
+    for f in _findings(bundle):
+        category = f.get("category")
+        if category in ("security", "data-loss"):
+            problems.append(
+                f"finding in {f.get('file')!r} has category {category!r}: "
+                f"security and data-loss findings are automatically blocking"
+            )
+        elif f.get("severity") == "non-blocking" and not isinstance(category, str):
+            problems.append(
+                f"finding in {f.get('file')!r} is 'non-blocking' but has no category: "
+                f"a non-blocking finding must declare its category"
+            )
 
 
 def check_acceptance_criteria(bundle, problems):
@@ -782,9 +902,13 @@ def check_empty_checks(bundle, problems):
     """A bundle with no checks at all is an honest stop only as
     INCOMPLETE with a recorded reason (reviewer 4, F5). Without
     the reason it says nothing; as PASS it claims a verification
-    that never ran."""
+    that never ran. The one exception is a docs-only/config-only
+    PASS with every gate waived (2-V5): there is nothing to run,
+    and the SKILL says never to invent a check to fill the bundle."""
     checks = bundle.get("checks")
     if not isinstance(checks, list) or checks:
+        return
+    if bundle.get("verdict") == "PASS" and _docs_only_no_checks_pass(bundle):
         return
     if bundle.get("verdict") != "INCOMPLETE":
         problems.append(
@@ -800,12 +924,28 @@ def check_empty_checks(bundle, problems):
 
 
 def check_dirty_files(bundle, problems):
-    """dirty_files is listed when the tree is dirty (a conditional
-    rule the schema cannot express)."""
-    if bundle.get("working_tree_state") == "dirty":
+    """dirty_files is listed when the tree is dirty and empty when
+    it is clean (a conditional rule the schema cannot express). A
+    PASS on a dirty tree must also pin the diff it ran on
+    (diff_sha256 of `git diff HEAD`): a dirty tree has no revision
+    to bind the PASS to (V4)."""
+    state = bundle.get("working_tree_state")
+    if state == "dirty":
         dirty = bundle.get("dirty_files")
         if not isinstance(dirty, list) or not dirty:
             problems.append("working_tree_state is 'dirty' but dirty_files is empty or missing")
+        elif bundle.get("verdict") == "PASS" and not bundle.get("diff_sha256"):
+            problems.append(
+                "verdict is PASS on a dirty tree but there is no diff_sha256: "
+                "record the sha256 of `git diff HEAD` so the PASS is bound to this diff"
+            )
+    elif state == "clean":
+        dirty = bundle.get("dirty_files")
+        if isinstance(dirty, list) and dirty:
+            problems.append(
+                "working_tree_state is 'clean' but dirty_files is non-empty: "
+                "dirty_files must be empty when the tree is clean"
+            )
 
 
 def validate_bundle(bundle, schema, bundle_dir=None):
@@ -822,6 +962,8 @@ def validate_bundle(bundle, schema, bundle_dir=None):
     check_identities(bundle, problems)
     check_noop_commands(bundle, problems)
     check_plan_coverage(bundle, problems)
+    check_change_type_files(bundle, problems)
+    check_finding_categories(bundle, problems)
     check_acceptance_criteria(bundle, problems)
     check_time_order(bundle, problems)
     check_artifacts(bundle, problems, bundle_dir)
@@ -829,6 +971,65 @@ def validate_bundle(bundle, schema, bundle_dir=None):
     check_empty_checks(bundle, problems)
     check_dirty_files(bundle, problems)
     return problems
+
+
+def extract_verdict_block(text):
+    """Extract the single ```verdict block from a prose response.
+    Returns (block, problem): block is the parsed JSON object, or
+    None with a problem when there is no block, more than one, or
+    the block is not a JSON object."""
+    blocks = re.findall(r"```verdict\s*\n(.*?)```", text, re.DOTALL)
+    if not blocks:
+        return None, "no ```verdict block found in the verdict-block file"
+    if len(blocks) > 1:
+        return None, f"found {len(blocks)} ```verdict blocks: exactly one is expected"
+    try:
+        block = json.loads(blocks[0])
+    except json.JSONDecodeError as e:
+        return None, f"the ```verdict block is not valid JSON: {e}"
+    if not isinstance(block, dict):
+        return None, "the ```verdict block is not a JSON object"
+    return block, None
+
+
+def check_verdict_block(bundle, block, problems):
+    """The prose verdict block (SKILL.md: the machine-readable form
+    of the verdict) must agree with the evidence bundle (V8): the
+    same verdict, the same check verdicts, and a named finding file
+    must be a file the bundle has a finding for. The block's
+    `finding` text is free prose and is not compared."""
+    if block.get("verdict") != bundle.get("verdict"):
+        problems.append(
+            f"verdict block says verdict {block.get('verdict')!r} but "
+            f"the bundle says {bundle.get('verdict')!r}"
+        )
+    block_checks = block.get("checks")
+    if isinstance(block_checks, dict):
+        bundle_checks = {c.get("name"): c.get("verdict") for c in _checks(bundle)}
+        for name, verdict in block_checks.items():
+            if name not in bundle_checks:
+                problems.append(f"verdict block check {name!r} has no check in the bundle")
+            elif bundle_checks[name] != verdict:
+                problems.append(
+                    f"verdict block check {name!r} says {verdict!r} but "
+                    f"the bundle check says {bundle_checks[name]!r}"
+                )
+        for name in bundle_checks:
+            if name not in block_checks:
+                problems.append(f"bundle check {name!r} is missing from the verdict block")
+    else:
+        problems.append("verdict block has no 'checks' object")
+    block_file = block.get("file")
+    if block_file is None:
+        if any(_is_blocking(f) for f in _findings(bundle)):
+            problems.append(
+                "verdict block names no finding file but the bundle has a blocking finding"
+            )
+    elif isinstance(block_file, str):
+        if block_file not in {f.get("file") for f in _findings(bundle)}:
+            problems.append(
+                f"verdict block names file {block_file!r} but the bundle has no finding for it"
+            )
 
 
 def load_schema(path):
@@ -840,13 +1041,20 @@ def load_schema(path):
 
 
 def main(argv):
-    if len(argv) != 2:
-        print(
-            "usage: python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json>",
-            file=sys.stderr,
-        )
-        return 2
-    path = Path(argv[1])
+    parser = argparse.ArgumentParser(
+        description="Validate an ORCINUS verification evidence bundle.",
+        usage="python3 skills/orcinus-verify/scripts/validate_evidence.py "
+        "<bundle.json> [--verdict-block <response.md>]",
+    )
+    parser.add_argument("bundle", help="the evidence bundle JSON file")
+    parser.add_argument(
+        "--verdict-block",
+        default=None,
+        metavar="<response.md>",
+        help="a file holding the prose response: its ```verdict block must agree with the bundle",
+    )
+    args = parser.parse_args(argv[1:])
+    path = Path(args.bundle)
     if not path.is_file():
         print(f"no such file: {path}", file=sys.stderr)
         return 2
@@ -855,6 +1063,12 @@ def main(argv):
     except json.JSONDecodeError as e:
         print(f"{path} is not valid JSON: {e}", file=sys.stderr)
         return 1
+    except (UnicodeDecodeError, RecursionError, OSError) as e:
+        # 2-V4: a bundle that cannot even be read as JSON (not UTF-8,
+        # nested too deeply) is a controlled error, exit 2 — never a
+        # traceback, against the module docstring's promise.
+        print(f"{path} could not be read as JSON: {e}", file=sys.stderr)
+        return 2
     if not isinstance(bundle, dict):
         print(f"{path} is not a JSON object", file=sys.stderr)
         return 1
@@ -864,9 +1078,24 @@ def main(argv):
     try:
         schema = load_schema(SCHEMA_PATH)
         problems = validate_bundle(bundle, schema, bundle_dir=path.parent)
-    except (ValueError, OSError) as e:
+    except (ValueError, OSError, RecursionError) as e:
         print(f"validator error: {e}", file=sys.stderr)
         return 2
+    if args.verdict_block is not None:
+        block_path = Path(args.verdict_block)
+        if not block_path.is_file():
+            print(f"no such file: {block_path}", file=sys.stderr)
+            return 2
+        try:
+            block_text = block_path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as e:
+            print(f"{block_path} could not be read: {e}", file=sys.stderr)
+            return 2
+        block, problem = extract_verdict_block(block_text)
+        if problem:
+            problems.append(problem)
+        else:
+            check_verdict_block(bundle, block, problems)
     if problems:
         print(f"FAIL: {len(problems)} problem(s) in {path}")
         for p in problems:

@@ -1248,6 +1248,8 @@ def test_apache_change_notices():
         "skills/mcp-builder/SKILL.md",
         "skills/skill-creator/SKILL.md",
         "skills/skill-creator/scripts/package_skill.py",
+        "skills/skill-creator/scripts/quick_validate.py",
+        "skills/skill-creator/scripts/run_eval.py",
         "skills/webapp-testing/SKILL.md",
         "skills/webapp-testing/scripts/with_server.py",
         "agents/analyzer.md",
