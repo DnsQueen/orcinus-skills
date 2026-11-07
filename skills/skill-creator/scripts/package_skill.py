@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — packaging is allowlist-based with a printed plan, symlinks are never followed, common secret files are rejected unless explicitly allowed, files are copied from an open descriptor (O_NOFOLLOW), and the archive is written to a temp path, checked against the plan (names + SHA256), and renamed atomically, with a human confirmation prompt before writing; the `scripts.quick_validate` import falls back to a sibling import so the documented script invocation works without PYTHONPATH; archive names are built from the path's parts with forward slashes on every platform (str(Path) on Windows gives backslashes, which the ZIP namelist never matched, so packaging failed); and stdout is set to replace unencodable characters so the emoji output cannot crash a Windows cp1252 console. The rest is verbatim; see ATTRIBUTION.md.
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — packaging is allowlist-based with a printed plan, symlinks are never followed, common secret files are rejected unless explicitly allowed, files are copied from an open descriptor (O_NOFOLLOW), and the archive is written to a temp path, checked against the plan (names + SHA256), and renamed atomically, with a human confirmation prompt before writing; the `scripts.quick_validate` import falls back to a sibling import so the documented script invocation works without PYTHONPATH; archive names are built from the path's parts with forward slashes on every platform (str(Path) on Windows gives backslashes, which the ZIP namelist never matched, so packaging failed); stdout is set to replace unencodable characters so the emoji output cannot crash a Windows cp1252 console; and the confirmation prompt is only shown when stdin and stdout are both terminals, because on Windows sys.stdin.isatty() is True for the NUL device, so a run with stdin redirected from NUL prompted and then aborted on the immediate EOF although no human was there to answer. The rest is verbatim; see ATTRIBUTION.md.
 """
 Skill Packager - Creates a distributable .skill file of a skill folder
 
@@ -290,6 +290,18 @@ def package_skill(skill_path, output_dir=None, allow_secrets=(), confirm=False):
     return skill_filename
 
 
+def _is_interactive():
+    """True only when the run is genuinely interactive: stdin AND
+    stdout are both terminals. stdin alone is not enough — on Windows
+    sys.stdin.isatty() is True for the NUL device, so a run with
+    stdin redirected from NUL (subprocess DEVNULL) was treated as
+    interactive, prompted, and then aborted on the immediate EOF,
+    although no human was there to answer. Requiring stdout too means
+    the prompt is only shown when the user can see it (and answer it).
+    """
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
 def main(argv=None):
     # The CLI prints emoji (📦 ✅ ❌); on a Windows console the
     # stdout encoding is cp1252, where those raise UnicodeEncodeError
@@ -337,7 +349,7 @@ def main(argv=None):
         args.skill_folder,
         args.output_dir,
         allow_secrets=args.allow_secret,
-        confirm=sys.stdin.isatty() and not args.yes,
+        confirm=_is_interactive() and not args.yes,
     )
 
     sys.exit(0 if result else 1)

@@ -12,11 +12,14 @@ written (ModuleNotFoundError: No module named 'scripts').
 Run: python3 -m pytest skills/skill-creator/scripts/test_package_skill.py -q
 """
 
+import io
 import os
 import subprocess
 import sys
 import zipfile
 from pathlib import Path, PureWindowsPath
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import package_skill as ps  # noqa: E402
@@ -26,17 +29,26 @@ SKILL_CREATOR_DIR = SCRIPTS_DIR.parent
 
 
 def _valid_skill(tmp_path, name="demo-skill"):
-    """A minimal skill that passes quick_validate."""
+    """A minimal skill that passes quick_validate.
+
+    Written as exact bytes, not text: on Windows a text-mode write
+    translates \\n to \\r\\n, so the fixture on disk would be CRLF and
+    the byte-exact packager would (correctly) package CRLF — while
+    the tests below assert the LF bytes the fixture is meant to
+    contain. The packager must copy bytes verbatim, so the fixture
+    has to carry the exact bytes it claims to.
+    """
     skill = tmp_path / name
     skill.mkdir()
-    (skill / "SKILL.md").write_text(
-        "---\n"
-        f"name: {name}\n"
-        "description: A demo skill for packaging tests.\n"
-        "license: MIT\n"
-        "---\n\n"
-        "# Demo skill\n",
-        encoding="utf-8",
+    (skill / "SKILL.md").write_bytes(
+        (
+            "---\n"
+            f"name: {name}\n"
+            "description: A demo skill for packaging tests.\n"
+            "license: MIT\n"
+            "---\n\n"
+            "# Demo skill\n"
+        ).encode("utf-8")
     )
     return skill
 
@@ -145,8 +157,11 @@ def test_symlinked_directory_does_not_smuggle_outside_files(tmp_path):
 
 def test_ordinary_files_are_packaged_with_content(tmp_path):
     skill = _valid_skill(tmp_path)
-    (skill / "notes.md").write_text("# Notes\n", encoding="utf-8")
-    (skill / "helper.py").write_text("X = 1\n", encoding="utf-8")
+    # Exact bytes, as in _valid_skill: a text-mode write would be
+    # translated to CRLF on Windows and the assertions below compare
+    # against the LF bytes.
+    (skill / "notes.md").write_bytes(b"# Notes\n")
+    (skill / "helper.py").write_bytes(b"X = 1\n")
     out = tmp_path / "out"
     result = ps.package_skill(skill, out)
     assert result is not None
@@ -270,4 +285,71 @@ def test_module_invocation_works(tmp_path):
         ["-m", "scripts.package_skill", str(skill), str(out)], SKILL_CREATOR_DIR
     )
     assert proc.returncode == 0, proc.stderr
+    assert (out / "demo-skill.skill").is_file()
+
+
+class _FakeStream(io.StringIO):
+    """A StringIO that claims to be (or not be) a terminal, so the
+    CLI's interactivity decision can be tested without a real tty."""
+
+    def __init__(self, text="", *, tty):
+        super().__init__(text)
+        self._tty = tty
+
+    def isatty(self):
+        return self._tty
+
+
+def _run_cli_main(skill, out, stdin, stdout, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["package_skill.py", str(skill), str(out)])
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    return ps.main()
+
+
+def test_no_prompt_when_stdout_is_piped_even_if_stdin_is_a_tty(tmp_path, monkeypatch):
+    """Round-6 follow-up, Windows: the three CLI tests run the packager
+    with stdin DEVNULL and stdout captured, and all three aborted at
+    the confirmation prompt instead of packaging. On Windows
+    sys.stdin.isatty() is True for the NUL device, so stdin alone
+    misreports a redirected run as interactive; input() then hits EOF
+    at once and the run aborts. The prompt must only fire when the
+    user can both see it and answer it — stdin AND stdout are both
+    terminals — so with stdout piped there is no prompt and the run
+    packages. The fake stdin is empty (EOF at once, as DEVNULL is)
+    and still claims to be a tty, which reproduces the Windows shape
+    on Linux."""
+    skill = _valid_skill(tmp_path)
+    out = tmp_path / "out"
+    fake_out = _FakeStream(tty=False)
+    with pytest.raises(SystemExit) as exc:
+        _run_cli_main(skill, out, _FakeStream(tty=True), fake_out, monkeypatch)
+    assert exc.value.code == 0
+    assert "Package these files?" not in fake_out.getvalue()
+    assert (out / "demo-skill.skill").is_file()
+
+
+def test_eof_at_an_interactive_prompt_aborts(tmp_path, monkeypatch):
+    """EOF (Ctrl-D / Ctrl-Z) at a genuinely interactive prompt aborts:
+    it must never be treated as agreement, or a closed stdin would
+    silently confirm the write."""
+    skill = _valid_skill(tmp_path)
+    out = tmp_path / "out"
+    fake_out = _FakeStream(tty=True)
+    with pytest.raises(SystemExit) as exc:
+        _run_cli_main(skill, out, _FakeStream(tty=True), fake_out, monkeypatch)
+    assert exc.value.code == 1
+    assert "Aborted" in fake_out.getvalue()
+    assert not (out / "demo-skill.skill").exists()
+
+
+def test_interactive_prompt_accepts_y(tmp_path, monkeypatch):
+    """The prompt still works when the run really is interactive:
+    stdin and stdout both terminals, "y" packages the skill."""
+    skill = _valid_skill(tmp_path)
+    out = tmp_path / "out"
+    fake_out = _FakeStream(tty=True)
+    with pytest.raises(SystemExit) as exc:
+        _run_cli_main(skill, out, _FakeStream("y\n", tty=True), fake_out, monkeypatch)
+    assert exc.value.code == 0
     assert (out / "demo-skill.skill").is_file()
