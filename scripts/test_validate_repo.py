@@ -1609,3 +1609,22 @@ def test_docs_numbers_stale_readme_counts_fail(tmp_path, monkeypatch):
     )
     failures = _run_with_root(monkeypatch, root, vr.check_docs_numbers)
     assert any("README" in f for f in failures)
+
+
+def test_related_skills_must_exist(tmp_path, monkeypatch):
+    """Round 7 (N5): a name in a SKILL.md 'Related Skills' section
+    must be a skill in this repo — monitoring-observability listed
+    five skills that do not exist, and no check read the section."""
+    root = _minimal_repo(tmp_path)
+    other = root / "skills" / "other" / "SKILL.md"
+    other.write_text(
+        other.read_text(encoding="utf-8") + "\n## Related Skills\n\n- `orcinus` - the router\n",
+        encoding="utf-8",
+    )
+    assert _run_with_root(monkeypatch, root, vr.check_related_skills_exist) == []
+    other.write_text(
+        other.read_text(encoding="utf-8") + "- `defense-in-depth` - does not exist\n",
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_related_skills_exist)
+    assert len(failures) == 1 and "defense-in-depth" in failures[0]

@@ -1778,6 +1778,37 @@ def check_skill_references():
                     )
 
 
+def check_related_skills_exist():
+    """A skill named in a SKILL.md "Related Skills" section must be
+    a skill in this repo. The section lists sibling skills by name
+    (backticked list items); a name that matches no folder dangles
+    in every install — the upstream text names siblings from its own
+    collection, not ours (round 7, N5: monitoring-observability
+    listed five skills that do not exist here). Only the "Related
+    Skills" heading is read, so other sections that mention names in
+    prose are untouched."""
+    skills = {d.name for d in (ROOT / "skills").iterdir() if d.is_dir()}
+    for skill_dir in sorted((ROOT / "skills").iterdir()):
+        if not skill_dir.is_dir():
+            continue
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        in_section = False
+        for line in skill_md.read_text(encoding="utf-8").splitlines():
+            if line.startswith("#"):
+                in_section = line.strip().lower() == "## related skills"
+                continue
+            if not in_section:
+                continue
+            m = re.match(r"\s*-\s*`([^`]+)`", line)
+            if m and m.group(1) not in skills:
+                fail(
+                    f"{skill_dir.name}/SKILL.md lists {m.group(1)!r} under "
+                    f"'Related Skills', but no such skill exists in this repo"
+                )
+
+
 # Agents and commands shipped by this plugin, by the name Claude
 # Code registers them under. The six reviewers and the review-pr
 # command come from pr-review-toolkit (Apache-2.0); the three
@@ -1984,6 +2015,7 @@ def main():
     check_json_files()
     check_relative_paths()
     check_skill_references()
+    check_related_skills_exist()
     check_plugin_components()
     check_version_matches_changelog()
     check_security_versions()

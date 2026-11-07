@@ -130,8 +130,11 @@ Detection and alerting for silent failures in LLM agents.
 
 ## Related Skills
 
-- `defense-in-depth` - Layer 8 observability as part of security architecture
-- `devops-deployment` - Observability integration with CI/CD and Kubernetes
-- `resilience-patterns` - Monitoring circuit breakers and failure scenarios
-- `llm-evaluation` - Evaluation patterns that integrate with Langfuse scoring
-- `caching` - Caching strategies that reduce costs tracked by Langfuse
+<!-- ORCINUS change notice (2026-11-08, round 7, N5): upstream
+listed five OrchestKit siblings here (defense-in-depth,
+devops-deployment, resilience-patterns, llm-evaluation, caching);
+none of them exists in ORCINUS, so the links pointed nowhere in
+every install. Replaced with the in-repo sibling `monitoring`.
+See ATTRIBUTION.md. -->
+
+- `monitoring` - The outside view of a shipped service: uptime probes, SLO burn-rate alerts, on-call escalation. The complement of this skill — this skill instruments from the inside (what the app emits: logs, metrics, traces), `monitoring` detects from the outside (is it alive, is it fast). The router routes "Health / monitoring" to `monitoring` and "Telemetry / instrumentation" here.
