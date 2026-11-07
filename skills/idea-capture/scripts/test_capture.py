@@ -29,7 +29,10 @@ def run(store, *argv):
     """Run the script as a subprocess; return (returncode, stdout, stderr)."""
     cmd = [sys.executable, str(SCRIPT), *argv]
     # --store is passed explicitly by the caller when needed.
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    # The tool emits UTF-8 (it reconfigures stdout/stderr), so the
+    # harness decodes UTF-8 too — on Windows the locale default is
+    # cp1252, which cannot decode the tool's Persian output.
+    result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=30)
     return result.returncode, result.stdout, result.stderr
 
 
@@ -288,6 +291,35 @@ def test_persian_only_idea_round_trips(tmp_path):
     assert idea_id in out
     rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
     assert rc == 0, err
+
+
+def test_show_and_list_persian_idea_with_non_utf8_stdout(tmp_path):
+    """Round-6 follow-up (Windows): show and list print Persian
+    text, and on Windows stdout defaults to cp1252, which cannot
+    encode it — the tool must emit UTF-8 whatever encoding the
+    console gave it. PYTHONIOENCODING=cp1252 reproduces the
+    Windows console encoding on Linux."""
+    store = tmp_path / "ideas"
+    text = "یک ایده تازه"
+    rc, out, err = capture(store, text)
+    assert rc == 0, err
+    idea_id = out.strip()
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    for argv in (
+        ["show", "--store", str(store), idea_id],
+        ["list", "--store", str(store)],
+    ):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), *argv],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            env=env,
+            timeout=30,
+        )
+        assert result.returncode == 0, result.stderr
+        assert "Traceback" not in result.stderr
+        assert text in result.stdout
 
 
 def test_persian_and_english_mixed(tmp_path):
@@ -570,15 +602,67 @@ def test_set_status_rewrites_only_the_frontmatter(tmp_path):
 
 
 def _dead_pid():
-    """A PID that is certainly dead: a process that already exited."""
-    proc = subprocess.Popen([sys.executable, "-c", "pass"])
-    pid = proc.pid
-    proc.wait()
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return pid
-    raise AssertionError(f"PID {pid} was reused immediately")
+    """A PID that is certainly dead: a process that already exited,
+    with no handle to it left open in this process.
+
+    On Windows a PID stays allocated — OpenProcess succeeds on it,
+    so os.kill(pid, 0) reports it alive — while any handle to the
+    exited process is open, and a Popen keeps its handle until it
+    is finalized; wait() alone does not close it. The child
+    therefore prints its own PID and subprocess.run (whose Popen is
+    destroyed on return) leaves no handle behind. A bounded retry
+    covers the genuine race of the PID being reused by another
+    process between exit and the probe."""
+    for _ in range(50):
+        result = subprocess.run(
+            [sys.executable, "-c", "import os; print(os.getpid())"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        pid = int(result.stdout.strip())
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return pid
+    raise AssertionError("no dead PID found after 50 attempts")
+
+
+def test_dead_pid_holds_no_open_handle_to_the_child(monkeypatch):
+    """Round-6 follow-up (Windows): _dead_pid must not probe while
+    it still holds the dead child's Popen. On Windows a PID stays
+    allocated — OpenProcess succeeds on it, so os.kill(pid, 0)
+    reports it alive — while any handle to the exited process is
+    open, and a Popen keeps its handle until it is finalized;
+    wait() alone does not close it. The fake os.kill below emulates
+    that rule: a PID with a live Popen is alive, a PID with none is
+    dead. (Same pattern as the S1 fake-kernel32 tests.)"""
+    import weakref
+
+    live_pids = set()
+    finalizers = []
+    real_popen = subprocess.Popen
+
+    def tracking_popen(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        live_pids.add(proc.pid)
+        finalizers.append(weakref.finalize(proc, live_pids.discard, proc.pid))
+        return proc
+
+    real_kill = os.kill
+
+    def fake_kill(pid, sig):
+        if sig == 0 and pid in live_pids:
+            return None  # a handle is still open to the exited child
+        if sig == 0:
+            raise ProcessLookupError(pid, "No such process")
+        return real_kill(pid, sig)
+
+    monkeypatch.setattr(subprocess, "Popen", tracking_popen)
+    monkeypatch.setattr(os, "kill", fake_kill)
+    pid = _dead_pid()
+    assert pid > 0
+    assert pid not in live_pids
 
 
 def _lock_path(store, idea_id):
@@ -627,6 +711,28 @@ def test_live_holder_still_blocks_promote(tmp_path):
         assert lock.is_file(), "a live holder's lock must not be removed"
     finally:
         cap._release_lock(fd, lock)
+
+
+def test_holder_pid_is_readable_without_reading_the_locked_byte(tmp_path):
+    """Round-6 follow-up (Windows): the "being changed" error must
+    name the holder PID. On Windows msvcrt.locking locks byte 0 of
+    the lock file, and a read of that locked byte fails while the
+    holder holds it — so the PID is recorded starting at offset 1,
+    and byte 0 is reserved for the lock. A contender reads the PID
+    from offset 1, never touching the locked byte."""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "layout idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    idea_path = store / f"{idea_id}.md"
+    fd, lock_path, _ = cap._acquire_lock(idea_path)
+    assert fd is not None
+    try:
+        data = lock_path.read_bytes()
+        assert int(data[1:].strip()) == os.getpid()
+        assert cap._read_lock_pid(lock_path) == os.getpid()
+    finally:
+        cap._release_lock(fd, lock_path)
 
 
 def test_lock_without_pid_is_not_stolen(tmp_path):

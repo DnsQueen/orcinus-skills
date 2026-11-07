@@ -88,6 +88,7 @@ Requires Python 3.11+ (builtin generics, Path.is_relative_to).
 """
 
 import argparse
+import io
 import os
 import re
 import sys
@@ -504,6 +505,13 @@ def _acquire_lock(path: Path, timeout_s: float = 2.0):
     held, whatever PID it records (or fails to record): a planted
     file is not a holder.
 
+    The holder's PID is written starting at offset 1, not 0: byte
+    0 is the locked region (msvcrt.locking locks one byte at offset
+    0), and on Windows a read of that byte fails while the holder
+    holds it — so a contender waiting on the lock could never read
+    the PID for the "blocked by pid N" message if it lived at
+    offset 0. _read_lock_pid strips, so both layouts parse.
+
     Crash behaviour: a holder killed mid-change leaves the file
     (with a dead PID) and releases the lock; the next acquirer
     proceeds, so no change is ever blocked forever by a dead
@@ -555,7 +563,10 @@ def _acquire_lock(path: Path, timeout_s: float = 2.0):
     try:
         os.ftruncate(fd, 0)
         os.lseek(fd, 0, os.SEEK_SET)
-        os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
+        # Byte 0 is the locked region (see the docstring): the PID
+        # starts at offset 1, so a contender can read it without
+        # touching the locked byte.
+        os.write(fd, f" {os.getpid()}\n".encode("utf-8"))
         try:
             os.fsync(fd)
         except OSError:
@@ -687,7 +698,23 @@ def cmd_drop(args) -> int:
     return _set_status(Path(args.store), args.id, "dropped", f"reason: {args.reason}")
 
 
+def _ensure_utf8_output() -> None:
+    """Stdout and stderr emit UTF-8 even when the console encoding
+    is not: on Windows stdout defaults to cp1252, which cannot
+    encode Persian text, and show/list print raw idea text (any
+    language). Best-effort — a stream that is not a TextIOWrapper
+    or cannot be reconfigured keeps its encoding, and a later
+    write fails exactly as it would have without this call."""
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except ValueError:
+                pass
+
+
 def main() -> int:
+    _ensure_utf8_output()
     parser = argparse.ArgumentParser(description="The idea-capture store")
     sub = parser.add_subparsers(dest="command", required=True)
 
