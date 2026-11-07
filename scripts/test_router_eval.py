@@ -138,6 +138,28 @@ def test_cli_no_args_grades_reference_decisions(capsys):
     assert "12/12" in capsys.readouterr().out
 
 
+def test_cli_no_args_labels_self_check_not_an_agent_measurement(capsys):
+    """Round 7, F-19: the default run grades REFERENCE_DECISIONS —
+    the expected answers, written out so the grader can be
+    self-checked — so its output must say so, and must not be
+    citable as agent performance."""
+    assert rev.main([]) == 0
+    out = capsys.readouterr().out
+    assert "self-check" in out
+    assert "not an agent measurement" in out
+
+
+def test_cli_decisions_file_has_no_self_check_label(tmp_path, capsys):
+    """The label belongs to the default self-check only: grading a
+    recorded run prints the plain score."""
+    path = tmp_path / "decisions.json"
+    path.write_text(json.dumps(rev.REFERENCE_DECISIONS), encoding="utf-8")
+    assert rev.main([str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "12/12" in out
+    assert "not an agent measurement" not in out
+
+
 def test_cli_decisions_file(tmp_path, capsys):
     decisions = dict(rev.REFERENCE_DECISIONS)
     wrong = dict(decisions["builds-slice"])

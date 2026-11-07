@@ -17,7 +17,8 @@ an ambiguity to drop, and an extra route is a wrong route.
 
 Usage:
     python3 scripts/router_eval.py
-        Grade the reference decisions (self-check: 12/12).
+        Grade the reference decisions (self-check against
+        REFERENCE_DECISIONS: 12/12 — not an agent measurement).
     python3 scripts/router_eval.py <decisions.json>
         Grade a recorded run: a JSON object mapping scenario id to
         a decision. Prints per-scenario PASS/FAIL and the score;
@@ -192,6 +193,7 @@ def main(argv):
     if len(argv) > 1:
         print(f"usage: {Path(argv[0]).name} [<decisions.json>]", file=sys.stderr)
         return 2
+    self_check = not argv
     if argv:
         try:
             decisions = json.loads(Path(argv[0]).read_text(encoding="utf-8"))
@@ -213,7 +215,18 @@ def main(argv):
     for failed in result["failed"]:
         if failed["id"] not in {s["id"] for s in SCENARIOS}:
             print(f"FAIL {failed['id']}: {'; '.join(failed['problems'])}")
-    print(f"{result['passed']}/{result['total']} scenarios pass")
+    if self_check:
+        # Round 7, F-19: the default run grades REFERENCE_DECISIONS,
+        # the expected answers written out in this file — label it
+        # so the score cannot be cited as agent performance. A
+        # mock-style self-check proves the grader runs, not that an
+        # agent routes correctly.
+        print(
+            f"{result['passed']}/{result['total']} scenarios pass "
+            "(self-check against REFERENCE_DECISIONS — not an agent measurement)"
+        )
+    else:
+        print(f"{result['passed']}/{result['total']} scenarios pass")
     return 0 if not result["failed"] else 1
 
 
