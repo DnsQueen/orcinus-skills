@@ -18,8 +18,75 @@ _SCHEMA = ve.load_schema(
     Path(__file__).resolve().parent.parent / "references" / "evidence.schema.json"
 )
 
+# The canonical fail-first test for the good bundle, as a pytest
+# nodeid (F-03): the JUnit fixtures below are written for exactly
+# this test, so a bundle naming any other test must fail the
+# structural link.
+_CANONICAL_NODEID = "tests/test_capture.py::test_capture_persian_only"
+_CANONICAL_CLASSNAME = "tests.test_capture"
+_CANONICAL_NAME = "test_capture_persian_only"
+
+
+def _junit_xml(cases):
+    """A real JUnit XML report for `cases`: a list of
+    (classname, name, status) with status in passed/failed/error/
+    skipped. pytest --junitxml emits exactly this shape."""
+    lines = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        f'<testsuites><testsuite name="pytest" tests="{len(cases)}">',
+    ]
+    for classname, name, status in cases:
+        if status == "failed":
+            child = '<failure message="AssertionError">assert False</failure>'
+        elif status == "error":
+            child = '<error message="Error">boom</error>'
+        elif status == "skipped":
+            child = '<skipped message="skipped" />'
+        else:
+            child = ""
+        lines.append(
+            f'<testcase classname="{classname}" name="{name}" time="0.01">{child}</testcase>'
+        )
+    lines.append("</testsuite></testsuites>")
+    return "\n".join(lines).encode()
+
+
+def _write_junit_reports(bundle, directory, red_cases=None, green_cases=None):
+    """Write real JUnit red/green reports for the canonical test
+    under `directory` and record them on the bundle's fail_first
+    (red_report / green_report, with the sha256 of each file)."""
+    import hashlib
+
+    directory = Path(directory)
+    if red_cases is None:
+        red_cases = [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "failed")]
+    if green_cases is None:
+        green_cases = [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "passed")]
+    for field, filename, cases in (
+        ("red_report", "red.xml", red_cases),
+        ("green_report", "green.xml", green_cases),
+    ):
+        data = _junit_xml(cases)
+        (directory / filename).write_bytes(data)
+        bundle["fail_first"][field] = {
+            "artifact": filename,
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "format": "junit-xml",
+        }
+
 
 def _problems(bundle):
+    # A PASS bundle for a behaviour change must carry real JUnit
+    # reports (F-03), so the fixture writes them into a temp bundle
+    # directory and validates against it. The reports are always
+    # for the canonical test: a bundle naming another test must
+    # fail the structural link, not silently gain a matching report.
+    import tempfile
+
+    if isinstance(bundle.get("fail_first"), dict):
+        with tempfile.TemporaryDirectory() as d:
+            _write_junit_reports(bundle, Path(d))
+            return ve.validate_bundle(bundle, _SCHEMA, bundle_dir=Path(d))
     return ve.validate_bundle(bundle, _SCHEMA)
 
 
@@ -41,7 +108,7 @@ def _good_bundle():
                 "tool_version": "pytest 8.4.2",
                 "started_at": "2026-11-06T10:00:00Z",
                 "finished_at": "2026-11-06T10:00:12Z",
-                "stdout_text": "test_capture_persian_only passed; 45 passed in 0.42s",
+                "stdout_text": "tests/test_capture.py::test_capture_persian_only passed; 45 passed in 0.42s",
             },
             {
                 "name": "lint",
@@ -70,14 +137,14 @@ def _good_bundle():
             ],
         },
         "fail_first": {
-            "test": "test_capture_persian_only",
+            "test": "tests/test_capture.py::test_capture_persian_only",
             "failed_before": True,
             "passed_after": True,
             "method": "worktree",
             "red_check": {
                 "command": "python3 -m pytest -q -k test_capture_persian_only",
                 "exit_code": 1,
-                "stdout_text": "FAILED test_capture_persian_only - AssertionError: Persian-only idea raised",
+                "stdout_text": "FAILED tests/test_capture.py::test_capture_persian_only - AssertionError: Persian-only idea raised",
             },
         },
     }
@@ -383,7 +450,9 @@ def test_validator_is_self_contained_outside_the_repo(tmp_path):
     elsewhere = tmp_path / "some-project"
     shutil.copytree(skill, elsewhere / "orcinus-verify")
     bundle = elsewhere / "bundle.json"
-    bundle.write_text(json.dumps(_good_bundle()), encoding="utf-8")
+    b = _good_bundle()
+    _write_junit_reports(b, elsewhere)
+    bundle.write_text(json.dumps(b), encoding="utf-8")
     result = subprocess.run(
         [
             sys.executable,
@@ -523,12 +592,15 @@ def test_missing_stdout_artifact_fails(tmp_path):
     # write_bytes, not write_text: the sha256 is computed over these
     # exact bytes, and text mode translates "\n" to "\r\n" on Windows
     # — the bytes on disk would no longer match the recorded hash.
-    (tmp_path / "logs" / "pytest-stdout.log").write_bytes(b"test_capture_persian_only passed\n")
+    (tmp_path / "logs" / "pytest-stdout.log").write_bytes(
+        b"tests/test_capture.py::test_capture_persian_only passed\n"
+    )
     (tmp_path / "logs" / "pytest-stderr.log").write_bytes(b"")
     b["checks"][0]["stdout_sha256"] = hashlib.sha256(
-        b"test_capture_persian_only passed\n"
+        b"tests/test_capture.py::test_capture_persian_only passed\n"
     ).hexdigest()
     b["checks"][0]["stderr_sha256"] = hashlib.sha256(b"").hexdigest()
+    _write_junit_reports(b, tmp_path)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
 
@@ -661,6 +733,7 @@ def test_artifact_with_correct_sha256_passes(tmp_path):
     # exact bytes, and text mode translates "\n" to "\r\n" on Windows
     # — the bytes on disk would no longer match the recorded hash.
     (tmp_path / "logs" / "pytest-stdout.log").write_bytes(content.encode())
+    _write_junit_reports(b, tmp_path)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
 
@@ -1174,6 +1247,7 @@ def _run_cli_with_verdict_block(bundle, block_text):
     validator = Path(__file__).resolve().parent / "validate_evidence.py"
     with tempfile.TemporaryDirectory() as d:
         bundle_path = Path(d) / "bundle.json"
+        _write_junit_reports(bundle, Path(d))
         bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
         block_path = Path(d) / "response.md"
         block_path.write_text(block_text, encoding="utf-8")
@@ -1384,3 +1458,114 @@ def test_time_order_with_unvalidated_input_reports_instead_of_raising():
         ve.check_time_order(bundle, problems)  # must not raise
         assert problems, (started, finished)
         assert any("test" in p for p in problems), problems
+
+
+def test_fail_first_one_char_id_fails():
+    # F-03: a 1-char test id used to pass by substring ("e" appears
+    # in every output). The id is now a pytest nodeid, linked
+    # structurally to the JUnit reports — a bare 1-char id is not
+    # a nodeid and matches no report entry.
+    b = _good_bundle()
+    b["fail_first"]["test"] = "e"
+    problems = _problems(b)
+    assert any("fail_first.test" in p and "e" in p for p in problems)
+
+
+def test_fail_first_substring_collision_fails():
+    # F-03: test "sum" with a red run of an unrelated test whose
+    # output contains the substring used to pass. The nodeid must
+    # match a (classname, name) entry in the JUnit reports exactly.
+    b = _good_bundle()
+    b["fail_first"]["test"] = "sum"
+    b["fail_first"]["red_check"]["stdout_text"] = "FAIL totally_unrelated_sumthing_else"
+    b["checks"][0]["stdout_text"] = "totally_unrelated_sumthing_else passed"
+    problems = _problems(b)
+    assert any("fail_first.test" in p and "sum" in p for p in problems)
+
+
+def test_fail_first_real_junit_report_accepted(tmp_path):
+    # F-03 control: a real nodeid from a real JUnit fixture passes.
+    b = _good_bundle()
+    _write_junit_reports(b, tmp_path)
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
+
+
+def test_fail_first_missing_report_fails(tmp_path):
+    # F-03: no report → no PASS. A bundle with no red_report /
+    # green_report at all must be refused, even when the stdout
+    # text mentions the test id.
+    b = _good_bundle()
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) != []
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("red_report" in p for p in problems)
+    assert any("green_report" in p for p in problems)
+
+
+def test_fail_first_unparsable_report_fails(tmp_path):
+    # F-03: an unreadable / unparsable report is a refusal, not a
+    # fallback to the stdout substring.
+    b = _good_bundle()
+    _write_junit_reports(b, tmp_path)
+    (tmp_path / "red.xml").write_bytes(b"this is not xml <")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("red_report" in p for p in problems)
+
+
+def test_fail_first_report_missing_test_fails(tmp_path):
+    # F-03: the reports exist but name a different test — the
+    # named test is in neither run.
+    b = _good_bundle()
+    _write_junit_reports(
+        b,
+        tmp_path,
+        red_cases=[("tests.test_other", "test_other", "failed")],
+        green_cases=[("tests.test_other", "test_other", "passed")],
+    )
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any(_CANONICAL_NODEID in p for p in problems)
+
+
+def test_fail_first_red_report_passing_status_fails(tmp_path):
+    # F-03: the red report lists the test as passed — that is not
+    # a red, whatever the booleans and the stdout say.
+    b = _good_bundle()
+    _write_junit_reports(
+        b,
+        tmp_path,
+        red_cases=[(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "passed")],
+    )
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("red_report" in p and _CANONICAL_NODEID in p for p in problems)
+
+
+def test_fail_first_green_report_failing_status_fails(tmp_path):
+    # F-03: the green report lists the test as failed — that is
+    # not a green, whatever the passing 'test' check claims.
+    b = _good_bundle()
+    _write_junit_reports(
+        b,
+        tmp_path,
+        green_cases=[(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "failed")],
+    )
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("green_report" in p and _CANONICAL_NODEID in p for p in problems)
+
+
+def test_fail_first_class_nodeid_links_by_classname(tmp_path):
+    # F-03: a nodeid with a class (tests/test_x.py::TestFoo::
+    # test_bar) derives classname tests.test_x.TestFoo — the
+    # structural link uses classname + name, not the bare name.
+    b = _good_bundle()
+    nodeid = "tests/test_capture.py::TestCapture::test_capture_persian_only"
+    b["fail_first"]["test"] = nodeid
+    b["fail_first"]["red_check"]["stdout_text"] = (
+        f"FAILED {nodeid} - AssertionError: Persian-only idea raised"
+    )
+    b["checks"][0]["stdout_text"] = f"{nodeid} passed; 45 passed in 0.42s"
+    _write_junit_reports(
+        b,
+        tmp_path,
+        red_cases=[("tests.test_capture.TestCapture", _CANONICAL_NAME, "failed")],
+        green_cases=[("tests.test_capture.TestCapture", _CANONICAL_NAME, "passed")],
+    )
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []

@@ -29,7 +29,16 @@ Two layers, kept separate:
    a fail-first proof. The proof carries the red run itself
    (command, non-zero exit code, output), and the test id must
    appear in the red output and in the passing test check's output
-   — a bare test name with no output proves nothing. Every check
+   — a bare test name with no output proves nothing. The test id
+   is the pytest nodeid (`tests/test_sum.py::test_sum_two_decimals`),
+   and the proof is structural, not a substring: fail_first
+   red_report / green_report are JUnit XML files (pytest
+   --junitxml), recorded as artifacts with their sha256, and the
+   red report must list the test as failed and the green report
+   as passed, matched exactly by (classname, name) — a 1-char id
+   or a substring of an unrelated test's name proves nothing, and
+   no report means no PASS. The stdout text is corroboration only.
+   Every check
    that ran (verdict PASS or FAIL) must carry its output — an
    artifact file with its sha256, or inline text — so a PASS with
    no reviewable output is rejected. Artifact paths must stay
@@ -87,6 +96,7 @@ import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
@@ -442,6 +452,101 @@ def _green_test_output(bundle, bundle_dir, problems):
     return None
 
 
+def _nodeid_to_junit(test_id):
+    """A pytest nodeid as the (classname, name) pair JUnit XML
+    identifies a test by — or None when the id is not a nodeid.
+    `tests/test_sum.py::test_sum_two_decimals` becomes
+    ("tests.test_sum", "test_sum_two_decimals");
+    `tests/test_x.py::TestFoo::test_bar` becomes
+    ("tests.test_x.TestFoo", "test_bar"), with parameters (the
+    part after the last `::`, `[param]` included) kept in the name.
+    pytest --junitxml natively emits <testcase classname="..."
+    name="..."> with <failure>/<error>/<skipped> children; the
+    outcome is structural (child present = failed/error/skipped,
+    no child = passed), and suite counts never identify *which*
+    test failed — so the link is the exact tuple, never a
+    substring."""
+    parts = test_id.split("::")
+    if len(parts) < 2:
+        return None
+    module = parts[0].removeprefix("./")
+    if not module.endswith(".py"):
+        return None
+    classname = module[:-3].replace("/", ".")
+    if len(parts) > 2:
+        classname = classname + "." + ".".join(parts[1:-1])
+    return (classname, parts[-1])
+
+
+def _load_junit_report(report, bundle_dir, label, problems):
+    """Read one fail_first report ({artifact, sha256, format}) as
+    {(classname, name): status}, with status in passed / failed /
+    error / skipped. Returns None when the report cannot be
+    established (the problem is already appended): absent,
+    unreadable, hash-mismatched, or unparsable — and no report
+    means no PASS, never a fallback to the stdout substring. The
+    artifact is read through the same containment / symlink /
+    size-cap path as every other artifact."""
+    if not isinstance(report, dict):
+        problems.append(
+            f"fail_first.{label} is missing: a behaviour-change PASS "
+            f"needs the structured {label} (JUnit XML, pytest "
+            f"--junitxml) — no report means no PASS"
+        )
+        return None
+    artifact = report.get("artifact")
+    if not isinstance(artifact, str) or not artifact:
+        problems.append(f"fail_first.{label} has no artifact: record the JUnit XML report file")
+        return None
+    if bundle_dir is None:
+        problems.append(
+            f"fail_first.{label} {artifact!r} was not verified: no "
+            f"bundle directory was given, so the artifact is unverified"
+        )
+        return None
+    f, problem = _open_artifact(bundle_dir, artifact, f"fail_first.{label}")
+    if problem:
+        problems.append(problem)
+        return None
+    with f:
+        data = f.read(MAX_ARTIFACT_BYTES + 1)
+    if len(data) > MAX_ARTIFACT_BYTES:
+        problems.append(
+            f"fail_first.{label} {artifact!r} is larger than the "
+            f"{MAX_ARTIFACT_BYTES}-byte artifact cap"
+        )
+        return None
+    recorded = report.get("sha256")
+    if isinstance(recorded, str) and recorded and hashlib.sha256(data).hexdigest() != recorded:
+        problems.append(
+            f"fail_first.{label} {artifact!r} sha256 mismatch: the file changed since the bundle was written"
+        )
+        return None
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        problems.append(f"fail_first.{label} {artifact!r} is not valid UTF-8 text")
+        return None
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError as e:
+        problems.append(f"fail_first.{label} {artifact!r} is not valid JUnit XML: {e}")
+        return None
+    statuses = {}
+    for case in root.iter("testcase"):
+        classname = case.get("classname") or ""
+        name = case.get("name") or ""
+        status = "passed"
+        for child in case:
+            if child.tag in ("failure", "error"):
+                status = "failed" if child.tag == "failure" else "error"
+                break
+            if child.tag == "skipped":
+                status = "skipped"
+        statuses[(classname, name)] = status
+    return statuses
+
+
 def check_fail_first(bundle, problems, bundle_dir=None):
     """The fail-first proof must show the test failing before the fix
     and passing after it. These are PASS rules, not validity rules:
@@ -459,7 +564,11 @@ def check_fail_first(bundle, problems, bundle_dir=None):
     output), and the test id must appear in the red output and in
     the passing 'test' check's output — a bare test name with no
     output proves nothing (a bundle naming "nonexistent_test" used
-    to pass)."""
+    to pass). The test id is a pytest nodeid, and the structural
+    proof is the JUnit XML reports: red_report must list the test
+    as failed/error and green_report as passed, matched exactly by
+    (classname, name). The stdout text is corroboration only; no
+    report means no PASS, and there is no substring fallback."""
     ff = bundle.get("fail_first")
     verdict = bundle.get("verdict")
     plan = bundle.get("verification_plan")
@@ -526,8 +635,53 @@ def check_fail_first(bundle, problems, bundle_dir=None):
         problems.append(
             f"fail_first.test {test_id!r} does not appear in the "
             f"passing 'test' check's output: the green run must be "
-            "the run of that test"
+            f"the run of that test"
         )
+    # Structured link (F-03): the stdout checks above are
+    # corroboration only. The proof is the JUnit reports: the test
+    # id is a pytest nodeid, and the red report must list it as
+    # failed/error and the green report as passed, matched exactly
+    # by (classname, name). No report → no PASS, and there is no
+    # fallback to the substring — that fallback is the hole being
+    # fixed. TAP is not built here: its description-only identity
+    # is the same weakness, and pytest --junitxml is the native
+    # report for the Python runners this skill verifies.
+    expected = _nodeid_to_junit(test_id)
+    if expected is None:
+        problems.append(
+            f"fail_first.test {test_id!r} is not a pytest nodeid "
+            f"(expected 'path/test_file.py::test_name'): the red and "
+            f"green runs cannot be linked to a test without one"
+        )
+        return
+    red_report = _load_junit_report(ff.get("red_report"), bundle_dir, "red_report", problems)
+    if red_report is not None:
+        status = red_report.get(expected)
+        if status is None:
+            problems.append(
+                f"fail_first.test {test_id!r} does not appear in the "
+                f"red_report: the red run must be the run of that test"
+            )
+        elif status not in ("failed", "error"):
+            problems.append(
+                f"fail_first.test {test_id!r} in the red_report has "
+                f"status {status!r}, not failed: the red run must show "
+                f"the test failing before the fix"
+            )
+    green_report = _load_junit_report(ff.get("green_report"), bundle_dir, "green_report", problems)
+    if green_report is not None:
+        status = green_report.get(expected)
+        if status is None:
+            problems.append(
+                f"fail_first.test {test_id!r} does not appear in the "
+                f"green_report: the green run must be the run of that test"
+            )
+        elif status != "passed":
+            problems.append(
+                f"fail_first.test {test_id!r} in the green_report has "
+                f"status {status!r}, not passed: the green run must show "
+                f"the test passing after the fix"
+            )
 
 
 # Commands that run nothing: a check whose command is a shell no-op
