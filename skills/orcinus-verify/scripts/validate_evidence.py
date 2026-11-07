@@ -1459,12 +1459,43 @@ def check_dirty_files(bundle, problems):
             )
 
 
+def _old_schema_problems(bundle, schema):
+    """The migration message (F-24): a bundle from an older schema
+    version is rejected with an explicit message — the schema moved
+    on, and the fix is to re-run verification with the current
+    validator — instead of the flat const error ("must be 6, got 4"),
+    which says nothing about what changed or how to upgrade.
+    Returns the problem list, or None when this does not apply: no
+    version, a non-integer version, the current version, or a newer
+    one — those keep the flat schema error. The CHANGELOG names only
+    schema v3 explicitly, so the message does not cite it for the
+    version history; the history is recorded in the validator's
+    tests (v3 rejection, v4 rejection, v5 rejection)."""
+    if not isinstance(bundle, dict):
+        return None
+    version = bundle.get("schema_version")
+    if type(version) is not int:
+        return None
+    current = schema.get("properties", {}).get("schema_version", {}).get("const")
+    if type(current) is not int or version >= current:
+        return None
+    return [
+        f"schema_version is {version}: this bundle was written against an older "
+        f"evidence schema (v{version}) - re-run verification with the current "
+        f"validator (schema v{current}) to produce a new bundle; old bundles are "
+        f"rejected, not migrated"
+    ]
+
+
 def validate_bundle(bundle, schema, bundle_dir=None):
     """Both layers. Structural problems short-circuit the semantic
     checks, so a malformed bundle can never crash them. bundle_dir
     is the directory the bundle file lives in; artifact paths resolve
     against it (the CLI passes the bundle's parent). When it is None,
     artifacts are recorded as explicitly unverified, never as passed."""
+    problems = _old_schema_problems(bundle, schema)
+    if problems:
+        return problems
     problems = validate_against_schema(bundle, schema)
     if problems:
         return problems

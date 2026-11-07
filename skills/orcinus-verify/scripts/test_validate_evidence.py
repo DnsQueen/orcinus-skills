@@ -782,12 +782,15 @@ def test_change_type_must_be_a_known_value():
 
 
 def test_old_schema_version_is_rejected():
-    # The v0.9.3 schema (version 4) adds required fields and rules;
-    # a v3 bundle must not silently pass under it.
+    # A v3 bundle is rejected with the migration message (F-24), not
+    # the flat const error: the message says the schema moved on and
+    # the fix is to re-run verification. Rejection is intentional.
     b = _good_bundle()
     b["schema_version"] = 3
     problems = _problems(b)
     assert any("schema_version" in p for p in problems)
+    assert any("older" in p for p in problems)
+    assert any("re-run verification" in p for p in problems)
 
 
 def test_pass_check_without_any_output_fails():
@@ -1346,13 +1349,36 @@ def test_non_blocking_finding_with_other_category_passes(tmp_path):
 
 
 def test_old_schema_version_4_is_rejected():
-    # The Track-4 schema change (category + diff hash + new rules)
-    # bumps schema_version 4 -> 5; a v4 bundle must not silently
-    # pass under v5.
+    # A v4 bundle is rejected with the migration message (F-24), not
+    # the flat const error. Rejection is intentional: old bundles are
+    # rejected, not migrated.
     b = _good_bundle()
     b["schema_version"] = 4
     problems = _problems(b)
     assert any("schema_version" in p for p in problems)
+    assert any("older" in p for p in problems)
+    assert any("re-run verification" in p for p in problems)
+
+
+def test_old_schema_version_5_is_rejected():
+    # F-24: the same for v5, the immediately previous version — the
+    # realistic migration case is a bundle written yesterday.
+    b = _good_bundle()
+    b["schema_version"] = 5
+    problems = _problems(b)
+    assert any("schema_version is 5" in p for p in problems)
+    assert any("re-run verification" in p for p in problems)
+
+
+def test_newer_schema_version_gets_flat_error():
+    # F-24 boundary: the migration message is only for OLDER bundles.
+    # A bundle from a newer schema gets the flat const error — it is
+    # not an upgrade the user can perform by re-running verification.
+    b = _good_bundle()
+    b["schema_version"] = 7
+    problems = _problems(b)
+    assert any("schema_version" in p for p in problems)
+    assert all("re-run verification" not in p for p in problems)
 
 
 def _run_cli_with_verdict_block(bundle, block_text):
