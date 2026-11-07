@@ -534,20 +534,109 @@ def check_fail_first(bundle, problems, bundle_dir=None):
 # proves no work happened, however clean its exit code looks.
 NOOP_COMMANDS = ("true", "false", ":", "echo", "exit")
 
+# Exit-code masking constructs (F-02): a command that always exits 0
+# whatever the gate did — `pytest || true`, `pytest ; exit 0`,
+# `bash -c true`, `python3 -c 'pass'`. This is defence against
+# sloppiness, not against a determined agent: a determined agent can
+# always fabricate output (see F-01), and no regex layer can stop
+# that. There is no real tool that detects deliberate `|| true` as a
+# defect — ShellCheck *recommends* `|| true` as the "ignore the
+# return value" idiom (SC2312) — so this is our own regex layer,
+# stdlib `re` only, no shell parser, no ShellCheck code. Only
+# constructs that are themselves always-zero are flagged: a genuine
+# fallback (`pytest || ruff check`, RHS a real command) and a
+# failure-preserving suffix (`|| exit 1`, `; exit 1`) pass, as do
+# `! cmd` (a legitimate absence assertion) and `cmd && exit 0` /
+# `cmd || exit 1` (failure preserved). There is deliberately NO
+# allowlist — notably no `grep -q ... || true` exemption: in a
+# *check* command the exit code is the evidence, and `grep -q` as
+# the check itself is the correct restructure.
+_MASKING_PATTERNS = (
+    (re.compile(r"\|\|\s*(?:true|/bin/true|/usr/bin/true)(?![\w/])"), "`|| true`"),
+    (re.compile(r"\|\|\s*:(?![\w/])"), "`|| :`"),
+    (re.compile(r"\|\|\s*exit\s+0(?![\w])"), "`|| exit 0`"),
+    (re.compile(r";\s*exit\s+0(?![\w])\s*(?:;|$)"), "`; exit 0`"),
+    (re.compile(r";\s*true(?![\w])\s*(?:;|$)"), "`; true`"),
+    (re.compile(r";\s*:(?![\w/])\s*(?:;|$)"), "`; :`"),
+    (re.compile(r"\|\s*true(?![\w])\s*$"), "`| true`"),
+    (re.compile(r"\|\s*:(?![\w/])\s*$"), "`| :`"),
+)
+
+# Bodies that make `python -c '...'` run nothing.
+_NOOP_PYTHON_BODIES = ("pass", "", "0", "exit(0)", "sys.exit(0)")
+
+
+def _masking_reason(command, _nested=False):
+    """The always-zero construct in `command`, or None.
+
+    Applies the masking patterns above, plus — one level only — the
+    inside of a leading `sh -c '...'` / `bash -c '...'` /
+    `dash -c '...'` and a `python -c '...'` whose body is a no-op.
+    """
+    for pattern, label in _MASKING_PATTERNS:
+        if pattern.search(command):
+            return label
+    if _nested:
+        first = command.strip().split()
+        if first and first[0] in NOOP_COMMANDS:
+            return f"a no-op command {first[0]!r}"
+        return None
+    stripped = command.strip()
+    shell = re.match(r"(?:ba|da)?sh\s+-c\s+(.*)$", stripped, re.DOTALL)
+    if shell:
+        inner = shell.group(1).strip()
+        if len(inner) >= 2 and inner[0] == inner[-1] and inner[0] in ("'", '"'):
+            inner = inner[1:-1]
+        reason = _masking_reason(inner, _nested=True)
+        if reason:
+            return f"`sh -c` wrapping {reason}"
+    python = re.match(r"python3?\s+-c\s+(.*)$", stripped, re.DOTALL)
+    if python:
+        body = python.group(1).strip()
+        if len(body) >= 2 and body[0] == body[-1] and body[0] in ("'", '"'):
+            body = body[1:-1]
+        normalised = re.sub(r"\s+", "", body.strip().rstrip(";").strip())
+        if normalised in _NOOP_PYTHON_BODIES:
+            return f"`python -c {body!r}`"
+    return None
+
+
+def _noop_problem(command, label):
+    """The no-op problem for one command, or None when it runs a gate."""
+    if not isinstance(command, str):
+        return None
+    first = command.strip().split()
+    if first and first[0] in NOOP_COMMANDS:
+        return (
+            f"{label} command {command!r} is a no-op: "
+            f"a check must run the gate, not a command that always succeeds"
+        )
+    reason = _masking_reason(command)
+    if reason:
+        return (
+            f"{label} command {command!r} is a no-op: it masks the exit "
+            f"code with {reason} — a check must run the gate, not a "
+            f"command that always succeeds"
+        )
+    return None
+
 
 def check_noop_commands(bundle, problems):
     """A check that ran a no-op command is not evidence of anything
-    (2-V2: command="true" for the test gate used to pass)."""
+    (2-V2: command="true" for the test gate used to pass). The same
+    applies to fail_first.red_check: a red run whose command always
+    exits 0 is not a red."""
     for c in _checks(bundle):
-        command = c.get("command")
-        if not isinstance(command, str):
-            continue
-        first = command.strip().split()
-        if first and first[0] in NOOP_COMMANDS:
-            problems.append(
-                f"check {c.get('name')!r} command {command!r} is a no-op: "
-                f"a check must run the gate, not a command that always succeeds"
-            )
+        problem = _noop_problem(c.get("command"), f"check {c.get('name')!r}")
+        if problem:
+            problems.append(problem)
+    ff = bundle.get("fail_first")
+    if isinstance(ff, dict):
+        red = ff.get("red_check")
+        if isinstance(red, dict):
+            problem = _noop_problem(red.get("command"), "fail_first.red_check")
+            if problem:
+                problems.append(problem)
 
 
 def check_identities(bundle, problems):

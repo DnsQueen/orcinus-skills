@@ -1240,3 +1240,70 @@ def test_verdict_block_file_not_in_findings_fails():
     proc = _run_cli_with_verdict_block(_good_bundle(), block)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "src/x.ts" in proc.stdout
+
+
+# --- Round-7 regression tests (Track 1: F-02, F-03, F-04, F-06, F-11).
+# Each of these passed on the v0.9.8 validator; they are the
+# red-first tests for this fix pass. ---
+
+
+def test_noop_exit_code_masking_suffix_fails():
+    # F-02: a check whose command masks its own exit code with an
+    # always-zero suffix proves nothing ran, however clean the exit
+    # code looks. ShellCheck recommends `|| true` as the "ignore the
+    # return value" idiom (SC2312), so this is our own regex layer,
+    # not a ShellCheck rule.
+    masking = [
+        "pytest -q || true",
+        "pytest -q || /bin/true",
+        "pytest -q || /usr/bin/true",
+        "pytest -q || :",
+        "pytest -q || exit 0",
+        "pytest -q ; exit 0",
+        "pytest -q ; :",
+        "pytest -q | true",
+        "bash -c true",
+        "bash -c 'pytest -q || true'",
+        'sh -c "exit 0"',
+        "python3 -c 'pass'",
+        "python3 -c 'exit(0)'",
+        "python -c 'sys.exit(0)'",
+        "python3 -c ''",
+    ]
+    for cmd in masking:
+        b = _good_bundle()
+        b["checks"][0]["command"] = cmd
+        problems = _problems(b)
+        assert any("no-op" in p for p in problems), cmd
+
+
+def test_noop_masking_in_red_check_fails():
+    # F-02: the masking check also applies to fail_first.red_check
+    # — a red run whose command always exits 0 is not a red.
+    b = _good_bundle()
+    b["fail_first"]["red_check"]["command"] = "pytest -q || true"
+    problems = _problems(b)
+    assert any("no-op" in p for p in problems)
+
+
+def test_noop_genuine_fallback_passes():
+    # F-02 controls: a real fallback, a failure-preserving suffix,
+    # a pipe to a real command, a nested shell running a real
+    # command, a python -c that actually runs something, and the
+    # legitimate `! cmd` absence assertion must NOT be flagged.
+    genuine = [
+        "pytest -q || ruff check",
+        "pytest -q || exit 1",
+        "pytest -q ; exit 1",
+        "pytest -q ; echo done",
+        "pytest -q | grep -q x",
+        "bash -c 'pytest -q'",
+        "python3 -c 'import sys; sys.exit(pytest.main())'",
+        "! pytest -q",
+        "pytest -q && exit 0",
+        "pytest -q || exit 1",
+    ]
+    for cmd in genuine:
+        b = _good_bundle()
+        b["checks"][0]["command"] = cmd
+        assert _problems(b) == [], cmd
