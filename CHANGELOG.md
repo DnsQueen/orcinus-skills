@@ -3,6 +3,34 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.6] — 2026-11-07
+
+Follow-up to the unreleased 0.9.5: the first CI run on 0.9.5 failed
+on two jobs (macOS, Windows), and the fixes below change shipped
+files, so the releasable version moves to 0.9.6 (the version-bump
+gate requires an increase whenever shipped content changes).
+
+### Fixed
+
+- CI: the Windows job failed 40 script tests — POSIX assumptions
+  throughout the scripts and their tests. Archive and plan keys are
+  now forward-slash on every platform (`package_skill`); `os.getuid`,
+  `signal.SIGKILL` and `fcntl` have Windows equivalents (doctor,
+  clean_copy_check, idea-capture locking); `verify.sh` runs under
+  Git Bash instead of the WSL launcher; `run_eval` resolves `claude`
+  with `shutil.which` (PATHEXT-aware) and pumps stdout with a reader
+  thread instead of `select`; fixtures write exact bytes and the MCP
+  builder emits UTF-8; `with_server` kills the whole process tree
+  with `taskkill /T /F` instead of only the shell.
+- CI: the macOS job failed the same 8 `with_server` tests — the
+  server never becomes ready, stays alive, and prints nothing. The
+  cause is still unproven (no macOS in this VM to reproduce it), so
+  this version adds diagnostics instead of another timeout: a
+  readiness failure now prints the server's recent output, and the
+  test servers print a `READY` marker once they are listening, so
+  the next failure distinguishes 'stuck before listen' from
+  'listening but unreachable'.
+
 ## [0.9.5] — 2026-11-07
 
 Follow-up to the unreleased 0.9.4: the first CI run on 0.9.4 failed
