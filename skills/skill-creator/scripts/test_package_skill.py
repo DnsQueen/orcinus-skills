@@ -16,7 +16,7 @@ import os
 import subprocess
 import sys
 import zipfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import package_skill as ps  # noqa: E402
@@ -49,6 +49,39 @@ def _zip_names(path):
 def _zip_contents(path):
     with zipfile.ZipFile(path) as zf:
         return {name: zf.read(name) for name in zf.namelist()}
+
+
+def test_archive_names_use_forward_slashes_for_windows_paths():
+    """Plan/archive keys must use forward slashes on every platform:
+    on Windows str(Path) gives backslashes, which the ZIP namelist
+    (forward slashes) and the forward-slash allowlist checks never
+    match — so packaging failed with 'archive contents do not match
+    the packaging plan'. PureWindowsPath reproduces that on Linux."""
+    rel = PureWindowsPath("sub") / ".env"
+    assert ps._archive_name("demo-skill", rel) == "demo-skill/sub/.env"
+
+
+def test_cli_does_not_crash_on_non_utf8_stdout(tmp_path):
+    """The CLI prints emoji; on a Windows console (cp1252) the first
+    one raised UnicodeEncodeError and killed the run before any
+    packaging happened. PYTHONIOENCODING=cp1252 reproduces that
+    console on Linux."""
+    skill = _valid_skill(tmp_path)
+    out = tmp_path / "out"
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    env["PYTHONIOENCODING"] = "cp1252"
+    proc = subprocess.run(
+        [sys.executable, "scripts/package_skill.py", str(skill), str(out)],
+        cwd=str(SKILL_CREATOR_DIR),
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (out / "demo-skill.skill").is_file()
 
 
 def test_env_file_is_never_packaged_by_default(tmp_path):

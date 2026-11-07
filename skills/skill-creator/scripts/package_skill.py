@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — packaging is allowlist-based with a printed plan, symlinks are never followed, common secret files are rejected unless explicitly allowed, files are copied from an open descriptor (O_NOFOLLOW), and the archive is written to a temp path, checked against the plan (names + SHA256), and renamed atomically, with a human confirmation prompt before writing; the `scripts.quick_validate` import falls back to a sibling import so the documented script invocation works without PYTHONPATH. The rest is verbatim; see ATTRIBUTION.md.
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — packaging is allowlist-based with a printed plan, symlinks are never followed, common secret files are rejected unless explicitly allowed, files are copied from an open descriptor (O_NOFOLLOW), and the archive is written to a temp path, checked against the plan (names + SHA256), and renamed atomically, with a human confirmation prompt before writing; the `scripts.quick_validate` import falls back to a sibling import so the documented script invocation works without PYTHONPATH; archive names are built from the path's parts with forward slashes on every platform (str(Path) on Windows gives backslashes, which the ZIP namelist never matched, so packaging failed); and stdout is set to replace unencodable characters so the emoji output cannot crash a Windows cp1252 console. The rest is verbatim; see ATTRIBUTION.md.
 """
 Skill Packager - Creates a distributable .skill file of a skill folder
 
@@ -73,16 +73,30 @@ def _is_secret_file(name):
     return any(name.endswith(suffix) for suffix in SECRET_SUFFIXES)
 
 
-def should_exclude(rel_path: Path) -> bool:
-    """Check if a path should be excluded from packaging."""
-    parts = rel_path.parts
+def _archive_name(skill_name, rel_path):
+    """Forward-slash archive name for a file in the skill.
+
+    Built from the path's parts so the separator is '/' on every
+    platform: str(Path) on Windows gives backslashes, which the ZIP
+    namelist (forward slashes) and the forward-slash allowlist
+    checks would never match.
+    """
+    return "/".join((skill_name, *rel_path.parts))
+
+
+def should_exclude(archive_name: str) -> bool:
+    """Check if a path should be excluded from packaging.
+
+    archive_name is the forward-slash name from _archive_name:
+    parts[0] is the skill folder name and parts[1] (if present)
+    is the first subdir.
+    """
+    parts = archive_name.split("/")
     if any(part in EXCLUDE_DIRS for part in parts):
         return True
-    # rel_path is relative to skill_path.parent, so parts[0] is the skill
-    # folder name and parts[1] (if present) is the first subdir.
     if len(parts) > 1 and parts[1] in ROOT_EXCLUDE_DIRS:
         return True
-    name = rel_path.name
+    name = parts[-1]
     if name in EXCLUDE_FILES:
         return True
     return any(fnmatch.fnmatch(name, pat) for pat in EXCLUDE_GLOBS)
@@ -92,10 +106,13 @@ def collect_files(skill_path, allow_secrets=()):
     """The packaging plan: (included, skipped).
 
     included is a list of (file_path, arcname); skipped is a list of
-    (arcname, reason). Symlinks are never followed — a symlink, a
-    file reached through a symlinked directory, and anything that
-    resolves outside the skill is skipped. Secret files are skipped
-    unless their path relative to the skill is in allow_secrets.
+    (arcname, reason). arcname is the forward-slash archive name
+    from _archive_name, so it matches the ZIP namelist and the
+    forward-slash allowlist checks on every platform. Symlinks are
+    never followed — a symlink, a file reached through a symlinked
+    directory, and anything that resolves outside the skill is
+    skipped. Secret files are skipped unless their path relative
+    to the skill is in allow_secrets.
     """
     skill_path = Path(skill_path).resolve()
     allowed_secrets = {Path(s).as_posix() for s in allow_secrets}
@@ -104,7 +121,7 @@ def collect_files(skill_path, allow_secrets=()):
         if not file_path.is_file() and not file_path.is_symlink():
             continue
         rel = file_path.relative_to(skill_path)
-        arcname = Path(skill_path.name) / rel
+        arcname = _archive_name(skill_path.name, rel)
         if file_path.is_symlink():
             skipped.append((arcname, "symlink — never followed"))
             continue
@@ -274,6 +291,16 @@ def package_skill(skill_path, output_dir=None, allow_secrets=(), confirm=False):
 
 
 def main(argv=None):
+    # The CLI prints emoji (📦 ✅ ❌); on a Windows console the
+    # stdout encoding is cp1252, where those raise UnicodeEncodeError
+    # and kill the run before any packaging happens. Keep the locale
+    # encoding but never fail on an unprintable character — it prints
+    # as '?' instead. Harmless where stdout is already UTF-8.
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
     parser = argparse.ArgumentParser(
         description="Package a skill folder into a .skill file. "
         "Only allowlisted files are included; symlinks are never "
