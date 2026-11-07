@@ -37,6 +37,8 @@ Use Stryker (stryker-mutator/stryker-js, Apache-2.0) as-is. Do not rewrite it, a
 
 Record the exact numbers: total mutants, killed, survived, timed out, no coverage, compile errors, and the mutation score. The score is killed divided by (total minus no coverage minus compile errors) — record Stryker's own score, do not recompute it by hand.
 
+Rounding is outside the mutator set: Stryker generates no mutant for Math.round at all — in the demo, the line-16 mutants are only ArithmeticOperator swaps — so even a break threshold of 80 would not have caught a Math.round → Math.floor swap, and a 100.00 score does not cover that class. The boundary test (a non-divisible case) is the only closure for it; record it alongside the score.
+
 ### 4. Prove the check can fail
 
 The report must name at least one mutant the tests killed, with file, line, and what changed. If no mutant was killed, the check proved nothing — say so, and do not call the suite tested.
