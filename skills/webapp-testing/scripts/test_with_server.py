@@ -9,6 +9,7 @@ test command hung the script forever. Run:
 """
 
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -471,6 +472,31 @@ def test_ready_path_count_must_match_server_count(tmp_path):
     assert "ready-path" in result.stderr
 
 
+def _termination_resistant_child_script(port, pidfile, os_name=os.name):
+    """Server script whose child survives a kill of the shell alone.
+    On POSIX the child ignores SIGTERM (preexec_fn); on Windows
+    preexec_fn raises ValueError and there is no 'sleep' binary, so
+    the child is a Python sleeper instead — it still survives
+    terminate() of the shell, because that signal never reaches it."""
+    if os_name == "nt":
+        spawn = "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        imports = "import http.server, subprocess, sys\n"
+    else:
+        spawn = (
+            "def _ignore():\n"
+            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            "child = subprocess.Popen(['sleep', '120'], preexec_fn=_ignore)\n"
+        )
+        imports = "import http.server, signal, subprocess\n"
+    return (
+        imports
+        + spawn
+        + f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
+        + f"http.server.HTTPServer(('127.0.0.1', {port}), "
+        "http.server.SimpleHTTPRequestHandler).serve_forever()\n"
+    )
+
+
 def test_sigterm_ignoring_child_does_not_survive_cleanup(tmp_path):
     """F2-03: cleanup SIGTERMed the group, then waited for the LEADER
     only — when the leader died promptly, a SIGTERM-ignoring child
@@ -481,13 +507,7 @@ def test_sigterm_ignoring_child_does_not_survive_cleanup(tmp_path):
     pidfile = tmp_path / "child.pid"
     server = tmp_path / "server.py"
     server.write_text(
-        "import http.server, signal, subprocess\n"
-        "def _ignore():\n"
-        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
-        f"child = subprocess.Popen(['sleep', '120'], preexec_fn=_ignore)\n"
-        f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
-        f"http.server.HTTPServer(('127.0.0.1', {port}), "
-        "http.server.SimpleHTTPRequestHandler).serve_forever()\n",
+        _termination_resistant_child_script(port, pidfile),
         encoding="utf-8",
     )
     rc, out, err = run_with_server(
@@ -535,3 +555,134 @@ def test_crashing_server_reports_its_stderr(tmp_path):
         if proc.poll() is None:
             proc.terminate()
         proc.wait(timeout=10)
+
+
+def test_sigterm_child_script_is_windows_compatible(tmp_path):
+    """The sigterm test's server script must not use preexec_fn or the
+    'sleep' binary: on Windows preexec_fn raises ValueError and
+    there is no sleep binary, so the server crashed at startup
+    (CI 0.9.5, Windows: 'preexec_fn is not supported on Windows
+    platforms'). The Windows variant must also actually run."""
+    port = free_port()
+    pidfile = tmp_path / "child.pid"
+    script = _termination_resistant_child_script(port, pidfile, os_name="nt")
+    assert "preexec_fn" not in script
+    assert "['sleep'" not in script
+    assert "time.sleep(120)" in script
+    proc, err_file = _start_server(tmp_path, "win-server.py", script)
+    try:
+        assert _wait_port_open(port), (
+            f"server on {port} never listened ({_server_detail(proc, err_file)})"
+        )
+        assert int(pidfile.read_text(encoding="utf-8")) > 0
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait(timeout=10)
+        try:
+            child_pid = int(pidfile.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            child_pid = None
+        if child_pid is not None:
+            try:
+                os.kill(child_pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+
+# --- Round-6 follow-up (2026-11-07): Windows cleanup killed only the shell ---
+
+
+def _tree_server_script(port, pidfile):
+    """A server that spawns a long-lived child and serves HTTP: the
+    child survives a kill of the shell alone, so it proves whether
+    cleanup killed the tree or just the leader."""
+    return (
+        "import http.server, subprocess, sys\n"
+        "child = subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(120)'])\n"
+        f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
+        f"http.server.HTTPServer(('127.0.0.1', {port}), "
+        "http.server.SimpleHTTPRequestHandler).serve_forever()\n"
+    )
+
+
+def _fake_kill_tree_windows(pid):
+    """Linux stand-in for taskkill /T /F: SIGKILL the leader's whole
+    process group. Only used to exercise the Windows branch of
+    _stop_process_group on Linux; on Windows the real taskkill runs."""
+    os.killpg(os.getpgid(pid), signal.SIGKILL)
+    return True
+
+
+def test_kill_tree_windows_uses_taskkill(monkeypatch):
+    """The Windows tree-kill must be taskkill /PID <pid> /T /F:
+    terminate() alone kills only the cmd.exe shell, so the flag
+    that kills the children (/T) is the whole point."""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return subprocess.CompletedProcess(argv, 0)
+
+    monkeypatch.setattr(with_server.subprocess, "run", fake_run)
+    assert with_server._kill_tree_windows(1234) is True
+    assert calls == [["taskkill", "/PID", "1234", "/T", "/F"]]
+
+    def missing_run(argv, **kwargs):
+        raise FileNotFoundError("taskkill")
+
+    monkeypatch.setattr(with_server.subprocess, "run", missing_run)
+    assert with_server._kill_tree_windows(1234) is False
+
+
+def test_windows_cleanup_kills_whole_tree(tmp_path, monkeypatch):
+    """CI 0.9.5, Windows: after cleanup the server was still
+    listening (test_normal_flow, test_test_command_timeout) and the
+    next run on the same port was refused as 'already in use'
+    (test_ready_path_rejects, test_ready_path_repeatable). Root
+    cause: on Windows there are no process groups, so cleanup
+    called terminate() on the cmd.exe shell only and the real
+    server kept running. The Windows branch must kill the whole
+    tree. Simulated on Linux: the Windows branch runs with the
+    POSIX APIs stubbed out (taskkill emulated by a group SIGKILL)."""
+    port = free_port()
+    pidfile = tmp_path / "child.pid"
+    server = tmp_path / "server.py"
+    server.write_text(_tree_server_script(port, pidfile), encoding="utf-8")
+    proc = subprocess.Popen(
+        f"{sys.executable} {server}",
+        shell=True,
+        start_new_session=True,
+    )
+    pgid = os.getpgid(proc.pid)
+    try:
+        assert _wait_port_open(port), "server never listened"
+        child_pid = int(pidfile.read_text(encoding="utf-8"))
+        with monkeypatch.context() as m:
+            m.setattr(os, "name", "nt")
+            m.setattr(with_server, "_kill_tree_windows", _fake_kill_tree_windows, raising=False)
+            with_server._stop_process_group(proc, "server-1")
+        deadline = time.time() + 10
+        alive = True
+        while time.time() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                alive = False
+                break
+            time.sleep(0.2)
+        assert not alive, "the server's child survived the Windows cleanup"
+        assert not port_is_open(port), "the server is still listening after cleanup"
+    finally:
+        # Whatever the run under test left behind, kill the whole
+        # group (the shell's session) so no server lingers.
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)

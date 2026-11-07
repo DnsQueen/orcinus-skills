@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — stdout/stderr are drained in background threads, readiness is an HTTP check with a liveness check, cleanup signals the whole process group, and the test command has a timeout. Round 6 (2026-11-07): readiness requires a 2xx response (any status used to count, so a 500/503 counted as ready); --ready-path is repeatable per server; a port already held by another service is rejected before starting; cleanup SIGKILLs the process group even when the leader exits promptly (a SIGTERM-ignoring child used to survive). The rest is verbatim; see ATTRIBUTION.md.
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — stdout/stderr are drained in background threads, readiness is an HTTP check with a liveness check, cleanup signals the whole process group, and the test command has a timeout. Round 6 (2026-11-07): readiness requires a 2xx response (any status used to count, so a 500/503 counted as ready); --ready-path is repeatable per server; a port already held by another service is rejected before starting; cleanup SIGKILLs the process group even when the leader exits promptly (a SIGTERM-ignoring child used to survive). Round-6 follow-up (2026-11-07): on Windows cleanup killed only the cmd.exe shell (no process groups there), so the server kept listening and the next run found the port held; cleanup now kills the whole tree with taskkill /PID <pid> /T /F. The rest is verbatim; see ATTRIBUTION.md.
 """
 Start one or more servers, wait for them to be ready, run a command, then clean up.
 
@@ -44,6 +44,10 @@ Rules this script follows (each one is a defect that was found and fixed):
   and the group is signalled on cleanup — SIGTERM, then SIGKILL,
   even when the leader exits promptly (a SIGTERM-ignoring child
   used to survive that path: the SIGKILL ran only on timeout).
+  On Windows there are no process groups (start_new_session is
+  POSIX-only), so cleanup kills the whole tree with
+  taskkill /PID <pid> /T /F instead — terminate() alone kills only
+  the cmd.exe shell and the server keeps listening.
   The port-free check has a race: a service that binds between the
   check and the server start is still possible, and a different
   service answering 2xx on the ready path cannot be told apart
@@ -156,10 +160,52 @@ def is_server_ready(port, timeout=30, ready_path=None, process=None, ok_statuses
     return False
 
 
+def _kill_tree_windows(pid):
+    """Kill a process and all its children on Windows (taskkill /T).
+    terminate() kills only the cmd.exe shell that shell=True started,
+    so the real server kept listening after cleanup and the next run
+    found the port still held. taskkill ships with Windows (System32),
+    so it is present on the CI runners. Returns True when taskkill
+    reported success, False when it is missing or the kill failed."""
+    try:
+        result = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
 def _stop_process_group(process, label, timeout=5):
     """Stop a server and everything it started. The server runs in its
     own process group, so signalling the group reaches the real server,
     not just the shell that launched it."""
+    if os.name == "nt":
+        # No process groups on Windows (start_new_session is POSIX
+        # only), and terminate() kills only the cmd.exe shell — the
+        # real server and its children keep listening. taskkill /T
+        # kills the whole tree; it runs while the leader is still
+        # alive, so the children are still its children.
+        if process.poll() is None and not _kill_tree_windows(process.pid):
+            print(
+                f"warning: server {label} could not be stopped with taskkill",
+                file=sys.stderr,
+            )
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass
+        if process.poll() is None:
+            try:
+                process.kill()
+            except (OSError, ProcessLookupError):
+                pass
+        try:
+            process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            print(f"warning: server {label} did not stop", file=sys.stderr)
+        return
     pgid = None
     if os.name == "posix":
         try:
