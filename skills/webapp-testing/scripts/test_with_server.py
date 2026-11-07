@@ -678,7 +678,11 @@ def test_sigterm_child_script_is_windows_compatible(tmp_path):
             child_pid = None
         if child_pid is not None:
             try:
-                os.kill(child_pid, signal.SIGKILL)
+                # signal.SIGKILL does not exist on Windows; SIGTERM
+                # terminates the process there (TerminateProcess), so
+                # it is the fallback where SIGKILL is absent. Never
+                # name signal.SIGKILL unconditionally.
+                os.kill(child_pid, getattr(signal, "SIGKILL", signal.SIGTERM))
             except OSError:
                 pass
 
@@ -700,6 +704,38 @@ def _tree_server_script(port, pidfile):
         f"print('READY {port}', flush=True)\n"
         "srv.serve_forever()\n"
     )
+
+
+def _pid_is_alive(pid):
+    """True when the process exists, without killing it. On Windows
+    os.kill(pid, 0) terminates the process instead of probing it,
+    so the Windows probe goes through OpenProcess +
+    GetExitCodeProcess — the same probe as
+    skills/idea-capture/scripts/capture.py::_pid_is_alive_windows
+    (round 6, S1). A process that cannot be opened because it does
+    not exist (error 87) is dead; any other failure to open it, or
+    to read its exit code, is treated as alive (fail-safe)."""
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return kernel32.GetLastError() != 87
+        try:
+            exit_code = ctypes.c_ulong(0)
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True  # unreadable exit code — fail-safe: alive.
+            return exit_code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def _fake_kill_tree_windows(pid):
@@ -740,7 +776,12 @@ def test_windows_cleanup_kills_whole_tree(tmp_path, monkeypatch):
     called terminate() on the cmd.exe shell only and the real
     server kept running. The Windows branch must kill the whole
     tree. Simulated on Linux: the Windows branch runs with the
-    POSIX APIs stubbed out (taskkill emulated by a group SIGKILL)."""
+    POSIX APIs stubbed out (taskkill emulated by a group SIGKILL).
+    On Windows the real taskkill runs — the POSIX fake is Linux-only
+    (it calls os.getpgid itself) — and the setup, cleanup and probe
+    use only APIs that exist on Windows (no os.getpgid / os.killpg
+    there; the probe is _pid_is_alive, because os.kill(pid, 0)
+    terminates the process on Windows instead of probing it)."""
     port = free_port()
     pidfile = tmp_path / "child.pid"
     server = tmp_path / "server.py"
@@ -750,20 +791,27 @@ def test_windows_cleanup_kills_whole_tree(tmp_path, monkeypatch):
         shell=True,
         start_new_session=True,
     )
-    pgid = os.getpgid(proc.pid)
+    # os.getpgid does not exist on Windows, and there are no process
+    # groups there to remember: only record the pgid where the API
+    # exists, and let the finally below fall back to the taskkill
+    # tree-kill on Windows.
+    pgid = os.getpgid(proc.pid) if hasattr(os, "getpgid") else None
     try:
         assert _wait_port_open(port), "server never listened"
         child_pid = int(pidfile.read_text(encoding="utf-8"))
+        # Read os.name before the context below patches it: on
+        # Windows the real taskkill runs; the POSIX fake is installed
+        # only on Linux/macOS.
+        real_windows = os.name == "nt"
         with monkeypatch.context() as m:
             m.setattr(os, "name", "nt")
-            m.setattr(with_server, "_kill_tree_windows", _fake_kill_tree_windows, raising=False)
+            if not real_windows:
+                m.setattr(with_server, "_kill_tree_windows", _fake_kill_tree_windows, raising=False)
             with_server._stop_process_group(proc, "server-1")
         deadline = time.time() + 10
         alive = True
         while time.time() < deadline:
-            try:
-                os.kill(child_pid, 0)
-            except ProcessLookupError:
+            if not _pid_is_alive(child_pid):
                 alive = False
                 break
             time.sleep(0.2)
@@ -772,10 +820,15 @@ def test_windows_cleanup_kills_whole_tree(tmp_path, monkeypatch):
     finally:
         # Whatever the run under test left behind, kill the whole
         # group (the shell's session) so no server lingers.
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except OSError:
-            pass
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except OSError:
+                pass
+        else:
+            # No process groups on Windows: kill the whole tree with
+            # the product's own taskkill helper instead.
+            with_server._kill_tree_windows(proc.pid)
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
