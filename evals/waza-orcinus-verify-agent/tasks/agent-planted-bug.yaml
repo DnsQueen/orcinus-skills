@@ -37,9 +37,9 @@ graders:
     type: code
     config:
       assertions:
-        - "verdict_block(output) is not None"
-        - "(verdict_block(output) or {}).get(\"verdict\") == \"FAIL\""
-        - "(verdict_block(output) or {}).get(\"file\") == \"summary.ts\""
-        - "\"Math.floor\" in finding(output) or \"floor\" in finding(output).lower()"
-        - "check(output, \"test\") == \"PASS\""
-        - "\"did not run\" not in output.lower()"
+        - 'len(re.findall(r"```verdict\n(.*?)\n```", output, re.S)) == 1 and output.rstrip().endswith("```")'
+        - 're.search(r"\"verdict\"\s*:\s*\"FAIL\"", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"file\"\s*:\s*\"summary\.ts\"", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"finding\"\s*:\s*\"((?:[^\"\\]|\\.)*)(?i:floor)", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"test\"\s*:\s*\"PASS\"", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - '"did not run" not in output.lower()'

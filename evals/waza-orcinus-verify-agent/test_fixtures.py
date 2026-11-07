@@ -242,15 +242,23 @@ def test_pass_tasks_demand_only_attainable_gates():
     """E2: the four PASS tasks demand checks == all four gates PASS.
     That demand is only fair because the gates run on the fixtures
     (see test_four_gates_pass_on_fixtures) — an honest agent that
-    runs them gets all four PASS instead of INCOMPLETE."""
+    runs them gets all four PASS instead of INCOMPLETE. The demand
+    is expressed inline (round 7, F-05): one regex assertion per
+    gate plus an exactly-four-keys assertion, instead of the old
+    single dict-equality assertion on the graders.py helpers."""
     tasks = _load_tasks()
     for task_id in ("agent-pass", "agent-pass-budget", "agent-pass-fixed", "agent-pass-handoff"):
         assertions = tasks[task_id]["graders"][0]["config"]["assertions"]
-        assert any(
-            '"checks") == {"build": "PASS", "lint": "PASS", "typecheck": "PASS", "test": "PASS"}'
-            in a
-            for a in assertions
-        ), f"{task_id} must demand all four gates PASS"
-        assert any('"verdict") == "PASS"' in a for a in assertions), (
+        # The assertions are regexes, so their quotes arrive escaped
+        # (\"build\"); strip the escapes before matching the words.
+        plain = [a.replace("\\", "") for a in assertions]
+        for gate in ("build", "lint", "typecheck", "test"):
+            assert any(f'"{gate}"' in a and '"PASS"' in a and "re.search" in a for a in plain), (
+                f"{task_id} must demand {gate} PASS"
+            )
+        assert any('"checks"' in a and "== 4" in a for a in plain), (
+            f"{task_id} must demand exactly four checks"
+        )
+        assert any('"verdict"' in a and '"PASS"' in a and "re.search" in a for a in plain), (
             f"{task_id} must demand verdict PASS"
         )

@@ -17,9 +17,17 @@ do:
   PASSED the suite.
 - Every task requires the structured verdict block: the agent's
   single verdict lives in a fenced ```verdict JSON block, and the
-  graders parse that block (evals/waza-orcinus-verify-agent/
-  graders.py) and compare its fields — verdict, file, checks,
-  finding — instead of matching substrings of it. A few
+  task assertions parse that block inline — `re` only, using
+  waza-documented names (see
+  test_task_assertions_use_only_waza_documented_names) — and
+  compare its fields — verdict, file, checks, finding — instead
+  of matching substrings of it. graders.py is the executable
+  specification of those semantics: the assertions inline its
+  verdict_block / finding / check bodies, because waza's
+  code-grader namespace is closed (context vars plus len, any,
+  all, str, int, float, bool, list, dict, re; no `json`, no
+  sibling-module helpers — round 7, F-05) and a helper call in a
+  task YAML raised NameError on the real runner. A few
   task-specific evidence words ("fixed", "handoff", the refusal)
   are still prose checks, because the good outputs state them in
   the prose rather than in the finding; the verdict itself, the
@@ -34,6 +42,7 @@ do:
 Run: python3 -m pytest evals/waza-orcinus-verify-agent/test_graders.py -q
 """
 
+import ast
 import json
 import re
 import sys
@@ -42,7 +51,7 @@ from pathlib import Path
 import yaml  # type: ignore[import-untyped]  # PyYAML ships no type stubs
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from graders import check, finding, verdict_block  # noqa: E402
+from graders import verdict_block  # noqa: E402
 
 SUITE = Path(__file__).resolve().parent
 TASKS = SUITE / "tasks"
@@ -180,18 +189,66 @@ def _load_tasks():
 def _grade(task, output):
     """Evaluate a task's code assertions against one output, the way
     waza's code grader does: every assertion is a Python expression
-    with `output` in scope, and all of them must hold. The
-    programmatic grader helpers (graders.py) are injected into that
-    namespace, so the assertions parse the verdict block through
-    them instead of matching substrings of it."""
+    with `output` in scope, and all of them must hold. The namespace
+    is waza's closed set — the context vars plus the documented
+    built-ins (len, any, all, str, int, float, bool, list, dict, re)
+    and NOTHING else: no `json`, no graders.py helpers. That is the
+    point (round 7, F-05 / N3): the old _grade hand-injected
+    verdict_block / finding / check into the namespace, so the
+    in-repo suite could not detect that the real runner does not
+    resolve those names. The graders.py import at the top of this
+    file (verdict_block) is only for building and verifying test
+    inputs; it is never used for grading."""
     assertions = task["graders"][0]["config"]["assertions"]
     namespace = {
+        "__builtins__": {},
         "output": output,
-        "verdict_block": verdict_block,
-        "finding": finding,
-        "check": check,
+        "re": re,
+        "len": len,
+        "any": any,
+        "all": all,
+        "str": str,
+        "int": int,
+        "float": float,
+        "bool": bool,
+        "list": list,
+        "dict": dict,
     }
     return all(eval(a, namespace) for a in assertions)
+
+
+# The names a waza `code` assertion may reference, from waza's own
+# graders docs (microsoft.github.io/waza/guides/graders/, v0.40.0):
+# the context variables (output, outcome, transcript, tool_calls,
+# tool_events, command_invocations, host_lifecycle,
+# user_input_requests, errors, duration_ms) plus the closed
+# built-in list (len, any, all, str, int, float, bool, list, dict,
+# re). `json` is NOT in that list, and there is no module, prelude
+# or globals mechanism for loading sibling-module helpers — a task
+# assertion naming anything else raises NameError on the real
+# runner (round 7, F-05).
+WAZA_DOCUMENTED_NAMES = {
+    "output",
+    "outcome",
+    "transcript",
+    "tool_calls",
+    "tool_events",
+    "command_invocations",
+    "host_lifecycle",
+    "user_input_requests",
+    "errors",
+    "duration_ms",
+    "len",
+    "any",
+    "all",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "list",
+    "dict",
+    "re",
+}
 
 
 def test_suite_has_nine_tasks():
@@ -265,11 +322,48 @@ def test_degenerate_policies_below_threshold():
 
 def test_every_task_requires_a_verdict_block():
     """No task may grade on bare words alone: each grader list must
-    call the programmatic grader on the fenced ```verdict block."""
+    parse the fenced ```verdict block inline (the `re.findall`
+    pattern that extracts the block) and check its fields — never
+    a bare-word match, and never a call to the graders.py helpers
+    (those names do not resolve in waza's namespace; F-05)."""
     for task_id, task in _load_tasks().items():
         assertions = task["graders"][0]["config"]["assertions"]
-        assert any("verdict_block(output)" in a for a in assertions), (
+        assert any("```verdict" in a for a in assertions), (
             f"{task_id} has no verdict-block assertion"
+        )
+        for assertion in assertions:
+            assert "verdict_block(" not in assertion, (
+                f"{task_id} calls verdict_block, which waza does not resolve"
+            )
+            assert "finding(" not in assertion, (
+                f"{task_id} calls finding, which waza does not resolve"
+            )
+            assert "check(" not in assertion, f"{task_id} calls check, which waza does not resolve"
+
+
+def test_task_assertions_use_only_waza_documented_names():
+    """N3 (round 7, F-05): every name a task assertion references
+    must be in waza's documented set — the context vars plus the
+    closed built-in list. `verdict_block`, `finding`, `check` and
+    `json` must NOT appear: the old task YAMLs named the helpers,
+    test_graders.py::_grade hand-injected them, and the in-repo
+    suite could not detect that the real runner raises NameError
+    for them. This test fails on the old task YAMLs and passes
+    once the helpers are inlined with `re` only. The eval.yaml
+    suite-level assertions are checked the same way."""
+    for task_id, task in _load_tasks().items():
+        for assertion in task["graders"][0]["config"]["assertions"]:
+            names = {
+                node.id for node in ast.walk(ast.parse(assertion)) if isinstance(node, ast.Name)
+            }
+            assert names <= WAZA_DOCUMENTED_NAMES, (
+                f"{task_id} references undocumented names {sorted(names - WAZA_DOCUMENTED_NAMES)}: {assertion!r}"
+            )
+    suite = yaml.safe_load((SUITE / "eval.yaml").read_text(encoding="utf-8"))
+    for assertion in suite["graders"][0]["config"]["assertions"]:
+        names = {node.id for node in ast.walk(ast.parse(assertion)) if isinstance(node, ast.Name)}
+        assert names <= WAZA_DOCUMENTED_NAMES, (
+            f"eval.yaml references undocumented names {sorted(names - WAZA_DOCUMENTED_NAMES)}: {assertion!r}"
         )
 
 
@@ -345,6 +439,16 @@ def test_two_verdict_blocks_fail():
     for task_id, output in GOOD.items():
         attack = output + "\n" + PASS_BLOCK % "4 tests pass"
         assert not _grade(tasks[task_id], attack), f"a second verdict block must fail {task_id}"
+
+
+def test_extra_check_gate_fails():
+    """Round 7, F-05: the old checks-equality assertion rejected a
+    block with a fifth gate. The inline replacement (four gate
+    assertions plus exactly-four-keys) must reject it too."""
+    tasks = _load_tasks()
+    for task_id in ("agent-pass", "agent-pass-budget", "agent-pass-fixed", "agent-pass-handoff"):
+        attack = GOOD[task_id].replace('"test": "PASS"}', '"test": "PASS", "deploy": "PASS"}')
+        assert not _grade(tasks[task_id], attack), f"a fifth gate must fail {task_id}"
 
 
 # --- Round-6 Track 6: E5/E6/2-E3 gaps the M7 programmatic grader

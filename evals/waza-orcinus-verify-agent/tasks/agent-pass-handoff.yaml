@@ -39,10 +39,14 @@ graders:
     type: code
     config:
       assertions:
-        - "verdict_block(output) is not None"
-        - "(verdict_block(output) or {}).get(\"verdict\") == \"PASS\""
-        - "(verdict_block(output) or {}).get(\"file\") is None"
-        - "(verdict_block(output) or {}).get(\"checks\") == {\"build\": \"PASS\", \"lint\": \"PASS\", \"typecheck\": \"PASS\", \"test\": \"PASS\"}"
-        - "\"handoff\" in output.lower()"
-        - "\"4\" in finding(output)"
-        - "\"did not run\" not in output.lower()"
+        - 'len(re.findall(r"```verdict\n(.*?)\n```", output, re.S)) == 1 and output.rstrip().endswith("```")'
+        - 're.search(r"\"verdict\"\s*:\s*\"PASS\"", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"file\"\s*:\s*null", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"build\"\s*:\s*\"PASS\"", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"lint\"\s*:\s*\"PASS\"", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"typecheck\"\s*:\s*\"PASS\"", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"test\"\s*:\s*\"PASS\"", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 'len(re.findall(r"\"[^\"]+\"\s*:", (re.search(r"\"checks\"\s*:\s*\{([^}]*)\}", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) or ["", ""])[1])) == 4'
+        - '"handoff" in output.lower()'
+        - 're.search(r"\"finding\"\s*:\s*\"((?:[^\"\\]|\\.)*)4", (re.findall(r"```verdict\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - '"did not run" not in output.lower()'
