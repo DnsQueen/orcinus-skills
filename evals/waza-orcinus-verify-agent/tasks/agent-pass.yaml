@@ -35,9 +35,9 @@ graders:
     type: code
     config:
       assertions:
-        - "\"```verdict\" in output"
-        - "\"\\\"verdict\\\": \\\"PASS\\\"\" in output"
-        - "\"\\\"verdict\\\": \\\"FAIL\\\"\" not in output"
-        - "\"\\\"file\\\": null\" in output"
-        - "\"\\\"build\\\": \\\"PASS\\\"\" in output and \"\\\"lint\\\": \\\"PASS\\\"\" in output and \"\\\"typecheck\\\": \\\"PASS\\\"\" in output and \"\\\"test\\\": \\\"PASS\\\"\" in output"
-        - "\"7\" in output"
+        - "verdict_block(output) is not None"
+        - "(verdict_block(output) or {}).get(\"verdict\") == \"PASS\""
+        - "(verdict_block(output) or {}).get(\"file\") is None"
+        - "(verdict_block(output) or {}).get(\"checks\") == {\"build\": \"PASS\", \"lint\": \"PASS\", \"typecheck\": \"PASS\", \"test\": \"PASS\"}"
+        - "\"7\" in finding(output)"
+        - "\"did not run\" not in output.lower()"

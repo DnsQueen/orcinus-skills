@@ -25,7 +25,7 @@ def _problems(bundle):
 
 def _good_bundle():
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "revision": "abc1234",
         "working_tree_state": "clean",
         "requirement": "Fix the Persian capture crash.",
@@ -41,7 +41,7 @@ def _good_bundle():
                 "tool_version": "pytest 8.4.2",
                 "started_at": "2026-11-06T10:00:00Z",
                 "finished_at": "2026-11-06T10:00:12Z",
-                "stdout_text": "45 passed in 0.42s",
+                "stdout_text": "test_capture_persian_only passed; 45 passed in 0.42s",
             },
             {
                 "name": "lint",
@@ -60,6 +60,7 @@ def _good_bundle():
         "unverified_items": [],
         "verdict": "PASS",
         "reviewer_identity": "orcinus-verify (independent session)",
+        "implementer_identity": "implementer (author session)",
         "verification_plan": {
             "change_type": "bug-fix",
             "required_gates": ["test", "lint"],
@@ -73,6 +74,11 @@ def _good_bundle():
             "failed_before": True,
             "passed_after": True,
             "method": "worktree",
+            "red_check": {
+                "command": "python3 -m pytest -q -k test_capture_persian_only",
+                "exit_code": 1,
+                "stdout_text": "FAILED test_capture_persian_only - AssertionError: Persian-only idea raised",
+            },
         },
     }
 
@@ -512,9 +518,11 @@ def test_missing_stdout_artifact_fails(tmp_path):
     assert any("stdout_artifact" in p for p in problems)
     assert any("stderr_artifact" in p for p in problems)
     (tmp_path / "logs").mkdir()
-    (tmp_path / "logs" / "pytest-stdout.log").write_text("ok")
+    (tmp_path / "logs" / "pytest-stdout.log").write_text("test_capture_persian_only passed\n")
     (tmp_path / "logs" / "pytest-stderr.log").write_text("")
-    b["checks"][0]["stdout_sha256"] = hashlib.sha256(b"ok").hexdigest()
+    b["checks"][0]["stdout_sha256"] = hashlib.sha256(
+        b"test_capture_persian_only passed\n"
+    ).hexdigest()
     b["checks"][0]["stderr_sha256"] = hashlib.sha256(b"").hexdigest()
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
@@ -587,10 +595,10 @@ def test_change_type_must_be_a_known_value():
 
 
 def test_old_schema_version_is_rejected():
-    # The v0.9.2 schema (version 3) adds required fields and rules;
-    # a v2 bundle must not silently pass under it.
+    # The v0.9.3 schema (version 4) adds required fields and rules;
+    # a v3 bundle must not silently pass under it.
     b = _good_bundle()
-    b["schema_version"] = 2
+    b["schema_version"] = 3
     problems = _problems(b)
     assert any("schema_version" in p for p in problems)
 
@@ -691,3 +699,193 @@ def test_empty_checks_with_pass_verdict_fails():
     b["stop_reason"] = "no acceptance criteria were given; stopped"
     problems = _problems(b)
     assert problems
+
+
+# --- Round-6 regression tests (M5–M8). Each of these passed on the
+# old validator; they are the red-first tests for this fix pass. ---
+
+
+def _artifact_bundle(tmp_path, artifact, content):
+    """A good bundle whose test check records `artifact` with the
+    sha256 of `content`, written under tmp_path. Returns the bundle;
+    the caller places the file (or link) itself."""
+    import hashlib
+
+    b = _good_bundle()
+    b["checks"][0]["stdout_artifact"] = artifact
+    b["checks"][0]["stdout_sha256"] = hashlib.sha256(content).hexdigest()
+    b["checks"][0].pop("stdout_text", None)
+    return b
+
+
+def test_artifact_absolute_path_fails(tmp_path):
+    # M5 (V3 / 2-V3 / 3-P1-5): an absolute path overrides the bundle
+    # directory, so a file outside the bundle used to hash and pass.
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"not in the bundle")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    b = _artifact_bundle(bundle_dir, str(outside), b"not in the bundle")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=bundle_dir)
+    assert any("absolute" in p for p in problems)
+
+
+def test_artifact_traversal_fails(tmp_path):
+    # M5: a ../ path that resolves outside the bundle must fail,
+    # even with the correct sha256.
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"not in the bundle")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    b = _artifact_bundle(bundle_dir, "../outside.txt", b"not in the bundle")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=bundle_dir)
+    assert any("outside" in p or "escapes" in p for p in problems)
+
+
+def test_artifact_symlink_fails(tmp_path):
+    # M5: a symlink inside the bundle pointing outside it must fail,
+    # even when the target has the recorded hash.
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"not in the bundle")
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "link.txt").symlink_to(outside)
+    b = _artifact_bundle(bundle_dir, "link.txt", b"not in the bundle")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=bundle_dir)
+    assert any("symlink" in p for p in problems)
+
+
+def test_artifact_without_bundle_dir_is_unverified():
+    # M5 (3-P1-5, API half): validate_bundle with bundle_dir=None
+    # used to return [] for an artifact it never checked — "not
+    # checked" silently equated with "passed". The artifact must be
+    # recorded as explicitly unverified.
+    b = _good_bundle()
+    b["checks"][0]["stdout_artifact"] = "logs/out.log"
+    b["checks"][0]["stdout_sha256"] = "0" * 64
+    b["checks"][0].pop("stdout_text", None)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=None)
+    assert any("unverified" in p for p in problems)
+
+
+def test_artifact_over_size_cap_fails(tmp_path):
+    # M5: a huge artifact must fail instead of being read fully
+    # into memory (the old code hashed with read_bytes()).
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    content = b"x" * (ve.MAX_ARTIFACT_BYTES + 1)
+    (bundle_dir / "big.log").write_bytes(content)
+    b = _artifact_bundle(bundle_dir, "big.log", content)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=bundle_dir)
+    assert any("larger than" in p for p in problems)
+
+
+def test_fail_first_without_red_check_fails():
+    # M6 (V1 / 2-V1): the red proof was only two booleans. A PASS
+    # for a behaviour change now needs the red run itself: command,
+    # non-zero exit code, and output.
+    b = _good_bundle()
+    b["fail_first"].pop("red_check", None)
+    problems = _problems(b)
+    assert any("red_check" in p for p in problems)
+
+
+def test_fail_first_red_check_zero_exit_fails():
+    # A red run that exits 0 is not a red.
+    b = _good_bundle()
+    b["fail_first"]["red_check"] = {
+        "command": "python3 -m pytest -q -k test_capture_persian_only",
+        "exit_code": 0,
+        "stdout_text": "FAILED test_capture_persian_only - AssertionError",
+    }
+    problems = _problems(b)
+    assert any("red_check" in p and "exit" in p for p in problems)
+
+
+def test_fail_first_unlinked_test_name_fails():
+    # M6 (2-V1): a bundle naming "nonexistent_test" used to pass —
+    # check_fail_first never read fail_first.test at all. The test
+    # id must appear in the red output and in the green check.
+    b = _good_bundle()
+    b["fail_first"]["test"] = "nonexistent_test"
+    problems = _problems(b)
+    assert any("nonexistent_test" in p for p in problems)
+
+
+def test_fail_first_test_missing_from_red_output_fails():
+    b = _good_bundle()
+    b["fail_first"]["red_check"] = {
+        "command": "python3 -m pytest -q -k test_capture_persian_only",
+        "exit_code": 1,
+        "stdout_text": "1 failed, 1 passed in 0.12s",
+    }
+    problems = _problems(b)
+    assert any("red" in p and "test_capture_persian_only" in p for p in problems)
+
+
+def test_fail_first_test_missing_from_green_check_fails():
+    b = _good_bundle()
+    b["checks"][0]["stdout_text"] = "45 passed in 0.42s"
+    problems = _problems(b)
+    assert any("test_capture_persian_only" in p for p in problems)
+
+
+def test_whitespace_only_stdout_text_fails():
+    # M8 (2-V2): stdout_text=" " used to count as output. Output
+    # must contain a non-whitespace character.
+    b = _good_bundle()
+    b["checks"][0]["stdout_text"] = " "
+    problems = _problems(b)
+    assert any("stdout_text" in p for p in problems)
+
+
+def test_empty_tool_version_fails():
+    # M8 (2-V2): tool_version="" used to pass (presence only).
+    b = _good_bundle()
+    b["checks"][0]["tool_version"] = ""
+    problems = _problems(b)
+    assert any("tool_version" in p for p in problems)
+
+
+def test_noop_command_fails():
+    # M8 (2-V2): command="true" for the test gate used to pass
+    # with exit 0 and whitespace output. A no-op command proves
+    # nothing ran.
+    for noop in ("true", "false", ":", "echo", "exit 0"):
+        b = _good_bundle()
+        b["checks"][0]["command"] = noop
+        problems = _problems(b)
+        assert any("no-op" in p for p in problems), noop
+
+
+def test_bad_revision_fails():
+    # M8 (2-V2): revision="not-a-sha!!" used to pass (minLength 1
+    # only). A revision is a hex SHA or 'working-tree'.
+    b = _good_bundle()
+    b["revision"] = "not-a-sha!!"
+    problems = _problems(b)
+    assert any("revision" in p for p in problems)
+
+
+def test_missing_implementer_identity_fails():
+    # M8 (2-V2): implementer_identity did not exist at all, so the
+    # "verifier != implementer" condition had nothing to compare
+    # against. It is now required.
+    b = _good_bundle()
+    b.pop("implementer_identity", None)
+    problems = _problems(b)
+    assert any("implementer_identity" in p for p in problems)
+
+
+def test_reviewer_is_implementer_fails():
+    # M8 (2-V2): reviewer_identity="implementer" used to pass. The
+    # verifier must differ from the implementer.
+    b = _good_bundle()
+    b["implementer_identity"] = "the-author"
+    b["reviewer_identity"] = "the-author"
+    problems = _problems(b)
+    assert any("differ" in p for p in problems)
+    b = _good_bundle()
+    b["reviewer_identity"] = "implementer"
+    problems = _problems(b)
+    assert any("implementer" in p for p in problems)

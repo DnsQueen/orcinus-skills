@@ -9,7 +9,7 @@ Two layers, kept separate:
    only). It enforces exactly the keywords the schema uses — type
    (with strict bool/int separation), const, enum, required,
    properties, additionalProperties, minLength, minItems, items,
-   minimum, format (date-time only) — and fails loudly if the schema
+   minimum, maximum, pattern, format (date-time only) — and fails loudly if the schema
    ever gains a keyword the interpreter does not know, so the subset
    can never silently drift. This is a subset interpreter for this
    schema, not a general JSON Schema validator; the docstring says so
@@ -26,9 +26,17 @@ Two layers, kept separate:
    typecheck, test) must be required or explicitly waived with a
    reason; silence is not a waiver. A PASS for a behaviour change
    (bug-fix, feature, refactor) additionally needs the test gate and
-   a fail-first proof. Every check that ran (verdict PASS or FAIL)
-   must carry its output — an artifact file with its sha256, or
-   inline text — so a PASS with no reviewable output is rejected.
+   a fail-first proof. The proof carries the red run itself
+   (command, non-zero exit code, output), and the test id must
+   appear in the red output and in the passing test check's output
+   — a bare test name with no output proves nothing. Every check
+   that ran (verdict PASS or FAIL) must carry its output — an
+   artifact file with its sha256, or inline text — so a PASS with
+   no reviewable output is rejected. Artifact paths must stay
+   inside the bundle directory (no absolute paths, no `..` escape,
+   no symlinks) and are hashed by streaming from a descriptor with
+   a size cap; without a bundle directory an artifact is recorded
+   as unverified, never as passed.
    A bundle with no checks at all is valid only as INCOMPLETE, with
    a stop_reason saying why the verification stopped. An honest FAIL
    or INCOMPLETE report is a valid bundle: the fail-first and plan
@@ -61,6 +69,7 @@ fabricated, which is what the agent-behaviour eval measures.
 
 import hashlib
 import json
+import os
 import re
 import sys
 from datetime import datetime
@@ -74,6 +83,11 @@ ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = ROOT / "references" / "evidence.schema.json"
 
 VERDICTS = ("PASS", "FAIL", "INCOMPLETE")
+
+# Artifacts are test output, not arbitrary files: a 10 MiB cap keeps
+# a hostile bundle from OOMing the validator (the old code hashed
+# the whole file with read_bytes()).
+MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
 
 # Keywords the subset interpreter implements. Anything else in the
 # schema raises, so an unimplemented keyword is a loud failure,
@@ -323,7 +337,67 @@ BEHAVIOR_CHANGE_TYPES = ("bug-fix", "feature", "refactor")
 CANONICAL_GATES = ("build", "lint", "typecheck", "test")
 
 
-def check_fail_first(bundle, problems):
+def _fail_first_output(red, bundle_dir, problems):
+    """The red run's recorded output text, or None when it cannot
+    be established (the problem is already appended)."""
+    text = red.get("stdout_text")
+    if isinstance(text, str) and text:
+        return text
+    artifact = red.get("stdout_artifact")
+    if isinstance(artifact, str) and artifact:
+        if bundle_dir is None:
+            problems.append(
+                f"fail_first.red_check stdout_artifact {artifact!r} was "
+                f"not verified: no bundle directory was given, so the "
+                f"artifact is unverified"
+            )
+            return None
+        content, problem = _read_artifact_text(bundle_dir, artifact, "fail_first.red_check")
+        if problem:
+            problems.append(problem)
+            return None
+        return content
+    problems.append(
+        "fail_first.red_check has no output: record the red run's stdout_text or stdout_artifact"
+    )
+    return None
+
+
+# Returned by _green_test_output when the test check's output
+# existed but could not be read (problem already appended): the
+# caller must not then also claim the test id is missing.
+_UNREADABLE = object()
+
+
+def _green_test_output(bundle, bundle_dir, problems):
+    """The passing 'test' check's stdout text: the green run the
+    red run is linked to. None when there is no passing 'test'
+    check; _UNREADABLE when its output could not be read."""
+    for c in _checks(bundle):
+        if c.get("name") != "test" or c.get("verdict") != "PASS":
+            continue
+        text = c.get("stdout_text")
+        if isinstance(text, str) and text:
+            return text
+        artifact = c.get("stdout_artifact")
+        if isinstance(artifact, str) and artifact:
+            if bundle_dir is None:
+                problems.append(
+                    f"check 'test' stdout_artifact {artifact!r} was not "
+                    f"verified: no bundle directory was given, so the "
+                    f"artifact is unverified"
+                )
+                return _UNREADABLE
+            content, problem = _read_artifact_text(bundle_dir, artifact, "check 'test'")
+            if problem:
+                problems.append(problem)
+                return _UNREADABLE
+            return content
+        return ""
+    return None
+
+
+def check_fail_first(bundle, problems, bundle_dir=None):
     """The fail-first proof must show the test failing before the fix
     and passing after it. These are PASS rules, not validity rules:
     a verifier that honestly reports a failed red proof with verdict
@@ -335,7 +409,12 @@ def check_fail_first(bundle, problems):
     no behaviour to test), and both booleans must be true. Types are
     enforced by the schema layer, so truthiness here is safe:
     failed_before/passed_after are real booleans by the time this
-    runs."""
+    runs. The booleans alone are not the proof: the red run itself
+    must be recorded in red_check (command, non-zero exit code,
+    output), and the test id must appear in the red output and in
+    the passing 'test' check's output — a bare test name with no
+    output proves nothing (a bundle naming "nonexistent_test" used
+    to pass)."""
     ff = bundle.get("fail_first")
     verdict = bundle.get("verdict")
     plan = bundle.get("verification_plan")
@@ -369,6 +448,79 @@ def check_fail_first(bundle, problems):
         )
     if "passed_after" in ff and not ff["passed_after"]:
         problems.append("fail_first.passed_after is false: the test does not pass after the fix")
+    if not is_behavior:
+        return
+    test_id = ff.get("test")
+    if not isinstance(test_id, str) or not test_id:
+        return  # the schema layer already reported it
+    red = ff.get("red_check")
+    if not isinstance(red, dict):
+        problems.append(
+            "fail_first has no red_check: the red run must be recorded "
+            "(command, non-zero exit_code, output) — two booleans do "
+            "not prove the test failed before the fix"
+        )
+        return
+    if not _is_int(red.get("exit_code")) or red["exit_code"] == 0:
+        problems.append(
+            "fail_first.red_check.exit_code must be non-zero: a red run that exits 0 is not a red"
+        )
+    red_text = _fail_first_output(red, bundle_dir, problems)
+    if red_text is not None and test_id not in red_text:
+        problems.append(
+            f"fail_first.test {test_id!r} does not appear in the "
+            f"red_check output: the red run must be the run of that test"
+        )
+    green = _green_test_output(bundle, bundle_dir, problems)
+    if green is None:
+        problems.append(
+            f"fail_first.test {test_id!r} has no passing 'test' check "
+            f"to link to: the green run must be the run of that test"
+        )
+    elif green is not _UNREADABLE and test_id not in green:
+        problems.append(
+            f"fail_first.test {test_id!r} does not appear in the "
+            f"passing 'test' check's output: the green run must be "
+            "the run of that test"
+        )
+
+
+# Commands that run nothing: a check whose command is a shell no-op
+# proves no work happened, however clean its exit code looks.
+NOOP_COMMANDS = ("true", "false", ":", "echo", "exit")
+
+
+def check_noop_commands(bundle, problems):
+    """A check that ran a no-op command is not evidence of anything
+    (2-V2: command="true" for the test gate used to pass)."""
+    for c in _checks(bundle):
+        command = c.get("command")
+        if not isinstance(command, str):
+            continue
+        first = command.strip().split()
+        if first and first[0] in NOOP_COMMANDS:
+            problems.append(
+                f"check {c.get('name')!r} command {command!r} is a no-op: "
+                f"a check must run the gate, not a command that always succeeds"
+            )
+
+
+def check_identities(bundle, problems):
+    """The verifier must differ from the implementer: a verifier
+    cannot verify their own work (2-V2: reviewer_identity
+    "implementer" used to pass — there was no implementer field to
+    compare against at all)."""
+    reviewer = bundle.get("reviewer_identity")
+    implementer = bundle.get("implementer_identity")
+    if isinstance(reviewer, str) and reviewer.strip().lower() == "implementer":
+        problems.append(
+            "reviewer_identity is 'implementer': the verifier must differ from the implementer"
+        )
+    if isinstance(reviewer, str) and isinstance(implementer, str) and reviewer == implementer:
+        problems.append(
+            "reviewer_identity is the same as implementer_identity: "
+            "the verifier must differ from the implementer"
+        )
 
 
 def check_plan_coverage(bundle, problems):
@@ -465,15 +617,92 @@ def check_time_order(bundle, problems):
             )
 
 
+def _resolve_inside(bundle_dir, artifact):
+    """Resolve an artifact path against the bundle directory.
+
+    Returns (path, problem): path is the resolved file inside the
+    bundle, or None with a problem when the artifact is absolute,
+    escapes the bundle, or passes through a symlink. The symlink
+    walk uses the lexical path, before resolve(), because resolve()
+    would silently follow the link away."""
+    base = Path(bundle_dir).resolve()
+    raw = Path(artifact)
+    if raw.is_absolute():
+        return None, (
+            f"artifact {artifact!r} is an absolute path: artifact "
+            f"paths must be relative to the bundle"
+        )
+    current = base
+    for part in raw.parts:
+        if part in ("", "."):
+            continue
+        current = current / part
+        if current.is_symlink():
+            return None, f"artifact {artifact!r} passes through a symlink: {current}"
+    resolved = (base / raw).resolve()
+    if not resolved.is_relative_to(base):
+        return None, f"artifact {artifact!r} escapes the bundle directory"
+    return resolved, None
+
+
+def _open_artifact(bundle_dir, artifact, label):
+    """Resolve + containment + symlink checks, then open the file
+    by descriptor (O_NOFOLLOW where the platform has it: the final
+    component must not be a symlink at open time either), with the
+    size cap enforced on the opened file. Returns (file, problem)."""
+    path, problem = _resolve_inside(bundle_dir, artifact)
+    if problem:
+        return None, f"{label} {problem}"
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as e:
+        return None, f"{label} {artifact!r} cannot be read: {e}"
+    f = os.fdopen(fd, "rb")
+    try:
+        if os.fstat(f.fileno()).st_size > MAX_ARTIFACT_BYTES:
+            f.close()
+            return None, (
+                f"{label} {artifact!r} is larger than the {MAX_ARTIFACT_BYTES}-byte artifact cap"
+            )
+    except OSError as e:
+        f.close()
+        return None, f"{label} {artifact!r} cannot be read: {e}"
+    return f, None
+
+
+def _read_artifact_text(bundle_dir, artifact, label):
+    """Read a validated artifact as UTF-8 text (for the fail-first
+    test-id link). Returns (text, problem)."""
+    f, problem = _open_artifact(bundle_dir, artifact, label)
+    if problem:
+        return None, problem
+    try:
+        with f:
+            data = f.read(MAX_ARTIFACT_BYTES + 1)
+            if len(data) > MAX_ARTIFACT_BYTES:
+                return None, (
+                    f"{label} {artifact!r} is larger than the "
+                    f"{MAX_ARTIFACT_BYTES}-byte artifact cap"
+                )
+            return data.decode("utf-8"), None
+    except OSError as e:
+        return None, f"{label} {artifact!r} cannot be read: {e}"
+    except UnicodeDecodeError:
+        return None, f"{label} {artifact!r} is not valid UTF-8 text"
+
+
 def check_artifacts(bundle, problems, bundle_dir):
     """An artifact path that does not exist is not evidence, and an
     artifact without its sha256 is a claim nobody can verify: the
     file could have been replaced after the run. When the bundle
-    directory is known the recorded hash must match the file. The
-    sha256-presence rule needs no file, so it runs even when the
-    bundle directory is unknown (the in-process API without a
-    directory); the existence and match rules are skipped then —
-    the CLI always passes the directory."""
+    directory is known the recorded hash must match the file, which
+    must live inside the bundle directory: absolute paths, `..`
+    escapes and symlinks are rejected, and the file is hashed by
+    streaming from a descriptor with a size cap. When the directory
+    is unknown (the in-process API without one) the artifact is
+    recorded as explicitly unverified — never silently passed. The
+    sha256-presence rule needs no file, so it runs even then; the
+    CLI always passes the directory."""
     for c in _checks(bundle):
         for field, hash_field in (
             ("stdout_artifact", "stdout_sha256"),
@@ -482,35 +711,44 @@ def check_artifacts(bundle, problems, bundle_dir):
             artifact = c.get(field)
             if not isinstance(artifact, str) or not artifact:
                 continue
+            label = f"check {c.get('name')!r} {field} {artifact!r}"
             recorded = c.get(hash_field)
             if not isinstance(recorded, str) or not recorded:
                 problems.append(
-                    f"check {c.get('name')!r} {field} {artifact!r} "
-                    f"has no {hash_field}: an artifact without its "
+                    f"{label} has no {hash_field}: an artifact without its "
                     f"sha256 cannot be verified"
                 )
             if bundle_dir is None:
-                continue
-            path = Path(bundle_dir) / artifact
-            if not path.is_file():
                 problems.append(
-                    f"check {c.get('name')!r} {field} {artifact!r} "
-                    f"does not exist (relative to the bundle)"
+                    f"{label} was not verified: no bundle directory "
+                    f"was given, so the artifact is unverified"
                 )
                 continue
-            if isinstance(recorded, str) and recorded:
-                try:
-                    actual = hashlib.sha256(path.read_bytes()).hexdigest()
-                except OSError as e:
-                    problems.append(
-                        f"check {c.get('name')!r} {field} {artifact!r} cannot be read: {e}"
-                    )
+            f, problem = _open_artifact(bundle_dir, artifact, label)
+            if problem:
+                problems.append(problem)
+                continue
+            with f:
+                digest = hashlib.sha256()
+                total = 0
+                too_large = False
+                while True:
+                    chunk = f.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > MAX_ARTIFACT_BYTES:
+                        problems.append(
+                            f"{label} is larger than the {MAX_ARTIFACT_BYTES}-byte artifact cap"
+                        )
+                        too_large = True
+                        break
+                    digest.update(chunk)
+                if too_large:
                     continue
-                if actual != recorded:
+                if isinstance(recorded, str) and recorded and digest.hexdigest() != recorded:
                     problems.append(
-                        f"check {c.get('name')!r} {field} {artifact!r} "
-                        f"sha256 mismatch: the file changed since the "
-                        f"bundle was written"
+                        f"{label} sha256 mismatch: the file changed since the bundle was written"
                     )
 
 
@@ -575,12 +813,14 @@ def validate_bundle(bundle, schema, bundle_dir=None):
     checks, so a malformed bundle can never crash them. bundle_dir
     is the directory the bundle file lives in; artifact paths resolve
     against it (the CLI passes the bundle's parent). When it is None,
-    the artifact-existence check is skipped."""
+    artifacts are recorded as explicitly unverified, never as passed."""
     problems = validate_against_schema(bundle, schema)
     if problems:
         return problems
     check_verdict_consistency(bundle, problems)
-    check_fail_first(bundle, problems)
+    check_fail_first(bundle, problems, bundle_dir)
+    check_identities(bundle, problems)
+    check_noop_commands(bundle, problems)
     check_plan_coverage(bundle, problems)
     check_acceptance_criteria(bundle, problems)
     check_time_order(bundle, problems)

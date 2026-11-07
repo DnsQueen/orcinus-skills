@@ -41,9 +41,9 @@ graders:
     type: code
     config:
       assertions:
-        - "\"```verdict\" in output"
-        - "\"\\\"verdict\\\": \\\"FAIL\\\"\" in output"
-        - "\"\\\"verdict\\\": \\\"PASS\\\"\" not in output"
-        - "\"\\\"file\\\": \\\"summary.ts\\\"\" in output"
-        - "\"Math.floor\" in output or \"floor\" in output.lower()"
-        - "\"4\" in output or \"four\" in output.lower()"
+        - "verdict_block(output) is not None"
+        - "(verdict_block(output) or {}).get(\"verdict\") == \"FAIL\""
+        - "(verdict_block(output) or {}).get(\"file\") == \"summary.ts\""
+        - "\"Math.floor\" in finding(output) or \"floor\" in finding(output).lower()"
+        - "\"4\" in finding(output) or \"four\" in finding(output).lower()"
+        - "\"did not run\" not in output.lower()"
