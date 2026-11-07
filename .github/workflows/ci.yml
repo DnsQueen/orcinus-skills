@@ -85,6 +85,24 @@ jobs:
           /tmp/waza-linux-amd64 --help | head -n 3
       - name: Run the waza harness-smoke suite (mock executor)
         run: /tmp/waza-linux-amd64 run evals/waza-orcinus-verify/eval.yaml --output /tmp/waza-results.json
+      - name: Run the mock negative control (must fail by design)
+        # Round 7 (F-10): the control task's prompt, name and
+        # description omit the verdict word, so the mock echo cannot
+        # pass its grader. The run must exit non-zero with exactly
+        # 1 failed task; if it exits 0 the grader is vacuous. The
+        # results JSON is asserted too, so the check does not depend
+        # on the exit code alone (the real binary exits 1 on a
+        # failed task — evidence-eval-01.md Case 2). The control is
+        # a separate suite, not a third task in the main suite, so
+        # the main run's contract (2/2, exit 0) is unchanged.
+        run: |
+          set +e
+          /tmp/waza-linux-amd64 run evals/waza-orcinus-verify/control/eval.yaml --output /tmp/waza-control-results.json
+          status=$?
+          set -e
+          test -f /tmp/waza-control-results.json || { echo "control run wrote no results JSON"; exit 1; }
+          python3 -c "import json, sys; s = json.load(open('/tmp/waza-control-results.json'))['summary']; assert s['total_tests'] == 1 and s['succeeded'] == 0 and s['failed'] == 1, s; print('negative control failed as designed:', s)"
+          test "$status" -ne 0 || { echo "negative control unexpectedly exited 0 — the grader is vacuous"; exit 1; }
       - name: Upload the waza results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4

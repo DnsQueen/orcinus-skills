@@ -1,0 +1,23 @@
+name: orcinus-verify-negative-control
+description: |
+  Negative control for the mock orcinus-verify suite (round 7, F-10). The single task's prompt, name and description never state the expected verdict word, so the mock executor — which echoes the prompt, name and description into its output — cannot satisfy a grader that asserts the word. The grader still asserts the expected verdict (FAIL) appears in the output. This run MUST fail: 0 succeeded, 1 failed. If it ever passes on the mock, the grader is vacuous — it passes without the answer. A mock pass proves the harness runs, never the skill. This is a separate suite from evals/waza-orcinus-verify/eval.yaml so the shipped main suite (2 tasks) stays green; CI runs this control separately and asserts the failure. The control task references no fixture file: its prompt names no file and the mock never reads files.
+skill: orcinus-verify
+schemaVersion: "1.0"
+version: "1.0"
+config:
+  trials_per_task: 1
+  timeout_seconds: 120
+  parallel: false
+  executor: mock
+metrics:
+  - name: task_completion
+    weight: 1.0
+    threshold: 0.8
+graders:
+  - type: code
+    name: output_nonempty
+    config:
+      assertions:
+        - "len(output) > 0"
+tasks:
+  - "tasks/*.yaml"

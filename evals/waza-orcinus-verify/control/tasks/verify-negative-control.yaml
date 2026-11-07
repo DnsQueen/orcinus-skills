@@ -1,0 +1,33 @@
+id: verify-negative-control
+name: "A slice with a broken test, graded without naming the verdict"
+description: |
+  Negative control for the mock suite: the prompt, name and
+  description never state the expected verdict word, so the mock
+  executor — which echoes the prompt, name and description into
+  its output — cannot satisfy a grader that asserts the word. The
+  grader still asserts the expected verdict word appears in the
+  output. If this task ever succeeds on the mock, the grader is
+  vacuous: it succeeds without the answer. A real agent run must
+  return the verdict for the broken slice.
+tags:
+  - verify
+  - control
+inputs:
+  prompt: "Verify a slice whose test does not succeed: read the code and the tests, run the checks yourself, and return a verdict with the evidence."
+  context:
+    skill: orcinus-verify
+    slice: broken-slice
+expected:
+  output_contains:
+    - "FAIL"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 5
+graders:
+  - name: verdict_present
+    type: code
+    config:
+      assertions:
+        - "len(output) > 0"
+        - "\"FAIL\" in output"

@@ -22,6 +22,8 @@ How to check whether the Waza evidence/eval setup works. The Waza CLI is the off
 
 **Input:** the same suite plus a control task (`verify-gate-can-fail`) whose `output_contains` string is deliberately absent from any mock response (`zz-no-such-verdict-zz`). The control task lives in the eval workspace only — it is NOT shipped in `evals/waza-orcinus-verify/`, so the shipped suite stays green.
 
+Note (round 7, F-10, 2026-11-08): a negative control is now shipped as a separate suite, `evals/waza-orcinus-verify/control/` (a `code` grader asserting FAIL, whose prompt, name and description omit the word), and CI runs it separately, asserting the failure — the shipped main suite still stays green. Case 2 as written above used the workspace-only `zz-no-such-verdict-zz` control for the 2026-11-06 run; a future run of this case against the shipped control expects 1 test, 0 succeeded, 1 failed, exit 1, instead of the 3-test counts below.
+
 **Pass criteria:**
 
 1. The control task fails with `matched 0/1 required strings; missing: [zz-no-such-verdict-zz]`.
