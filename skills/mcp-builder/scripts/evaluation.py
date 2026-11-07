@@ -1,3 +1,4 @@
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — the minimum mcp version is 1.8.0 (streamable_http does not exist in 1.1.0; see scripts/requirements.txt). Round 6 (2026-11-07): tool results are serialised type-aware (a TextContent block used to raise TypeError inside json.dumps and the harness reported a fake "Error executing tool"); execution errors and serialisation errors are reported separately; ALL tool_use blocks in a turn are executed, not just the first; a malformed eval file, an incomplete qa_pair, or zero tasks raise a controlled error instead of reporting 0/0 with a passing exit; run_evaluation returns a structured result (report + correct/total/accuracy) and the CLI enforces --min-accuracy. The rest is verbatim; see ATTRIBUTION.md.
 """MCP Server Evaluation Harness
 
 This script evaluates MCP servers by running test questions against them using Claude.
@@ -54,26 +55,38 @@ Response Requirements:
 
 
 def parse_evaluation_file(file_path: Path) -> list[dict[str, Any]]:
-    """Parse XML evaluation file with qa_pair elements."""
+    """Parse XML evaluation file with qa_pair elements.
+
+    Round 6 (3-F2-09): a malformed file, an incomplete qa_pair, or
+    a file with no tasks at all used to return [] — and the harness
+    then reported 0/0 (0.0%) with a passing exit. All three are a
+    controlled ValueError now: there is nothing to evaluate, and
+    reporting a score over nothing is a false pass.
+    """
     try:
         tree = ET.parse(file_path)
-        root = tree.getroot()
-        evaluations = []
-
-        for qa_pair in root.findall(".//qa_pair"):
-            question_elem = qa_pair.find("question")
-            answer_elem = qa_pair.find("answer")
-
-            if question_elem is not None and answer_elem is not None:
-                evaluations.append({
-                    "question": (question_elem.text or "").strip(),
-                    "answer": (answer_elem.text or "").strip(),
-                })
-
-        return evaluations
-    except Exception as e:
-        print(f"Error parsing evaluation file {file_path}: {e}")
-        return []
+    except (ET.ParseError, OSError) as e:
+        raise ValueError(f"Cannot parse evaluation file {file_path}: {e}") from e
+    root = tree.getroot()
+    evaluations = []
+    incomplete = []
+    for index, qa_pair in enumerate(root.findall(".//qa_pair"), start=1):
+        question_elem = qa_pair.find("question")
+        answer_elem = qa_pair.find("answer")
+        question = (question_elem.text or "").strip() if question_elem is not None else ""
+        answer = (answer_elem.text or "").strip() if answer_elem is not None else ""
+        if not question or not answer:
+            incomplete.append(index)
+            continue
+        evaluations.append({"question": question, "answer": answer})
+    if incomplete:
+        raise ValueError(
+            f"Evaluation file {file_path} has {len(incomplete)} incomplete qa_pair(s) "
+            f"(missing or blank question/answer) at position(s): {', '.join(map(str, incomplete))}"
+        )
+    if not evaluations:
+        raise ValueError(f"Evaluation file {file_path} has no qa_pair tasks to run")
+    return evaluations
 
 
 def extract_xml_content(text: str, tag: str) -> str | None:
@@ -81,6 +94,37 @@ def extract_xml_content(text: str, tag: str) -> str | None:
     pattern = rf"<{tag}>(.*?)</{tag}>"
     matches = re.findall(pattern, text, re.DOTALL)
     return matches[-1].strip() if matches else None
+
+
+def _serialise_block(block: Any) -> Any:
+    """Serialise one tool-result block for json.dumps' `default`.
+
+    MCP content blocks (e.g. TextContent) are not JSON-serialisable,
+    so a plain json.dumps raises TypeError — and the old code caught
+    that as if the tool had failed to execute. Serialise type-aware:
+    a block with model_dump() becomes that dict; a block with .text
+    becomes {"type", "text"}; dicts and strings pass through;
+    anything else becomes str(). (Verified against the real SDK:
+    TextContent.model_dump() is {'type': 'text', 'text': ...,
+    'annotations': None}.)
+    """
+    if isinstance(block, (dict, str)):
+        return block
+    if hasattr(block, "model_dump"):
+        return block.model_dump()
+    text = getattr(block, "text", None)
+    if text is not None:
+        return {"type": getattr(block, "type", "text"), "text": text}
+    return str(block)
+
+
+def _serialise_tool_result(result: Any) -> str:
+    """Serialise a tool result for the next model turn. A list or
+    dict goes through json.dumps with the type-aware default; a
+    plain string passes through; anything else becomes str()."""
+    if isinstance(result, (dict, list)):
+        return json.dumps(result, default=_serialise_block)
+    return result if isinstance(result, str) else str(result)
 
 
 async def agent_loop(
@@ -107,32 +151,45 @@ async def agent_loop(
     tool_metrics = {}
 
     while response.stop_reason == "tool_use":
-        tool_use = next(block for block in response.content if block.type == "tool_use")
-        tool_name = tool_use.name
-        tool_input = tool_use.input
+        # Round 6 (3-F2-08): the old code took only the FIRST
+        # tool_use block (next(...)) and silently dropped the rest.
+        # Execute every tool_use block in the turn, in order, with
+        # one tool-result per call and the ids preserved.
+        tool_uses = [block for block in response.content if block.type == "tool_use"]
+        for tool_use in tool_uses:
+            tool_name = tool_use.name
+            tool_input = tool_use.input
 
-        tool_start_ts = time.time()
-        try:
-            tool_result = await connection.call_tool(tool_name, tool_input)
-            tool_response = json.dumps(tool_result) if isinstance(tool_result, (dict, list)) else str(tool_result)
-        except Exception as e:
-            tool_response = f"Error executing tool {tool_name}: {str(e)}\n"
-            tool_response += traceback.format_exc()
-        tool_duration = time.time() - tool_start_ts
+            tool_start_ts = time.time()
+            try:
+                tool_result = await connection.call_tool(tool_name, tool_input)
+            except Exception as e:
+                tool_response = f"Error executing tool {tool_name}: {str(e)}\n"
+                tool_response += traceback.format_exc()
+            else:
+                # Serialisation is a separate failure from
+                # execution (round 6, 3-F2-07): a result that cannot
+                # be serialised is not a tool that failed to run.
+                try:
+                    tool_response = _serialise_tool_result(tool_result)
+                except Exception as e:
+                    tool_response = f"Error serialising tool result for {tool_name}: {str(e)}\n"
+                    tool_response += traceback.format_exc()
+            tool_duration = time.time() - tool_start_ts
 
-        if tool_name not in tool_metrics:
-            tool_metrics[tool_name] = {"count": 0, "durations": []}
-        tool_metrics[tool_name]["count"] += 1
-        tool_metrics[tool_name]["durations"].append(tool_duration)
+            if tool_name not in tool_metrics:
+                tool_metrics[tool_name] = {"count": 0, "durations": []}
+            tool_metrics[tool_name]["count"] += 1
+            tool_metrics[tool_name]["durations"].append(tool_duration)
 
-        messages.append({
-            "role": "user",
-            "content": [{
-                "type": "tool_result",
-                "tool_use_id": tool_use.id,
-                "content": tool_response,
-            }]
-        })
+            messages.append({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": tool_use.id,
+                    "content": tool_response,
+                }]
+            })
 
         response = await asyncio.to_thread(
             client.messages.create,
@@ -221,8 +278,14 @@ async def run_evaluation(
     eval_path: Path,
     connection: Any,
     model: str = "claude-3-7-sonnet-20250219",
-) -> str:
-    """Run evaluation with MCP server tools."""
+) -> dict[str, Any]:
+    """Run evaluation with MCP server tools.
+
+    Returns a structured result — report, correct, total, accuracy
+    — so the CLI can enforce a threshold (round 6, 3-F2-09). A
+    malformed file, an incomplete qa_pair, or zero tasks raises
+    ValueError from parse_evaluation_file instead of reporting 0/0.
+    """
     print("🚀 Starting Evaluation")
 
     client = Anthropic()
@@ -269,7 +332,12 @@ async def run_evaluation(
         for i, (qa_pair, result) in enumerate(zip(qa_pairs, results))
     ])
 
-    return report
+    return {
+        "report": report,
+        "correct": correct,
+        "total": len(results),
+        "accuracy": accuracy,
+    }
 
 
 def parse_headers(header_list: list[str]) -> dict[str, str]:
@@ -333,6 +401,14 @@ Examples:
     remote_group.add_argument("-H", "--header", nargs="+", dest="headers", help="HTTP headers in 'Key: Value' format (sse/http only)")
 
     parser.add_argument("-o", "--output", type=Path, help="Output file for evaluation report (default: stdout)")
+    parser.add_argument(
+        "--min-accuracy",
+        type=float,
+        default=None,
+        help="Fail (exit 1) when accuracy is below this percentage "
+        "(default: no threshold — the mechanism is present, the "
+        "policy is the caller's, not an invented default).",
+    )
 
     args = parser.parse_args()
 
@@ -360,13 +436,25 @@ Examples:
 
     async with connection:
         print("✅ Connected successfully")
-        report = await run_evaluation(args.eval_file, connection, args.model)
+        try:
+            result = await run_evaluation(args.eval_file, connection, args.model)
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
 
+        report = result["report"]
         if args.output:
             args.output.write_text(report)
             print(f"\n✅ Report saved to {args.output}")
         else:
             print("\n" + report)
+
+        if args.min_accuracy is not None and result["accuracy"] < args.min_accuracy:
+            print(
+                f"Error: accuracy {result['accuracy']:.1f}% is below "
+                f"--min-accuracy {args.min_accuracy}%",
+            )
+            sys.exit(1)
 
 
 if __name__ == "__main__":

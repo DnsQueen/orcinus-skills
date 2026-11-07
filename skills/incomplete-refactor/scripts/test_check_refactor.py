@@ -7,6 +7,7 @@ nonexistent root), and the stale-test classification. Run:
     python3 -m pytest skills/incomplete-refactor/scripts/test_check_refactor.py -q
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -210,3 +211,116 @@ def test_allow_empty_accepts_an_empty_scan(tmp_path):
     rc, out, _ = run(tmp_path, "--old", "oldName", "--allow-empty")
     assert rc == 0, out
     assert out.startswith("clean:")
+
+
+# --- Round 6 (2026-11-07): S5, S6, 3-F2-10 ---
+
+
+def test_allow_normalises_dot_slash_prefix(tmp_path):
+    """S6: --allow ./CHANGELOG.md must exempt CHANGELOG.md — the
+    allowlist entry is not normalised, so the dotted form never
+    matched the relative path."""
+    write(tmp_path / "CHANGELOG.md", "mentions oldName on purpose\n")
+    write(tmp_path / "src" / "clean.ts", "export const x = 1;\n")
+    rc, out, _ = run(tmp_path, "--old", "oldName", "--allow", "./CHANGELOG.md")
+    assert rc == 0, out
+    assert out.startswith("clean:")
+
+
+def test_allow_normalises_redundant_separators(tmp_path):
+    """S6, same class: docs//migration.md and ./docs/migration.md
+    are the same relative path and must both match the allowlist."""
+    write(tmp_path / "docs" / "migration.md", "mentions oldName on purpose\n")
+    write(tmp_path / "src" / "clean.ts", "export const x = 1;\n")
+    rc, out, _ = run(tmp_path, "--old", "oldName", "--allow", "./docs//migration.md")
+    assert rc == 0, out
+    assert out.startswith("clean:")
+
+
+def test_skipped_files_are_counted_in_the_summary(tmp_path):
+    """S5: skipped files were invisible — they appeared in NO count,
+    so a clean result overclaimed coverage. The summary must report
+    how many generated-dir/lockfile entries were skipped."""
+    write(tmp_path / "build" / "gen.py", "oldName\n")
+    write(tmp_path / "Cargo.lock", "oldName\n")
+    write(tmp_path / "src" / "clean.ts", "export const x = 1;\n")
+    rc, out, _ = run(tmp_path, "--old", "oldName")
+    assert rc == 0, out
+    assert "2 skipped (generated dirs/lockfiles)" in out
+
+
+def test_only_skipped_files_is_incomplete_and_reports_skipped(tmp_path):
+    """S5: a repo whose only file is under build/ yielded INCOMPLETE
+    with no mention of the skipped file — never clean even though no
+    leftover exists, and no way to tell why."""
+    write(tmp_path / "build" / "gen.py", "oldName\n")
+    rc, out, _ = run(tmp_path, "--old", "oldName")
+    assert rc == 1, out
+    assert "INCOMPLETE" in out
+    assert "1 skipped (generated dirs/lockfiles)" in out
+
+
+def test_skip_dirs_are_configurable(tmp_path):
+    """S5: there was no --skip flag at all — the skip list could not
+    be narrowed or widened. --skip-dirs "" disables dir skipping, so
+    build/gen.py is scanned like any other file."""
+    write(tmp_path / "build" / "gen.py", "oldName\n")
+    write(tmp_path / "src" / "clean.ts", "export const x = 1;\n")
+    rc, out, _ = run(tmp_path, "--old", "oldName", "--skip-dirs", "")
+    assert rc == 1, out
+    assert "build/gen.py" in out
+    rc, out, _ = run(tmp_path, "--old", "oldName", "--skip-dirs", "build")
+    assert rc == 0, out
+    assert "1 skipped (generated dirs/lockfiles)" in out
+
+
+def test_skip_files_are_configurable(tmp_path):
+    """S5, same flag family for lockfiles: --skip-files "" scans a
+    lockfile that merely names an old package (a deliberate opt-in
+    to the false positive the default avoids)."""
+    write(tmp_path / "Cargo.lock", "oldName\n")
+    write(tmp_path / "src" / "clean.ts", "export const x = 1;\n")
+    rc, out, _ = run(tmp_path, "--old", "oldName", "--skip-files", "")
+    assert rc == 1, out
+    assert "Cargo.lock" in out
+
+
+def test_external_symlink_is_not_read(tmp_path):
+    """3-F2-10: a symlink inside the root pointing outside it was
+    read, and the outside file's content was reported as a hit in
+    link.js:1 — the scan root was not a read boundary. An outside
+    symlink must be skipped, counted, and INCOMPLETE (uncovered),
+    never reported as a hit in a file that does not contain it."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.js").write_text("oldFunction();\n", encoding="utf-8")
+    root = tmp_path / "root"
+    write(root / "app.js", "export const x = 1;\n")
+    os.symlink(str(outside / "secret.js"), str(root / "link.js"))
+    rc, out, _ = run(root, "--old", "oldFunction")
+    assert rc == 1, out
+    assert "INCOMPLETE" in out
+    assert "link.js:1" not in out
+    assert "1 skipped (symlink outside the scan root)" in out
+
+
+def test_internal_symlink_is_scanned(tmp_path):
+    """3-F2-10: a symlink whose target stays inside the root is
+    content the scan legitimately covers — its hits are reported,
+    under the link's own path."""
+    write(tmp_path / "src" / "real.js", "oldFunction();\n")
+    os.symlink("src/real.js", str(tmp_path / "link.js"))
+    rc, out, _ = run(tmp_path, "--old", "oldFunction")
+    assert rc == 1, out
+    assert "old-name" in out
+    assert "link.js:1" in out
+
+
+def test_broken_symlink_is_incomplete_not_a_crash(tmp_path):
+    """3-F2-10: a dangling symlink must not crash the scan and must
+    not pass silently — the scan did not cover it."""
+    write(tmp_path / "app.js", "export const x = 1;\n")
+    os.symlink("no-such-file.js", str(tmp_path / "link.js"))
+    rc, out, _ = run(tmp_path, "--old", "oldName")
+    assert rc == 1, out
+    assert "INCOMPLETE" in out

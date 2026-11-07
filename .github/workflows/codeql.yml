@@ -1,0 +1,32 @@
+name: CodeQL
+
+# Round 6 (CI-3): static analysis for the Python in this repo.
+# Runs on pushes/PRs to main and weekly. No build: the repo is
+# scripts, not a compiled project (build-mode: none). Actions are
+# pinned by full commit SHA, like ci.yml — see its header for the
+# update procedure.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"
+
+permissions:
+  security-events: write
+  actions: read
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9418214df1f2c4b8128c770156c409013b07d6b9 # github/codeql-action@v3
+        with:
+          languages: python
+          build-mode: none
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@9418214df1f2c4b8128c770156c409013b07d6b9 # github/codeql-action@v3

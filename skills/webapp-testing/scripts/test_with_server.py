@@ -8,11 +8,15 @@ test command hung the script forever. Run:
     python3 -m pytest skills/webapp-testing/scripts/test_with_server.py -q
 """
 
+import os
 import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import with_server  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parent / "with_server.py"
 
@@ -196,3 +200,276 @@ def test_mismatched_server_and_port_counts(tmp_path):
     )
     assert result.returncode == 1
     assert "must match" in result.stderr
+
+
+# --- Round 6 (2026-11-07): S7 / 3-F2-01 / 3-F2-02 / 3-F2-03 ---
+
+
+def _status_server_script(port, status, healthy_path=None):
+    """An HTTP server answering `status` on every GET — or 200 only
+    on `healthy_path` and 404 elsewhere, when one is given."""
+    if healthy_path is None:
+        body = (
+            "class H(http.server.BaseHTTPRequestHandler):\n"
+            "    def do_GET(self):\n"
+            f"        self.send_response({status})\n"
+            "        self.send_header('Content-Length', '2')\n"
+            "        self.end_headers()\n"
+            "        self.wfile.write(b'ok')\n"
+            "    def log_message(self, *a): pass\n"
+        )
+    else:
+        body = (
+            "class H(http.server.BaseHTTPRequestHandler):\n"
+            "    def do_GET(self):\n"
+            f"        code = 200 if self.path == {healthy_path!r} else 404\n"
+            "        self.send_response(code)\n"
+            "        self.send_header('Content-Length', '2')\n"
+            "        self.end_headers()\n"
+            "        self.wfile.write(b'ok')\n"
+            "    def log_message(self, *a): pass\n"
+        )
+    return (
+        "import http.server\n"
+        + body
+        + f"http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()\n"
+    )
+
+
+def _start_server(tmp_path, name, code):
+    """Start a server script as a subprocess; wait until its port
+    accepts a connection. Returns (proc, port-freeing cleanup)."""
+    script = tmp_path / name
+    script.write_text(code, encoding="utf-8")
+    proc = subprocess.Popen(
+        [sys.executable, str(script)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return proc
+
+
+def _wait_port_open(port, timeout=10):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if port_is_open(port):
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def test_http_ready_requires_2xx(tmp_path):
+    """F2-01 / S7: _http_ready returned True for ANY HTTP response —
+    a health endpoint answering 503 (or 500) counted as ready. Only
+    a 2xx response is readiness (configurable via --ready-status)."""
+    for status, expected in (
+        (200, True),
+        (204, True),
+        (301, False),
+        (404, False),
+        (500, False),
+        (503, False),
+    ):
+        port = free_port()
+        proc = _start_server(tmp_path, f"s{status}.py", _status_server_script(port, status))
+        try:
+            assert _wait_port_open(port), f"server on {port} never listened"
+            assert with_server._http_ready(port, "/health") is expected, f"status {status}"
+        finally:
+            proc.terminate()
+            proc.wait(timeout=10)
+
+
+def test_ready_status_range_is_configurable(tmp_path):
+    """F2-01: the 2xx rule is a default, not a hardcode — an operator
+    whose health endpoint answers 503 while warming up can say so
+    explicitly instead of the gate silently accepting every status."""
+    port = free_port()
+    proc = _start_server(tmp_path, "s503.py", _status_server_script(port, 503))
+    try:
+        assert _wait_port_open(port)
+        assert with_server._http_ready(port, "/health", ok_statuses={503}) is True
+        assert with_server._http_ready(port, "/health", ok_statuses={200}) is False
+        assert with_server._parse_ready_status("2xx") == set(range(200, 300))
+        assert with_server._parse_ready_status("200-204") == {200, 201, 202, 203, 204}
+        assert with_server._parse_ready_status("200,503") == {200, 503}
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_busy_port_is_rejected_before_starting(tmp_path):
+    """F2-02: another service already holding the port was declared
+    ready — even WITH --ready-path, because any responder counted.
+    The run must fail before starting, and the test command must
+    never run against the wrong service."""
+    port = free_port()
+    proc = _start_server(
+        tmp_path, "other.py", _status_server_script(port, 503, healthy_path="/health")
+    )
+    marker = tmp_path / "ran.txt"
+    try:
+        assert _wait_port_open(port)
+        rc, out, err = run_with_server(
+            "sleep 10",
+            port,
+            [sys.executable, "-c", f"open({str(marker)!r}, 'w').write('ran')"],
+            timeout=10,
+            extra=["--ready-path", "/health"],
+        )
+        assert rc == 1, out
+        assert "already in use" in (out + err)
+        assert not marker.exists(), "the test command ran against the wrong service"
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_ready_path_is_repeatable_per_server(tmp_path):
+    """S7: --ready-path was a single value passed to every server,
+    although backend and frontend usually have different health
+    paths. Two servers with different health paths must both be
+    checked on their own path."""
+    port_a, port_b = free_port(), free_port()
+    server_a = tmp_path / "a.py"
+    server_b = tmp_path / "b.py"
+    server_a.write_text(
+        _status_server_script(port_a, 200, healthy_path="/health-a"), encoding="utf-8"
+    )
+    server_b.write_text(
+        _status_server_script(port_b, 200, healthy_path="/health-b"), encoding="utf-8"
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--server",
+            f"{sys.executable} {server_a}",
+            "--port",
+            str(port_a),
+            "--server",
+            f"{sys.executable} {server_b}",
+            "--port",
+            str(port_b),
+            "--timeout",
+            "15",
+            "--ready-path",
+            "/health-a",
+            "--ready-path",
+            "/health-b",
+            "--",
+            sys.executable,
+            "-c",
+            "print('both ready')",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "both ready" in result.stdout
+    # A wrong per-server path must fail, not silently fall back to
+    # the other server's path.
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--server",
+            f"{sys.executable} {server_a}",
+            "--port",
+            str(port_a),
+            "--server",
+            f"{sys.executable} {server_b}",
+            "--port",
+            str(port_b),
+            "--timeout",
+            "6",
+            "--ready-path",
+            "/health-a",
+            "--ready-path",
+            "/wrong",
+            "--",
+            sys.executable,
+            "-c",
+            "print('both ready')",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 1
+    assert "failed to start" in result.stderr
+
+
+def test_ready_path_count_must_match_server_count(tmp_path):
+    """S7: two --ready-path values for one server (or any count that
+    is neither one nor the server count) is a usage error, not a
+    silent ignore-the-extra."""
+    port = free_port()
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--server",
+            "sleep 10",
+            "--port",
+            str(port),
+            "--ready-path",
+            "/a",
+            "--ready-path",
+            "/b",
+            "--",
+            "true",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode != 0
+    assert "ready-path" in result.stderr
+
+
+def test_sigterm_ignoring_child_does_not_survive_cleanup(tmp_path):
+    """F2-03: cleanup SIGTERMed the group, then waited for the LEADER
+    only — when the leader died promptly, a SIGTERM-ignoring child
+    survived (the SIGKILL half ran only on timeout). The group must
+    be SIGKILLed / verified empty even on the leader-exits-early
+    path."""
+    port = free_port()
+    pidfile = tmp_path / "child.pid"
+    server = tmp_path / "server.py"
+    server.write_text(
+        "import http.server, signal, subprocess\n"
+        "def _ignore():\n"
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"child = subprocess.Popen(['sleep', '120'], preexec_fn=_ignore)\n"
+        f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
+        f"http.server.HTTPServer(('127.0.0.1', {port}), "
+        "http.server.SimpleHTTPRequestHandler).serve_forever()\n",
+        encoding="utf-8",
+    )
+    rc, out, err = run_with_server(
+        f"{sys.executable} {server}",
+        port,
+        [sys.executable, "-c", "print('ran')"],
+        timeout=15,
+    )
+    assert rc == 0, err
+    assert "ran" in out
+    child_pid = int(pidfile.read_text(encoding="utf-8"))
+    try:
+        deadline = time.time() + 10
+        alive = True
+        while time.time() < deadline:
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                alive = False
+                break
+            time.sleep(0.2)
+        assert not alive, "the SIGTERM-ignoring child survived cleanup"
+    finally:
+        try:
+            os.kill(child_pid, 9)
+        except OSError:
+            pass

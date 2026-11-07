@@ -3,7 +3,7 @@ name: idea-capture
 description: Capture a raw idea the moment it arrives and keep it in a durable store, so it survives between sessions. Use whenever an idea comes up mid-work, in passing, or outside a calibration session — before it is lost — and when you need to find, promote, or drop a stored idea. Only invoke via the orcinus router.
 license: MIT
 user-invocable: false
-compatibility: Requires Python 3.10+.
+compatibility: Requires Python 3.11+.
 ---
 
 # IDEA-CAPTURE — a fleeting idea that is not captured is lost
@@ -22,7 +22,7 @@ An idea that arrives mid-work and is not written down is gone by the next sessio
 
 ### 1. Capture
 
-Run the script (`scripts/capture.py`, Python 3.10+, standard library only):
+Run the script (`scripts/capture.py`, Python 3.11+, standard library only):
 
 ```
 capture.py capture --store <project>/ideas --text "<the idea, verbatim>" --source "<who said it>"

@@ -84,7 +84,7 @@ search skipped malformed files: the result is partial, and a machine
 caller must not treat it as complete. Prints the
 idea id on capture, and human-readable lines otherwise.
 
-Requires Python 3.9+ (builtin generics, Path.is_relative_to).
+Requires Python 3.11+ (builtin generics, Path.is_relative_to).
 """
 
 import argparse
@@ -432,104 +432,148 @@ def _pid_is_alive(pid):
     return True
 
 
+def _try_lock(fd) -> bool:
+    """Take the OS advisory lock on an open fd, non-blocking: True
+    when acquired, False when another process holds it. POSIX uses
+    fcntl.flock; Windows uses msvcrt.locking on one byte at offset
+    0. Raises RuntimeError when no locking primitive exists on this
+    platform — the caller must fail closed, never proceed unlocked."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    try:
+        import fcntl
+    except ImportError:
+        raise RuntimeError("no advisory file-locking primitive on this platform")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(fd) -> None:
+    """Release the OS advisory lock on an open fd. Closing the fd
+    releases it too; this is belt-and-braces, and it never fails
+    the caller."""
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+    except ImportError:
+        pass
+
+
 def _acquire_lock(path: Path, timeout_s: float = 2.0):
-    """A lock file for one idea, created with O_EXCL so two processes
-    cannot hold it at once. The holder's PID is written into the file
-    the moment it is created, so a later process can tell a live holder
-    from a dead one. Returns (fd, lock_path, holder_pid): fd is None
-    when the lock is already held after the timeout, and holder_pid is
-    then the live holder's PID when it could be read, else None. The
-    caller must release it (close + unlink) in a finally block.
+    """An OS advisory lock for one idea, on a DURABLE lock file
+    that is never unlinked or renamed. The holder's PID is written
+    into the file after acquiring, for the "blocked by pid N"
+    message only — it is not the lock. Returns (fd, lock_path,
+    holder_pid): fd is None when the lock is still held after the
+    timeout, and holder_pid is then the recorded PID when it could
+    be read, else None. The caller must release it (unlock + close)
+    in a finally block.
 
-    Recovery: when the lock file names a dead process, the lock is
-    stale — it is removed with a note on stderr and acquisition is
-    retried. A lock file with no readable PID is treated as held
-    (fail-safe); a lock is never removed for age. After acquiring, the
-    file's inode is checked against the open fd: if another process
-    removed this lock and created its own in between, the acquisition
-    is discarded and retried, so a lock replaced before verification
-    is never mistaken for held.
+    Semantics (round 6, 3-P2-7 — this replaces the O_EXCL +
+    unlink-stale design, whose docstring admitted the race): the
+    lock is the flock/msvcrt lock on the file, not the file's
+    existence, so two processes can never both hold it, and there
+    is no recovery step left to race. When the holder dies the OS
+    releases the lock — even on SIGKILL, which no userspace cleanup
+    can survive — and the file stays behind with the dead holder's
+    PID; the next acquirer notes "stale lock ... recovered" and
+    overwrites the PID. A lock file with no flock holder is not
+    held, whatever PID it records (or fails to record): a planted
+    file is not a holder.
 
-    Known limits: a holder killed between creating the lock file and
-    writing its PID leaves an empty lock file, which is treated as
-    held — the window is a single write syscall. Two processes
-    recovering the same stale lock at the same instant can still
-    interleave (one unlinks the other's just-created lock); the
-    window is the microseconds between reading the dead PID and
-    unlinking, and the consequence is a lost History entry, not a
-    corrupt file."""
+    Crash behaviour: a holder killed mid-change leaves the file
+    (with a dead PID) and releases the lock; the next acquirer
+    proceeds, so no change is ever blocked forever by a dead
+    holder. The file itself is never removed, so nothing can unlink
+    another process's lock.
+
+    Portability: flock is POSIX, msvcrt.locking is Windows. The
+    Windows path is untestable on this host (no Windows machine in
+    this VM) — it is the standard one-byte region lock and fails
+    closed (OSError -> held) like the POSIX path. Network
+    filesystems: flock/msvcrt semantics depend on the filesystem
+    and (for NFS) on lockd; on a filesystem without advisory
+    locking, flock may succeed vacuously and two holders could
+    interleave — the store is a local directory by design, and a
+    network store is unsupported, not silently safe.
+    """
     import time
 
     lock_path = path.parent / f".{path.name}.lock"
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    except OSError:
+        return None, lock_path, None
     deadline = time.monotonic() + timeout_s
     holder_pid = None
     while True:
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            pid = _read_lock_pid(lock_path)
-            if pid is not None and not _pid_is_alive(pid):
-                # Stale lock: the holder is gone. Remove it and retry.
-                try:
-                    os.unlink(lock_path)
-                except OSError:
-                    pass
-                else:
-                    print(
-                        f"note: stale lock {lock_path.name} removed "
-                        f"(holder process {pid} no longer exists)",
-                        file=sys.stderr,
-                    )
-                continue
-            if pid is not None:
-                holder_pid = pid
-            if time.monotonic() >= deadline:
-                return None, lock_path, holder_pid
-            time.sleep(0.1)
-            continue
-        except OSError:
-            return None, lock_path, None
-        # We created the file: record our PID at once. If the write
-        # fails we never held the lock, so remove the file we made.
-        try:
-            os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
-            try:
-                os.fsync(fd)
-            except OSError:
-                pass
-        except OSError:
+        if _try_lock(fd):
+            break
+        pid = _read_lock_pid(lock_path)
+        if pid is not None:
+            holder_pid = pid
+        if time.monotonic() >= deadline:
             try:
                 os.close(fd)
             except OSError:
                 pass
-            try:
-                os.unlink(lock_path)
-            except OSError:
-                pass
-            return None, lock_path, None
-        # Verify the file we created is still the one at this path:
-        # another process recovering the same stale lock may have
-        # removed it and created its own in between.
+            return None, lock_path, holder_pid
+        time.sleep(0.1)
+    # We hold the lock. The recorded PID may name a dead process
+    # (the previous holder died; the OS released the lock and the
+    # file stayed): note it, then overwrite it with ours.
+    old_pid = _read_lock_pid(lock_path)
+    if old_pid is not None and not _pid_is_alive(old_pid):
+        print(
+            f"note: stale lock {lock_path.name} recovered "
+            f"(holder process {old_pid} no longer exists)",
+            file=sys.stderr,
+        )
+    try:
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, f"{os.getpid()}\n".encode("utf-8"))
         try:
-            same = os.fstat(fd).st_ino == os.stat(lock_path).st_ino
+            os.fsync(fd)
         except OSError:
-            same = False
-        if not same:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            continue
-        return fd, lock_path, None
+            pass
+    except OSError:
+        _release_lock(fd, lock_path)
+        return None, lock_path, None
+    return fd, lock_path, None
 
 
 def _release_lock(fd, lock_path) -> None:
+    """Release the advisory lock and close the fd. The lock file is
+    NEVER unlinked: it is durable, and unlinking it is what made
+    the old stale-lock recovery racy (two processes could unlink
+    each other's just-created lock)."""
+    _unlock(fd)
     try:
         os.close(fd)
-    except OSError:
-        pass
-    try:
-        os.unlink(lock_path)
     except OSError:
         pass
 
@@ -547,7 +591,14 @@ def _set_status(store: Path, idea_id: str, new_status: str, note: str) -> int:
     # status changes read the same version and the second one's write
     # silently drops the first one's History entry (a lost update).
     # The atomic replace alone only prevents a half-written file.
-    fd, lock_path, holder_pid = _acquire_lock(path)
+    # A RuntimeError means no locking primitive exists on this
+    # platform: fail closed with a clean error, never proceed
+    # unlocked (round 6, 3-P2-7).
+    try:
+        fd, lock_path, holder_pid = _acquire_lock(path)
+    except RuntimeError as e:
+        print(f"error: cannot lock {idea_id}: {e}", file=sys.stderr)
+        return 1
     if fd is None:
         if holder_pid is not None:
             print(

@@ -19,5 +19,11 @@
     "eslint": "^10.14.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.1"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "overrides": {
+    "qs": "^6.16.1"
   }
 }

@@ -3,7 +3,7 @@ name: incomplete-refactor
 description: Detect an incomplete refactor — old names still referenced, removed files still present, stale tests still calling the old API — before calling the refactor done. Use after every rename, move, or API migration, and in CI on refactor branches. A green test suite does not prove a refactor is complete. Only invoke via the orcinus router.
 license: MIT
 user-invocable: false
-compatibility: Requires Python 3.10+.
+compatibility: Requires Python 3.11+.
 ---
 
 # INCOMPLETE-REFACTOR — is the old thing really gone?
@@ -42,12 +42,12 @@ python3 skills/incomplete-refactor/scripts/check_refactor.py \
   --allow CHANGELOG.md
 ```
 
-It exits 0 when clean and 1 when it finds a leftover — or when the scan was incomplete (a file it could not read, a root that does not exist, an empty `--old` list). It scans the files git knows about (tracked plus untracked, respecting `.gitignore`); when the root is not a git repository it walks the tree and skips generated directories and lockfiles. The allowlist matches a relative path only, never a bare basename. It reports:
+It exits 0 when clean and 1 when it finds a leftover — or when the scan was incomplete (a file it could not read, a root that does not exist, an empty `--old` list, a symlink pointing outside the root). It scans the files git knows about (tracked plus untracked, respecting `.gitignore`); when the root is not a git repository it walks the tree and skips generated directories and lockfiles (overridable with `--skip-dirs` / `--skip-files`). The allowlist matches a relative path only, never a bare basename (`--allow ./CHANGELOG.md` works). A symlink whose target stays inside the root is read; one pointing outside it is not read. It reports:
 
 - Old identifier still referenced, with file and line — including in tests (a stale test) and in docs and comments (a forgotten mention). Identifiers that start with `$` are matched as whole identifiers.
 - Removed path still present.
 - TODO or FIXME comments that name the old identifier — a migration the refactor left half-done.
-- How many files were checked, skipped (non-UTF-8), binary, and unreadable. A scan that did not cover everything is INCOMPLETE, never clean.
+- How many files were checked, skipped (generated dirs/lockfiles), skipped (non-UTF-8), binary, unreadable, and skipped (symlink outside the scan root). A clean result covers only the files scanned — generated dirs, lockfiles and outside symlinks are not scanned, and the summary says how many. A scan that did not cover everything is INCOMPLETE, never clean.
 
 ### 4. Run the four commands
 

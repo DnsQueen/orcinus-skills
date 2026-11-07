@@ -436,8 +436,10 @@ def test_concurrent_promotes_do_not_lose_history(tmp_path):
     # The final status matches the last successful transition.
     if results.count(0) == 2:
         assert "status: dropped" in content
-    # No lock file left behind.
-    assert list(store.glob(".*.lock")) == []
+    # Round 6 (3-P2-7): the lock file is durable now — it remains
+    # after the changes (the old assertion that it was gone encoded
+    # the unlinking design).
+    assert list(store.glob(".*.lock")) != []
 
 
 # --- Third review round: regression tests (2026-11-06) ---
@@ -585,7 +587,11 @@ def _lock_path(store, idea_id):
 
 def test_stale_lock_from_dead_process_is_recovered(tmp_path):
     """F7: a lock file left by a dead holder must not block promote
-    forever — the stale lock is recovered and the change succeeds."""
+    forever — the stale lock is recovered and the change succeeds.
+    Round 6 (3-P2-7): the lock file is durable now, so it REMAINS
+    after recovery (the old assertion that it was gone encoded the
+    unlinking design, which was the race). The stale note is still
+    printed, and the file is reacquirable."""
     store = tmp_path / "ideas"
     rc, out, err = capture(store, "stale lock idea")
     assert rc == 0, err
@@ -594,30 +600,43 @@ def test_stale_lock_from_dead_process_is_recovered(tmp_path):
     rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
     assert rc == 0, err
     assert "stale lock" in err
-    assert list(store.glob(".*.lock")) == []
+    assert _lock_path(store, idea_id).is_file(), "the durable lock file must remain"
     content = (store / f"{idea_id}.md").read_text(encoding="utf-8")
     assert "status: calibrated" in content
 
 
 def test_live_holder_still_blocks_promote(tmp_path):
     """A lock whose holder is alive still blocks promote — the
-    'another process' error is truthful, and the lock is not stolen."""
+    'another process' error is truthful, and the lock is not stolen.
+    Round 6 (3-P2-7): the holder is held for real now, via
+    _acquire_lock — a planted PID file is not a holder under the
+    flock design, so planting one would no longer block."""
     store = tmp_path / "ideas"
     rc, out, err = capture(store, "live holder idea")
     assert rc == 0, err
     idea_id = out.strip()
+    idea_path = store / f"{idea_id}.md"
     lock = _lock_path(store, idea_id)
-    lock.write_text(f"{os.getpid()}\n", encoding="utf-8")
-    rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
-    assert rc == 1
-    assert "another process" in err
-    assert str(os.getpid()) in err
-    assert lock.is_file(), "a live holder's lock must not be removed"
+    fd, _, _ = cap._acquire_lock(idea_path)
+    assert fd is not None
+    try:
+        rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
+        assert rc == 1
+        assert "another process" in err
+        assert str(os.getpid()) in err
+        assert lock.is_file(), "a live holder's lock must not be removed"
+    finally:
+        cap._release_lock(fd, lock)
 
 
 def test_lock_without_pid_is_not_stolen(tmp_path):
-    """A lock file with no readable PID (the old empty format, or a
-    torn write) is treated as held — fail-safe, never stolen."""
+    """Round 6 (3-P2-7): this test used to assert that a lock file
+    with no readable PID blocks promote (fail-safe under the old
+    O_EXCL design, where the PID was the only proof of staleness).
+    Under the flock design the PID is not the lock — an empty file
+    with no flock holder is NOT held, so the change succeeds. The
+    name stays so the history of the case is visible; the behaviour
+    is the specified change, not a weakening."""
     store = tmp_path / "ideas"
     rc, out, err = capture(store, "no pid idea")
     assert rc == 0, err
@@ -625,9 +644,8 @@ def test_lock_without_pid_is_not_stolen(tmp_path):
     lock = _lock_path(store, idea_id)
     lock.write_text("", encoding="utf-8")
     rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
-    assert rc == 1
-    assert "another process" in err
-    assert lock.is_file(), "a lock without a PID must not be removed"
+    assert rc == 0, err
+    assert lock.is_file(), "the durable lock file must remain after the change"
 
 
 def test_killed_holder_recovery(tmp_path):
@@ -671,7 +689,11 @@ def test_killed_holder_recovery(tmp_path):
             proc.wait(timeout=10)
     rc, out, err = run(store, "promote", "--store", str(store), idea_id, "calibrated")
     assert rc == 0, err
-    assert list(store.glob(".*.lock")) == []
+    # Round 6 (3-P2-7): the lock file is durable now — it remains
+    # after recovery (the old assertion that it was gone encoded
+    # the unlinking design). The promote succeeding already proves
+    # it was reacquirable.
+    assert lock_path.is_file(), "the durable lock file must remain"
 
 
 # --- Round 6 (2026-11-07): S1 — _pid_is_alive must not kill the lock
@@ -778,3 +800,124 @@ def test_pid_is_alive_windows_unreadable_exit_code_is_alive(monkeypatch):
     kernel32 = _FakeKernel32(exit_code=259, get_exit_ok=False)
     _as_windows(monkeypatch, kernel32)
     assert cap._pid_is_alive(os.getpid()) is True
+
+
+# --- Round 6 (2026-11-07): 3-P2-7 — the stale-lock recovery race ---
+# The old recovery unlinked the lock file whenever the recorded PID
+# was dead. Two processes recovering the same stale lock at the same
+# instant could unlink each other's just-created lock (the docstring
+# admitted it); the consequence was a lost History entry. The fix is
+# an OS advisory lock (flock on POSIX, msvcrt.locking on Windows) on
+# a DURABLE lock file that is never unlinked or renamed: the OS
+# releases the lock when the holder dies, even on SIGKILL, so there
+# is no recovery step left to race.
+
+
+def test_flock_holder_blocks_acquire_despite_dead_pid(tmp_path):
+    """3-P2-7: a lock file with a dead recorded PID but a LIVE flock
+    holder must block acquisition. The old code unlinked on the
+    dead PID alone and acquired the lock out from under the holder."""
+    import fcntl
+
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "flock holder idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    idea_path = store / f"{idea_id}.md"
+    lock_path = _lock_path(store, idea_id)
+    lock_path.write_text(f"{_dead_pid()}\n", encoding="utf-8")
+    holder_fd = os.open(lock_path, os.O_RDWR)
+    try:
+        fcntl.flock(holder_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fd, _, _ = cap._acquire_lock(idea_path, timeout_s=0.5)
+        assert fd is None, "acquired a lock another process holds via flock"
+        if fd is not None:
+            cap._release_lock(fd, lock_path)
+    finally:
+        try:
+            fcntl.flock(holder_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        os.close(holder_fd)
+
+
+def test_lock_file_persists_after_release(tmp_path):
+    """3-P2-7: the lock file is durable — it is never unlinked, so
+    a clean release leaves it behind and it is reacquirable."""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "durable lock idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    idea_path = store / f"{idea_id}.md"
+    lock_path = _lock_path(store, idea_id)
+    fd, _, _ = cap._acquire_lock(idea_path)
+    assert fd is not None
+    cap._release_lock(fd, lock_path)
+    assert lock_path.is_file(), "release unlinked the durable lock file"
+    fd2, _, _ = cap._acquire_lock(idea_path)
+    assert fd2 is not None, "the lock file was not reacquirable after release"
+    cap._release_lock(fd2, lock_path)
+
+
+def test_concurrent_recovery_of_killed_holder_lock(tmp_path):
+    """3-P2-7, race-hunting (not a red-first proof — the window it
+    hunts is microseconds wide): N processes racing to recover a
+    SIGKILLed holder's lock must serialise — no lost History
+    entries, no tracebacks, and the lock file stays reacquirable
+    afterwards."""
+    import signal
+    import threading
+    import time
+
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "race recovery idea")
+    assert rc == 0, err
+    idea_id = out.strip()
+    idea_path = store / f"{idea_id}.md"
+    lock_path = _lock_path(store, idea_id)
+    scripts_dir = str(Path(__file__).resolve().parent)
+    holder_code = (
+        "import sys, time\n"
+        f"sys.path.insert(0, {scripts_dir!r})\n"
+        "from pathlib import Path\n"
+        "from capture import _acquire_lock\n"
+        f"fd, lock_path, _ = _acquire_lock(Path({str(idea_path)!r}))\n"
+        "assert fd is not None\n"
+        "time.sleep(30)\n"
+    )
+    proc = subprocess.Popen(
+        [sys.executable, "-c", holder_code],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not lock_path.is_file() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert lock_path.is_file(), "the holder never acquired the lock"
+        proc.send_signal(signal.SIGKILL)
+        proc.wait(timeout=10)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+
+    results = []
+
+    def promote():
+        results.append(run(store, "promote", "--store", str(store), idea_id, "calibrated")[0])
+
+    threads = [threading.Thread(target=promote) for _ in range(6)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert len(results) == 6
+    assert all(rc in (0, 1) for rc in results), "a contender crashed, not failed cleanly"
+    content = (store / f"{idea_id}.md").read_text(encoding="utf-8")
+    assert content.count("->") == results.count(0), content
+    assert lock_path.is_file(), "the durable lock file is gone after the race"
+    fd, _, _ = cap._acquire_lock(idea_path)
+    assert fd is not None, "the lock was not reacquirable after the race"
+    cap._release_lock(fd, lock_path)

@@ -1,2 +1,12 @@
 anthropic>=0.39.0
-mcp>=1.1.0
+# mcp>=1.8.0 (round 6, 3-F2-06): the old floor 1.1.0 did not have
+# mcp.client.streamable_http, which connections.py imports
+# unconditionally — even `evaluation.py --help` exited 1 on 1.1.0.
+# 1.8.0 is the lowest version with all three transports, verified
+# by testing (1.1.0–1.7.0 lack streamable_http; 1.8.0 has it).
+# Tested pair: mcp 1.8.0 + pydantic 2.11.7. A bare `pip install
+# mcp==1.8.0` today resolves pydantic 2.14.3, which breaks mcp
+# 1.8.0's import (it needs pydantic's eval_type_backport); pin
+# pydantic 2.11.7 if you pin mcp 1.8.0 exactly. No blanket pydantic
+# bound here: newer mcp allows newer pydantic.
+mcp>=1.8.0

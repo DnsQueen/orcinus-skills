@@ -1,14 +1,18 @@
 # ORCINUS — Python tooling configuration.
 #
-# The scripts in this repo claim Python 3.10+ (standard library only).
-# CI runs them on a 3.10–3.13 matrix; keep that claim true: no syntax or
-# stdlib feature newer than 3.10 in any script the tests import.
+# The scripts in this repo claim Python 3.11+ (standard library only).
+# CI runs them on a 3.11–3.13 matrix; keep that claim true: no syntax or
+# stdlib feature newer than 3.11 in any script the tests import.
 #
 # Python 3.9 was dropped 2026-11-06: it reached end-of-life 2025-10-31
 # and has no build for Ubuntu 26.04, which is what ubuntu-latest now
 # resolves to — the 3.9 CI job failed in "Set up Python" with
 # "The version '3.9' ... was not found for Ubuntu 26.04". Pinning the
 # runner to ubuntu-24.04 would only postpone the same failure.
+# Python 3.10 was dropped 2026-11-07 (round 6, 2-S7): end-of-life
+# 2026-10-01 (PEP 619) — the same logic that dropped 3.9. The
+# CHANGELOG 0.9.3 note of a 3.10 CI failure is NOT the evidence for
+# this: that failure was a tomli pinning failure, not EOL.
 
 [tool.ruff]
 # Lint the ORCINUS-owned Python and migration_generator.py, which
@@ -17,7 +21,7 @@
 # (scripts/check_drift.py) forbids changing them.
 # migration_generator.py is NOT excluded — ORCINUS maintains it.
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 # One exclude list for both `ruff check` and `ruff format`: format
 # honors the top-level exclude, while directory patterns under
 # [tool.ruff.format] exclude do NOT exclude files in ruff 0.17.4
@@ -72,18 +76,26 @@ exclude = [
 select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
-# The typecheck gate: default settings, targeting Python 3.10 (the
+# The typecheck gate: default settings, targeting Python 3.11 (the
 # lowest version the scripts claim). Scope is the ORCINUS-owned
 # Python plus migration_generator.py, which ORCINUS maintains:
 # scripts/ and the skill scripts, and the eval-grader harness test.
-# Pure vendored copies are not checked (same rule as ruff). Run:
-# mypy scripts/
-# skills/architecture/scripts/ skills/database-designer/migration_generator.py
-# skills/database-designer/test_migration_generator.py
-# skills/database-designer/test_migration_integration.py
-# skills/database-designer/test_postgres_migration.py
-# skills/idea-capture/scripts/ skills/incomplete-refactor/scripts/
-# skills/orcinus-verify/scripts/
-# skills/webapp-testing/scripts/test_with_server.py
-# evals/waza-orcinus-verify-agent/test_graders.py
-python_version = "3.10"
+# Pure vendored copies are not checked (same rule as ruff).
+# `files` is the SINGLE source of truth for the scope (round 6, S8):
+# mypy reads it natively, scripts/clean_copy_check.py reads it from
+# here, and CI runs plain `python -m mypy` with no paths — the list
+# used to be hand-copied in three places and could drift silently.
+files = [
+    "scripts/",
+    "skills/architecture/scripts/",
+    "skills/database-designer/migration_generator.py",
+    "skills/database-designer/test_migration_generator.py",
+    "skills/database-designer/test_migration_integration.py",
+    "skills/database-designer/test_postgres_migration.py",
+    "skills/idea-capture/scripts/",
+    "skills/incomplete-refactor/scripts/",
+    "skills/orcinus-verify/scripts/",
+    "skills/webapp-testing/scripts/test_with_server.py",
+    "evals/waza-orcinus-verify-agent/test_graders.py",
+]
+python_version = "3.11"

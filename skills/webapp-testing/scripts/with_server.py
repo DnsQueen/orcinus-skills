@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — stdout/stderr are drained in background threads, readiness is an HTTP check with a liveness check, cleanup signals the whole process group, and the test command has a timeout. The rest is verbatim; see ATTRIBUTION.md.
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — stdout/stderr are drained in background threads, readiness is an HTTP check with a liveness check, cleanup signals the whole process group, and the test command has a timeout. Round 6 (2026-11-07): readiness requires a 2xx response (any status used to count, so a 500/503 counted as ready); --ready-path is repeatable per server; a port already held by another service is rejected before starting; cleanup SIGKILLs the process group even when the leader exits promptly (a SIGTERM-ignoring child used to survive). The rest is verbatim; see ATTRIBUTION.md.
 """
 Start one or more servers, wait for them to be ready, run a command, then clean up.
 
@@ -28,15 +28,27 @@ Rules this script follows (each one is a defect that was found and fixed):
   threads and forwarded to this script's stdout, so a log-heavy server
   can never block on a full pipe and its output is never swallowed.
 - Readiness is the port AND (when --ready-path is given) an HTTP
-  response from that path. A bare port check can be fooled by a
-  different service listening on the same port. While waiting, the
-  script also checks that the server process is still alive — a server
-  that exited is a failure, not a reason to wait out the timeout.
+  2xx response from that path (configurable with --ready-status:
+  a 500/503 is a service that is not ready, not a ready one). A
+  bare port check can be fooled by a different service listening
+  on the same port, so the port is also checked free before the
+  server starts — a port already held is an error, not readiness.
+  --ready-path is repeatable, one path per server (a single value
+  applies to every server). While waiting, the script also checks
+  that the server process is still alive — a server that exited
+  is a failure, not a reason to wait out the timeout.
 - Cleanup kills the whole process group, not just the shell. The server
   is started with shell=True (so commands with cd and && work), and
   terminating the shell leaves the real server running. Each server is
   started in its own process group (start_new_session=True on POSIX)
-  and the group is signalled on cleanup.
+  and the group is signalled on cleanup — SIGTERM, then SIGKILL,
+  even when the leader exits promptly (a SIGTERM-ignoring child
+  used to survive that path: the SIGKILL ran only on timeout).
+  The port-free check has a race: a service that binds between the
+  check and the server start is still possible, and a different
+  service answering 2xx on the ready path cannot be told apart
+  from ours without a token — the check closes the common case, it
+  does not prove ownership.
 - The test command has an independent timeout (--test-timeout, default
   300s). A hung test cannot hang this script forever.
 """
@@ -69,23 +81,63 @@ def _drain(pipe, label, stream):
             pass
 
 
-def _http_ready(port, path, timeout=2):
-    """True when an HTTP GET to path returns any HTTP response."""
+def _parse_ready_status(spec):
+    """Parse a --ready-status value into a set of HTTP statuses.
+    "2xx" (the default) is 200-299; "200-204" is a range;
+    "200,503" is a list. Raises ValueError on anything else."""
+    spec = (spec or "").strip()
+    if spec.endswith("xx") and len(spec) == 3 and spec[0].isdigit():
+        base = int(spec[0]) * 100
+        return set(range(base, base + 100))
+    out = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            lo, hi = int(lo), int(hi)
+            if not 100 <= lo <= hi <= 599:
+                raise ValueError(f"invalid status range: {part!r}")
+            out.update(range(lo, hi + 1))
+        else:
+            code = int(part)
+            if not 100 <= code <= 599:
+                raise ValueError(f"invalid status code: {part!r}")
+            out.add(code)
+    if not out:
+        raise ValueError(f"empty --ready-status: {spec!r}")
+    return out
+
+
+def _http_ready(port, path, timeout=2, ok_statuses=None):
+    """True when an HTTP GET to path returns a success status: 2xx
+    by default, or a status in ok_statuses when given. An error
+    response (500, 503, ...) is a service that is not ready."""
+    ok = set(range(200, 300)) if ok_statuses is None else set(ok_statuses)
     try:
         conn = http.client.HTTPConnection("localhost", port, timeout=timeout)
         conn.request("GET", path)
         response = conn.getresponse()
         response.read()
         conn.close()
-        return True
+        return response.status in ok
     except (OSError, http.client.HTTPException):
         return False
 
 
-def is_server_ready(port, timeout=30, ready_path=None, process=None):
+def _port_is_busy(port):
+    """True when something already accepts TCP connections on the
+    port — the port is held by another service."""
+    try:
+        with socket.create_connection(("localhost", port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def is_server_ready(port, timeout=30, ready_path=None, process=None, ok_statuses=None):
     """Wait for a server to be ready. The port must accept a connection
-    and, when ready_path is given, answer an HTTP GET. Returns False
-    immediately if the server process has exited."""
+    and, when ready_path is given, answer an HTTP GET with a success
+    status. Returns False immediately if the server process has exited."""
     start_time = time.time()
     while time.time() - start_time < timeout:
         if process is not None and process.poll() is not None:
@@ -98,7 +150,7 @@ def is_server_ready(port, timeout=30, ready_path=None, process=None):
             continue
         if ready_path is None:
             return True
-        if _http_ready(port, ready_path):
+        if _http_ready(port, ready_path, ok_statuses=ok_statuses):
             return True
         time.sleep(0.5)
     return False
@@ -123,16 +175,30 @@ def _stop_process_group(process, label, timeout=5):
         pass
     try:
         process.wait(timeout=timeout)
-        return
     except subprocess.TimeoutExpired:
         pass
-    try:
-        if pgid is not None:
-            os.killpg(pgid, signal.SIGKILL)
+    # The leader may have exited promptly while a descendant that
+    # ignores SIGTERM survives: the SIGKILL half used to run only
+    # when the leader did NOT exit in time. Verify the group is
+    # empty either way, and SIGKILL what is left. (Residual: a pgid
+    # reused by an unrelated group in the milliseconds between the
+    # leader's exit and this check would be killed too; only a
+    # container/cgroup or job object closes that hole.)
+    if pgid is not None:
+        try:
+            os.killpg(pgid, 0)
+        except (OSError, ProcessLookupError):
+            pass  # the group is gone: nothing left to kill
         else:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+    elif process.poll() is None:
+        try:
             process.kill()
-    except (OSError, ProcessLookupError):
-        pass
+        except (OSError, ProcessLookupError):
+            pass
     try:
         process.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -144,8 +210,10 @@ def main():
     parser.add_argument("--server", action="append", dest="servers", required=True, help="Server command (can be repeated)")
     parser.add_argument("--port", action="append", dest="ports", type=int, required=True, help="Port for each server (must match --server count)")
     parser.add_argument("--timeout", type=int, default=30, help="Timeout in seconds per server (default: 30)")
-    parser.add_argument("--ready-path", default=None,
-                        help="HTTP path to GET for readiness (e.g. /health). Without it, readiness is only that the port accepts a connection, which a different service on the same port can satisfy.")
+    parser.add_argument("--ready-path", action="append", dest="ready_paths", default=None,
+                        help="HTTP path to GET for readiness (e.g. /health). Repeatable, one path per server; a single value applies to every server. Without it, readiness is only that the port accepts a connection, which a different service on the same port can satisfy.")
+    parser.add_argument("--ready-status", default="2xx",
+                        help="HTTP statuses that count as ready: '2xx' (default), a range like '200-299', or a list like '200,204'.")
     parser.add_argument("--test-timeout", type=int, default=300,
                         help="Timeout in seconds for the test command (default: 300). A hung test cannot hang this script forever.")
     parser.add_argument("command", nargs=argparse.REMAINDER, help="Command to run after server(s) ready")
@@ -165,9 +233,28 @@ def main():
         print("Error: Number of --server and --port arguments must match", file=sys.stderr)
         return 1
 
+    # One --ready-path per server, or a single value for all of them.
+    # Any other count is a usage error, not a silent ignore-the-extra.
+    if args.ready_paths is None:
+        ready_paths = [None] * len(args.servers)
+    elif len(args.ready_paths) == 1:
+        ready_paths = args.ready_paths * len(args.servers)
+    elif len(args.ready_paths) == len(args.servers):
+        ready_paths = args.ready_paths
+    else:
+        parser.error(
+            f"Number of --ready-path arguments ({len(args.ready_paths)}) must be 1 or match "
+            f"the number of --server arguments ({len(args.servers)})"
+        )
+
+    try:
+        ok_statuses = _parse_ready_status(args.ready_status)
+    except ValueError as e:
+        parser.error(str(e))
+
     servers = []
-    for cmd, port in zip(args.servers, args.ports):
-        servers.append({"cmd": cmd, "port": port})
+    for cmd, port, ready_path in zip(args.servers, args.ports, ready_paths):
+        servers.append({"cmd": cmd, "port": port, "ready_path": ready_path})
 
     server_processes = []
     exit_code = 1
@@ -177,6 +264,19 @@ def main():
         for i, server in enumerate(servers):
             label = f"server-{i + 1}"
             print(f"Starting server {i + 1}/{len(servers)}: {server['cmd']}")
+
+            # A port already held by another service is an error, not
+            # readiness: the check below would be satisfied by the
+            # wrong service. (Racy by nature — a service binding
+            # between this check and the start is still possible —
+            # but it closes the common case.)
+            if _port_is_busy(server["port"]):
+                print(
+                    f"Error: port {server['port']} is already in use by another "
+                    f"process — refusing to start a server on it",
+                    file=sys.stderr,
+                )
+                return 1
 
             # Use shell=True to support commands with cd and &&.
             # start_new_session puts the server in its own process group
@@ -200,7 +300,8 @@ def main():
             # Wait for this server to be ready
             print(f"Waiting for server on port {server['port']}...")
             if not is_server_ready(server["port"], timeout=args.timeout,
-                                   ready_path=args.ready_path, process=process):
+                                   ready_path=server["ready_path"], process=process,
+                                   ok_statuses=ok_statuses):
                 if process.poll() is not None:
                     print(f"Error: server failed to start on port {server['port']} "
                           f"(it exited with code {process.returncode})",

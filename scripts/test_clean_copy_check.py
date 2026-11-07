@@ -64,7 +64,15 @@ def _fixture_repo(tmp_path, sleep=0):
     # the fixture must contain every scope path, or the mypy gate
     # fails on a missing path instead of testing the copy. A scope
     # directory needs at least one .py file: mypy rejects an empty
-    # directory outright.
+    # directory outright. The scope itself lives in pyproject.toml
+    # (round 6, S8), so the fixture carries a pyproject.toml with
+    # the same list — the copied script reads its scope from there.
+    (root / "pyproject.toml").write_text(
+        "[tool.mypy]\nfiles = [\n"
+        + "".join(f'    "{target}",\n' for target in clean_copy_check.MYPY_SCOPE)
+        + "]\n",
+        encoding="utf-8",
+    )
     for target in clean_copy_check.MYPY_SCOPE:
         path = root / target
         if target.endswith("/"):
@@ -270,15 +278,11 @@ def test_ci_requirements_are_hashed():
         "pyyaml": "6.0.1",
         "mypy": "1.18.2",
         "psycopg": "3.3.8",
-        # tomli is a conditional mypy dependency (Python < 3.11 only):
-        # pip-compile on 3.12 omits it, but the 3.10 CI job resolves
-        # it unpinned and --require-hashes rejects that (run
-        # 42298838900). It must be pinned with hashes like the rest.
-        "tomli": "2.5.0",
-        # exceptiongroup is pytest's conditional dependency on
-        # Python < 3.11 (same omission, same failure — the 3.10 job
-        # in run 42300115306 hit it right after tomli was pinned).
-        "exceptiongroup": "1.3.1",
+        # tomli and exceptiongroup were < 3.11 shims, pinned here
+        # only because the 3.10 CI job resolved them unpinned (runs
+        # 42298838900, 42300115306). Both pins were removed
+        # 2026-11-07 (round 6, 2-S7) when 3.10 was dropped: no
+        # supported Python needs either shim now.
     }
     pins = {}
     current = None
@@ -331,3 +335,35 @@ def test_ci_uses_hashed_installs_and_release_clean_copy():
     assert "npm install -g @anthropic-ai/claude-code" not in ci
     assert "npm ci" in ci
     assert "clean_copy_check.py --mode release" in ci
+
+
+# --- Round 6 (2026-11-07): S8 — MYPY_SCOPE has one source of truth ---
+
+
+def _pyproject_mypy_files():
+    import tomllib
+
+    repo = Path(__file__).resolve().parent.parent
+    with open(repo / "pyproject.toml", "rb") as f:
+        return tomllib.load(f)["tool"]["mypy"]["files"]
+
+
+def test_mypy_scope_has_a_single_source_of_truth():
+    """S8: MYPY_SCOPE was hand-copied from ci.yml (plus a third hand
+    copy in a pyproject.toml comment), with no guard — the three
+    copies could drift silently. The list lives in exactly one
+    place now ([tool.mypy] files in pyproject.toml, which mypy reads
+    natively); clean_copy_check reads it from there, and CI passes
+    no paths at all, so there is nothing left to hand-copy."""
+    scope = _pyproject_mypy_files()
+    assert scope, "pyproject.toml [tool.mypy] has no files list"
+    assert clean_copy_check.MYPY_SCOPE == scope
+    ci = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    for line in ci.splitlines():
+        if "python3 -m mypy" in line or "python -m mypy" in line:
+            assert "skills/" not in line and "scripts/" not in line, (
+                f"ci.yml still hand-copies the mypy scope: {line.strip()!r} — "
+                "run plain `python -m mypy` and let the config supply it"
+            )

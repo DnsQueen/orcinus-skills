@@ -1,0 +1,15 @@
+# Dependabot for GitHub Actions (round 6, CI-2): the workflow files
+# pin actions by full commit SHA, so a compromised or moved tag
+# cannot change what CI runs — but a pinned SHA never updates
+# itself. Dependabot opens PRs that bump the pinned SHA (and the
+# "# <action>@<tag>" comment) when a new release lands; a human
+# still reviews and merges. Only the actions ecosystem: the repo
+# has no npm/pip ecosystem Dependabot should own (package.json is
+# pinned by hand, requirements-ci.txt by pip-compile).
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

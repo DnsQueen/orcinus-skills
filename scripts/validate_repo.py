@@ -1105,6 +1105,7 @@ def check_stage_containment():
 # check would reject as an unknown field.
 MODIFIED_APACHE_FILES = [
     "skills/mcp-builder/SKILL.md",
+    "skills/mcp-builder/scripts/evaluation.py",
     "skills/skill-creator/SKILL.md",
     "skills/skill-creator/scripts/package_skill.py",
     "skills/skill-creator/scripts/quick_validate.py",
@@ -1287,6 +1288,85 @@ def check_skill_counts():
             fail("README.md does not state the skill count as 'all N skills'")
         elif int(m.group(1)) != count:
             fail(f"README.md says 'all {m.group(1)} skills' but there are {count} skill folders")
+
+
+def check_docs_numbers():
+    """The docs agree with each other and with the repo (round 6,
+    Rec3). SCOPE.md cites only eval files that exist and never
+    calls a manual scenario a "scored eval" (the README honesty
+    paragraph says the scenario evals are manual text scenarios,
+    not scored harness runs). The demo test count hard-coded in the
+    orcinus-verify verdict example and in the mock verify-pass
+    task equals the count computed from the demo tests — the
+    refactor eval's 11/11 is deliberately NOT checked here: it is
+    the throwaway copy's suite (the demo's 7 plus 4 report tests),
+    not the demo suite. The README honesty numbers are recomputed:
+    scenario evals, skills without a matching *-01.md, evals
+    without a matching skill directory (exact stem match)."""
+    scope_path = ROOT / "SCOPE.md"
+    if scope_path.is_file():
+        scope = scope_path.read_text(encoding="utf-8")
+        if "scored eval" in scope.lower():
+            fail(
+                "SCOPE.md calls a manual scenario eval a 'scored eval' — "
+                "the scenario evals are manual text scenarios, not "
+                "scored harness runs (see the README honesty paragraph)"
+            )
+        for cited in sorted(set(re.findall(r"evals/([A-Za-z0-9_.-]+\.md)", scope))):
+            if not (ROOT / "evals" / cited).is_file():
+                fail(f"SCOPE.md cites evals/{cited}, but that file does not exist")
+
+    demo_tests = ROOT / "examples" / "demo" / "tests"
+    demo_count = 0
+    if demo_tests.is_dir():
+        for path in sorted(demo_tests.glob("*.test.ts")):
+            demo_count += len(re.findall(r"\btest\(", path.read_text(encoding="utf-8")))
+    if demo_count:
+        skill = ROOT / "skills" / "orcinus-verify" / "SKILL.md"
+        if skill.is_file():
+            if f'"{demo_count} tests pass"' not in skill.read_text(encoding="utf-8"):
+                fail(
+                    "skills/orcinus-verify/SKILL.md verdict example does not say "
+                    f'"{demo_count} tests pass" — the demo now has {demo_count} tests'
+                )
+        task = ROOT / "evals" / "waza-orcinus-verify" / "tasks" / "verify-pass.yaml"
+        if task.is_file():
+            if f"all {demo_count} tests" not in task.read_text(encoding="utf-8"):
+                fail(
+                    "evals/waza-orcinus-verify/tasks/verify-pass.yaml does not say "
+                    f"'all {demo_count} tests' — the demo now has {demo_count} tests"
+                )
+
+    skills = (
+        [d for d in sorted((ROOT / "skills").iterdir()) if d.is_dir()]
+        if (ROOT / "skills").is_dir()
+        else []
+    )
+    evals = sorted((ROOT / "evals").glob("*.md")) if (ROOT / "evals").is_dir() else []
+    eval_stems = {p.stem for p in evals}
+    no_eval = [s for s in skills if f"{s.name}-01" not in eval_stems]
+    skill_names = {s.name for s in skills}
+    no_skill = [p for p in evals if p.stem[:-3] not in skill_names]
+    readme_path = ROOT / "README.md"
+    if readme_path.is_file():
+        text = readme_path.read_text(encoding="utf-8")
+        expected = [
+            (f"{len(evals)} scenario evals", "scenario evals"),
+            (
+                f"{len(no_eval)} of the {len(skills)} skills have no matching",
+                "skills without a matching eval",
+            ),
+            (
+                f"{len(no_skill)} eval files have no matching skill directory",
+                "evals without a matching skill",
+            ),
+        ]
+        for phrase, what in expected:
+            if phrase not in text:
+                fail(
+                    f"README.md honesty paragraph does not state the recomputed "
+                    f"count for {what} (expected {phrase!r})"
+                )
 
 
 def check_manifest():
@@ -1876,6 +1956,7 @@ def main():
     check_readme_skill_table()
     check_plugin_manifests()
     check_skill_counts()
+    check_docs_numbers()
     check_manifest()
     check_json_files()
     check_relative_paths()

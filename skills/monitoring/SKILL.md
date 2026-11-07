@@ -129,7 +129,7 @@ Scale by criticality: for a small or single-user service, the on-call is just th
 3. Let the ack timeout lapse and confirm escalation hops to the secondary.
 4. Restore, and confirm the resolve/all-clear notification fires too.
 
-`scripts/verify.sh` enforces the *structural* half of this on your config: liveness split from readiness, at least one symptom/burn-rate alert with two windows, a runbook reference on every alert, and a banlist for Opsgenie-as-new-setup and homepage-only monitors. Run it in CI so config drift can't silently re-introduce a noisy or untested setup.
+`scripts/verify.sh` enforces the *structural* half of this on your config: liveness split from readiness, at least one symptom/burn-rate alert with two windows, a runbook reference somewhere in the alert rules, and a banlist for Opsgenie-as-new-setup and homepage-only monitors. The runbook check is haystack-wide — one reference anywhere passes; it does not prove every alert has one (see the script's header). Run it in CI so config drift can't silently re-introduce a noisy or untested setup.
 
 ## Anti-patterns
 

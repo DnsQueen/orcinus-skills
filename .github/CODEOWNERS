@@ -1,0 +1,8 @@
+# Round 6 (2-P1-5): the drift manifest is the record of every
+# vendored file's hash — a change to it without review would let a
+# vendored file drift silently, so it needs the owner as reviewer.
+# Note: CODEOWNERS only enforces review when branch protection
+# requires it. Main currently blocks force pushes and deletions
+# only, with no required-reviewer rule, so this is a request for
+# review, not a gate, until that rule lands.
+scripts/drift-manifest.json @DnsQueen

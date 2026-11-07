@@ -4,10 +4,14 @@ gates, and say exactly which ones it cannot.
 
 Each check reports one of three states:
 - ready: the tool is installed and usable;
-- incomplete: the tool is missing, but the gate it serves can be
-  skipped (the report says what is unverified because of it);
-- incompatible: the tool is present but the wrong version, or the
-  environment cannot run the gate at all.
+- incomplete: an OPTIONAL tool is missing, but the gate it serves
+  can be skipped (node for the demo and the JS/TS skills, waza for
+  the eval suites — the report says what is unverified because of
+  it);
+- incompatible: a MANDATORY tool is missing (git, python, pytest,
+  ruff — without one of those a gate cannot run at all), the tool
+  is present but the wrong version, or the environment cannot run
+  the gate at all (not a git repository, repo files missing).
 
 Usage: python3 scripts/doctor.py
 Exit 0 when every gate that must run here is ready; exit 1 when any
@@ -33,8 +37,12 @@ ROOT = Path(__file__).resolve().parent.parent
 # The minimum versions the gates need. pytest 8.4.2 and ruff 0.17.4
 # are the pinned versions in CI. Python 3.9 itself was dropped
 # 2026-11-06: it reached end-of-life 2025-10-31 and has no build for
-# Ubuntu 26.04, which is what the CI runner is now.
-MIN_PYTHON = (3, 10)
+# Ubuntu 26.04, which is what the CI runner is now. Python 3.10 was
+# dropped 2026-11-07 (round 6, 2-S7): it reached end-of-life
+# 2026-10-01 (PEP 619) — the same logic that dropped 3.9. The
+# CHANGELOG 0.9.3 note of a 3.10 CI failure is NOT the evidence for
+# this: that failure was a tomli pinning failure, not EOL.
+MIN_PYTHON = (3, 11)
 MIN_PYTEST = (8, 4)
 MIN_RUFF = (0, 17)
 MIN_WAZA = (0, 40, 0)
@@ -55,7 +63,12 @@ def _run(argv, timeout=10):
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
         return proc.returncode, (proc.stdout + proc.stderr).strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired):
+        # FileNotFoundError (no such tool) and PermissionError (a
+        # non-executable file) alike: the tool cannot be run. S3 —
+        # catching only the first two let PermissionError escape as
+        # an uncaught traceback, outside the 0/1/2 scheme.
+        # TimeoutExpired is not an OSError, so it stays listed.
         return None, ""
 
 
@@ -81,15 +94,21 @@ def check_python(version=None):
         "python",
         "incompatible",
         f"Python {'.'.join(map(str, version))} is below {'.'.join(map(str, MIN_PYTHON))}",
-        fix="Install Python 3.10 or newer.",
+        fix="Install Python 3.11 or newer.",
     )
 
 
 def check_pytest():
     rc, out = _run([sys.executable, "-m", "pytest", "--version"])
     if rc is None or rc != 0 or "No module named" in out:
+        # S4: pytest is mandatory — the script tests cannot run
+        # without it — so a missing pytest is incompatible, not
+        # incomplete (incomplete is for optional tools only).
         return _check(
-            "pytest", "incomplete", "pytest is not installed", fix="pip install pytest==8.4.2"
+            "pytest",
+            "incompatible",
+            "pytest is not installed (the script tests cannot run without it)",
+            fix="pip install pytest==8.4.2",
         )
     version = _version_tuple(out)
     if version is None:
@@ -115,7 +134,14 @@ def check_ruff():
     argv = [binary, "--version"] if binary else [sys.executable, "-m", "ruff", "--version"]
     rc, out = _run(argv)
     if rc is None or rc != 0 or "No module named" in out:
-        return _check("ruff", "incomplete", "ruff is not installed", fix="pip install ruff==0.17.4")
+        # S4: ruff is mandatory — the lint/format gates cannot run
+        # without it — so a missing ruff is incompatible.
+        return _check(
+            "ruff",
+            "incompatible",
+            "ruff is not installed (the lint gates cannot run without it)",
+            fix="pip install ruff==0.17.4",
+        )
     version = _version_tuple(out)
     if version is None:
         return _check(
@@ -134,8 +160,14 @@ def check_ruff():
 def check_git():
     rc, out = _run(["git", "--version"])
     if rc is None or rc != 0:
+        # S4: git is mandatory — the version-bump and clean-copy
+        # gates cannot run without it — so a missing git is
+        # incompatible, not incomplete.
         return _check(
-            "git", "incomplete", "git is not installed or does not run", fix="Install git."
+            "git",
+            "incompatible",
+            "git is not installed or does not run (the git gates cannot run without it)",
+            fix="Install git.",
         )
     rc2, out2 = _run(["git", "-C", str(ROOT), "status", "--porcelain"], timeout=15)
     if rc2 is None or rc2 != 0:
@@ -143,7 +175,7 @@ def check_git():
         # repository: the git gate cannot run here at all.
         return _check(
             "git",
-            "incomplete",
+            "incompatible",
             f"{out.strip()}; this directory is not a git repository (git status failed)",
             fix="Run doctor from inside the orcinus-skills repository.",
         )
@@ -258,7 +290,9 @@ def check_repo_files():
         if not (ROOT / rel).is_file():
             missing.append(rel)
     if missing:
-        return _check("repo files", "incomplete", f"missing: {', '.join(missing)}")
+        # S4, same class: the repo files ARE the gates — without
+        # them no gate can run, so missing files are incompatible.
+        return _check("repo files", "incompatible", f"missing: {', '.join(missing)}")
     return _check(
         "repo files",
         "ready",
@@ -293,8 +327,8 @@ def main():
         print("All gates can run here.")
     elif worst == 1:
         print(
-            "Some gates cannot run here (see MISS above). A verification "
-            "that needs one of them is INCOMPLETE, not PASS."
+            "Some optional tools are missing (see MISS above). A "
+            "verification that needs one of them is INCOMPLETE, not PASS."
         )
     else:
         print(

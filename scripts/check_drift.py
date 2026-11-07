@@ -85,6 +85,7 @@ ORCINUS_TEST_FILES = {
     "skills/database-designer/test_migration_generator.py",
     "skills/database-designer/test_migration_integration.py",
     "skills/database-designer/test_postgres_migration.py",
+    "skills/mcp-builder/scripts/test_mcp_builder.py",
     "skills/skill-creator/scripts/test_package_skill.py",
     "skills/skill-creator/scripts/test_quick_validate.py",
     "skills/skill-creator/scripts/test_run_eval.py",

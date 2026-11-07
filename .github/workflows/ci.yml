@@ -24,11 +24,28 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Portability claim (round 6, CI-1): the test job runs on
+    # ubuntu, Windows, and macOS. Python 3.10 was dropped 2026-11-07
+    # (round 6, 2-S7): end-of-life 2026-10-01 (PEP 619). The
+    # windows/macOS jobs have never run in this VM and are likely
+    # red at first — POSIX assumptions in the tests (shell paths,
+    # /tmp, signal handling) — so a red win/mac job is a real
+    # finding to fix, not a reason to drop the platform.
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.11"
+          - os: ubuntu-latest
+            python-version: "3.12"
+          - os: ubuntu-latest
+            python-version: "3.13"
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.12"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
       - name: Set up Python
@@ -38,27 +55,32 @@ jobs:
       - name: Install CI dependencies (pinned, hashes verified)
         run: pip install --require-hashes -r requirements-ci.txt
       - name: Validate the repo (frontmatter, licences, glossary, stage ranges, manifests, links, skill counts)
-        run: python3 scripts/validate_repo.py
+        run: python scripts/validate_repo.py
       - name: Check vendored files have not drifted
-        run: python3 scripts/check_drift.py
+        run: python scripts/check_drift.py
       - name: Lint the ORCINUS-owned Python (ruff, see pyproject.toml)
-        run: python3 -m ruff check
+        run: python -m ruff check
       - name: Check formatting of the ORCINUS-owned Python and Markdown code blocks
-        run: python3 -m ruff format --check
-      - name: Typecheck the ORCINUS-owned Python (mypy, see pyproject.toml for scope)
-        run: python3 -m mypy scripts/ skills/architecture/scripts/ skills/database-designer/migration_generator.py skills/database-designer/test_migration_generator.py skills/database-designer/test_migration_integration.py skills/database-designer/test_postgres_migration.py skills/idea-capture/scripts/ skills/incomplete-refactor/scripts/ skills/orcinus-verify/scripts/ skills/webapp-testing/scripts/test_with_server.py evals/waza-orcinus-verify-agent/test_graders.py
+        run: python -m ruff format --check
+      - name: Typecheck the ORCINUS-owned Python (mypy, scope is [tool.mypy] files in pyproject.toml)
+        run: python -m mypy
       - name: Run the script tests
-        run: python3 -m pytest -q
+        run: python -m pytest -q
 
   waza:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
-      - name: Install waza (v0.40.0, checksum verified)
+      - name: Install waza (v0.40.0, checksum pinned in this file)
+        # Round 6 (2-S6): the checksum used to be downloaded from
+        # the same release it verified, so it was not anti-forgery —
+        # a compromised release could ship a matching pair. The
+        # SHA256 below is pinned in this file and must match
+        # doctor.WAZA_LINUX_SHA256 in scripts/doctor.py (enforced by
+        # scripts/test_doctor.py).
         run: |
           curl -fsSL -o /tmp/waza-linux-amd64 https://github.com/microsoft/waza/releases/download/v0.40.0/waza-linux-amd64
-          curl -fsSL -o /tmp/checksums.txt https://github.com/microsoft/waza/releases/download/v0.40.0/checksums.txt
-          cd /tmp && grep 'waza-linux-amd64' checksums.txt | sha256sum -c -
+          echo "d09117a3c631f44a00a6c362462c951aed83c87751e8c25f39916a77d1013802  /tmp/waza-linux-amd64" | sha256sum -c -
           chmod +x /tmp/waza-linux-amd64
           /tmp/waza-linux-amd64 --help | head -n 3
       - name: Run the waza harness-smoke suite (mock executor)
@@ -70,6 +92,64 @@ jobs:
           name: waza-results
           path: /tmp/waza-results.json
           if-no-files-found: error
+
+  demo:
+    # Round 6 (2-S5 / 3-R3-07): the demo had zero CI coverage — no
+    # job referenced examples/demo at all, so a broken demo shipped
+    # silently. Runs the four gates (build, lint, typecheck, test)
+    # on the minimum supported Node (22 — the Stryker packages
+    # require >=22, see examples/demo/package.json engines) and on
+    # the release Node (24).
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["22", "24"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Install the demo dependencies from the lockfile
+        run: npm ci
+        working-directory: examples/demo
+      - name: Build, lint, typecheck, and test the demo
+        run: npm run build && npm run lint && npm run typecheck && npm test
+        working-directory: examples/demo
+
+  waza-fixtures:
+    # Round 6 (Track 6 handoff): the waza harness-smoke fixtures
+    # (evals/waza-orcinus-verify-agent/fixtures/) have their own
+    # package.json + tsconfig + eslint config and their own four
+    # gates — same shape as the demo job, Node 24 only (no Stryker
+    # here, so no minimum-version matrix is needed).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install the fixture dependencies from the lockfile
+        run: npm ci
+        working-directory: evals/waza-orcinus-verify-agent/fixtures
+      - name: Build, lint, typecheck, and test the fixtures
+        run: npm run build && npm run lint && npm run typecheck && npm test
+        working-directory: evals/waza-orcinus-verify-agent/fixtures
+
+  shellcheck:
+    # Round 6 (2-S5): CI had no shellcheck, so the shell scripts
+    # (verify.sh, hitl-loop.template.sh) were linted only by hand.
+    # apt-get update first: a bare install fails on a stale index
+    # ("Unable to locate package shellcheck").
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+      - name: Lint the shell scripts
+        run: shellcheck $(git ls-files '*.sh')
 
   clean-install:
     # Proves the repo works from a clean copy, not just in the author's

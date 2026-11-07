@@ -343,3 +343,66 @@ def test_version_greater_than_latest_tag_passes(tmp_path):
     )
     rc, out = _run(repo, base, _head(repo))
     assert rc == 0, out
+
+
+# --- Round 6 (2026-11-07): S11 — shipped prefixes/files ---
+
+
+def test_claude_plugin_change_without_bump_fails(tmp_path):
+    """S11: .claude-plugin/ holds the plugin manifest itself — a
+    change there is shipped content — but the old SHIPPED_PREFIXES
+    did not include it, so e.g. a marketplace-metadata change passed
+    with no bump. (The manifest file itself is also the version
+    source, so this test changes a different file in the dir.)"""
+    repo = _repo(tmp_path)
+    base = _head(repo)
+    _commit(repo, {".claude-plugin/marketplace.json": "{}\n"}, "plugin metadata change")
+    rc, out = _run(repo, base, _head(repo))
+    assert rc == 1, out
+    assert "version" in out.lower()
+
+
+def test_hermes_change_without_bump_fails(tmp_path):
+    """S11: hermes/ is shipped plugin content (the Hermes bundle)
+    but was outside SHIPPED_PREFIXES, so a change there passed with
+    no bump."""
+    repo = _repo(tmp_path)
+    base = _head(repo)
+    _commit(repo, {"hermes/bundle.json": "{}\n"}, "hermes change")
+    rc, out = _run(repo, base, _head(repo))
+    assert rc == 1, out
+    assert "version" in out.lower()
+
+
+def test_package_json_change_without_bump_fails(tmp_path):
+    """S11: package.json pins the plugin-validate CLI version — a
+    change there ships — but the file is outside every shipped
+    prefix, so it passed with no bump."""
+    repo = _repo(tmp_path)
+    base = _head(repo)
+    _commit(repo, {"package.json": '{"name": "x"}\n'}, "package.json change")
+    rc, out = _run(repo, base, _head(repo))
+    assert rc == 1, out
+    assert "version" in out.lower()
+
+
+def test_package_lock_change_without_bump_fails(tmp_path):
+    """S11: package-lock.json is the lockfile for the same pinned
+    CLI install — same class as package.json."""
+    repo = _repo(tmp_path)
+    base = _head(repo)
+    _commit(repo, {"package-lock.json": "{}\n"}, "package-lock.json change")
+    rc, out = _run(repo, base, _head(repo))
+    assert rc == 1, out
+    assert "version" in out.lower()
+
+
+def test_package_jsonx_change_needs_no_bump(tmp_path):
+    """Control for the exact-file match: a file merely STARTING
+    with package.json (package.jsonx) is not the manifest — it must
+    not trigger the bump rule."""
+    repo = _repo(tmp_path)
+    base = _head(repo)
+    _commit(repo, {"package.jsonx": "{}\n"}, "unrelated file change")
+    rc, out = _run(repo, base, _head(repo))
+    assert rc == 0, out

@@ -1480,3 +1480,110 @@ def test_frontmatter_rejects_unquoted_colon_space(tmp_path):
         "name: x\ndescription: See https://example.com/docs\nlicense: MIT\n", tmp_path
     )
     assert fields["description"] == "See https://example.com/docs"
+
+
+# --- Round 6 (2026-11-07): Rec3 — the docs agree with each other
+# and with the repo. The README honesty paragraph, SCOPE.md's
+# "scored eval" claims, the orcinus-verify verdict example, and the
+# mock verify-pass task all stated numbers that nothing checked. ---
+
+
+def _docs_numbers_repo(tmp_path):
+    """A fake repo with 2 skills, 1 scenario eval, and a demo with
+    2 tests — all the numbers consistent, so the check passes."""
+    root = tmp_path / "repo"
+    (root / "skills" / "alpha").mkdir(parents=True)
+    (root / "skills" / "beta").mkdir(parents=True)
+    (root / "evals").mkdir()
+    (root / "examples" / "demo" / "tests").mkdir(parents=True)
+    (root / "evals" / "waza-orcinus-verify" / "tasks").mkdir(parents=True)
+    (root / "skills" / "orcinus-verify").mkdir(parents=True)
+    (root / "evals" / "alpha-01.md").write_text("# Alpha eval\n", encoding="utf-8")
+    (root / "evals" / "orcinus-verify-01.md").write_text("# Verify eval\n", encoding="utf-8")
+    (root / "SCOPE.md").write_text(
+        "One alpha skill, with a manual scenario eval (`evals/alpha-01.md`).\n",
+        encoding="utf-8",
+    )
+    (root / "README.md").write_text(
+        "Eval honesty: the 2 scenario evals in `evals/*.md` are manual "
+        "text scenarios, not scored harness runs. 1 of the 3 skills have "
+        "no matching `*-01.md` eval file, and 0 eval files have no "
+        "matching skill directory.\n",
+        encoding="utf-8",
+    )
+    (root / "examples" / "demo" / "tests" / "demo.test.ts").write_text(
+        "test('one', () => {});\ntest('two', () => {});\n", encoding="utf-8"
+    )
+    (root / "skills" / "orcinus-verify" / "SKILL.md").write_text(
+        '{"verdict": "PASS", "finding": "2 tests pass"}\n', encoding="utf-8"
+    )
+    (root / "evals" / "waza-orcinus-verify" / "tasks" / "verify-pass.yaml").write_text(
+        "description: Run the demo and confirm all 2 tests pass.\n", encoding="utf-8"
+    )
+    return root
+
+
+def test_docs_numbers_passes(tmp_path, monkeypatch):
+    root = _docs_numbers_repo(tmp_path)
+    assert _run_with_root(monkeypatch, root, vr.check_docs_numbers) == []
+
+
+def test_docs_numbers_scored_eval_fails(tmp_path, monkeypatch):
+    """Rec3: SCOPE.md called the manual scenarios 'scored evals' —
+    the README honesty paragraph says they are not scored. The
+    phrase is forbidden in SCOPE.md now."""
+    root = _docs_numbers_repo(tmp_path)
+    scope = root / "SCOPE.md"
+    scope.write_text(
+        scope.read_text(encoding="utf-8").replace("manual scenario", "scored"),
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_docs_numbers)
+    assert any("scored eval" in f for f in failures)
+
+
+def test_docs_numbers_missing_cited_eval_fails(tmp_path, monkeypatch):
+    """Rec3: every eval path SCOPE.md cites must exist."""
+    root = _docs_numbers_repo(tmp_path)
+    scope = root / "SCOPE.md"
+    scope.write_text(
+        scope.read_text(encoding="utf-8") + " See also `evals/nope-01.md`.\n",
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_docs_numbers)
+    assert any("nope-01.md" in f for f in failures)
+
+
+def test_docs_numbers_stale_demo_count_fails(tmp_path, monkeypatch):
+    """Rec3: the demo test count is computed from the demo tests,
+    not trusted from the docs — a stale hard-coding fails."""
+    root = _docs_numbers_repo(tmp_path)
+    skill = root / "skills" / "orcinus-verify" / "SKILL.md"
+    skill.write_text(
+        skill.read_text(encoding="utf-8").replace("2 tests pass", "7 tests pass"),
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_docs_numbers)
+    assert any("tests pass" in f for f in failures)
+    task = root / "evals" / "waza-orcinus-verify" / "tasks" / "verify-pass.yaml"
+    task.write_text(
+        task.read_text(encoding="utf-8").replace("all 2 tests", "all 7 tests"),
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_docs_numbers)
+    assert any("verify-pass.yaml" in f for f in failures)
+
+
+def test_docs_numbers_stale_readme_counts_fail(tmp_path, monkeypatch):
+    """Rec3: the README honesty numbers are recomputed — a stale
+    count fails instead of drifting silently."""
+    root = _docs_numbers_repo(tmp_path)
+    readme = root / "README.md"
+    readme.write_text(
+        readme.read_text(encoding="utf-8").replace(
+            "1 of the 3 skills have no matching", "0 of the 3 skills have no matching"
+        ),
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_docs_numbers)
+    assert any("README" in f for f in failures)

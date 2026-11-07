@@ -74,6 +74,39 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+
+def _mypy_scope():
+    """The mypy scope, read from the single source of truth:
+    [tool.mypy] files in pyproject.toml (round 6, S8). mypy reads
+    the same list natively, and CI passes no paths at all — the list
+    used to be hand-copied in three places. tomllib is stdlib on
+    3.11+, the lowest version this repo supports; tomli is the
+    fallback for an older local Python."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
+        import tomli as tomllib
+
+    with open(ROOT / "pyproject.toml", "rb") as f:
+        data = tomllib.load(f)
+    try:
+        files = data["tool"]["mypy"]["files"]
+    except (KeyError, TypeError):
+        raise RuntimeError(
+            "pyproject.toml has no [tool.mypy] files list — it is the "
+            "single source of truth for the mypy scope"
+        ) from None
+    if not isinstance(files, list) or not files or not all(isinstance(p, str) for p in files):
+        raise RuntimeError("pyproject.toml [tool.mypy] files is missing or not a list of paths")
+    return files
+
+
+# The mypy scope is the exact list CI typechecks — read from
+# pyproject.toml, not hand-copied here. The clean-copy gates run the
+# same list, not a subset: a copy that passes here must pass the
+# same typecheck CI runs.
+MYPY_SCOPE = _mypy_scope()
+
 EXCLUDE = {
     ".git",
     "__pycache__",
@@ -85,25 +118,6 @@ EXCLUDE = {
     "venv",
     ".mypy_cache",
 }
-
-
-# The mypy scope is the exact list CI typechecks (see
-# .github/workflows/ci.yml, test job). The clean-copy gates run the
-# same list, not a subset: a copy that passes here must pass the
-# same typecheck CI runs.
-MYPY_SCOPE = [
-    "scripts/",
-    "skills/architecture/scripts/",
-    "skills/database-designer/migration_generator.py",
-    "skills/database-designer/test_migration_generator.py",
-    "skills/database-designer/test_migration_integration.py",
-    "skills/database-designer/test_postgres_migration.py",
-    "skills/idea-capture/scripts/",
-    "skills/incomplete-refactor/scripts/",
-    "skills/orcinus-verify/scripts/",
-    "skills/webapp-testing/scripts/test_with_server.py",
-    "evals/waza-orcinus-verify-agent/test_graders.py",
-]
 
 
 def _copy_clean(source, dest):

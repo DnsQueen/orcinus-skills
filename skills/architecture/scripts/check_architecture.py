@@ -47,7 +47,7 @@ Usage:
 
 Exit 0 when clean, 1 when any violation is found (including when
 nothing could be checked — a scan that covered no files is INCOMPLETE,
-never clean). Stdlib only. Requires Python 3.9+.
+never clean). Stdlib only. Requires Python 3.11+.
 """
 
 import argparse

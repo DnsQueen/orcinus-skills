@@ -3,7 +3,7 @@ name: orcinus-verify
 description: Independently verify a code change before any claim of done. Use after any implementation, bugfix, or refactor, before merging, releasing, or saying a feature works. Only invoke via the orcinus router.
 license: MIT
 user-invocable: false
-compatibility: Requires Python 3.10+.
+compatibility: Requires Python 3.11+.
 ---
 
 # ORCINUS-VERIFY — independent verification

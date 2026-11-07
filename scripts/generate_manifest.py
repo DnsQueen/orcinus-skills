@@ -35,13 +35,16 @@ Curated (preserved from the existing manifest; edit them there):
 
 The manifest version is 2 (v2 adds the required integration field).
 
-Exit 0 when the manifest was written; exit 1 when a skill folder
-has no stages entry (or vice versa), or a frontmatter field is
-missing. The validator (scripts/validate_repo.py) checks the same
+Exit 0 when the manifest was written (or, with --check, when it
+already matches its sources); exit 1 when a skill folder has no
+stages entry (or vice versa), a frontmatter field is missing, or
+--check finds a difference. Exit 2 for a usage error (unknown flag).
+The validator (scripts/validate_repo.py) checks the same
 invariants, so a hand-edited manifest that disagrees with its
 sources fails the build.
 """
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -54,7 +57,22 @@ MANIFEST_PATH = ROOT / "skills" / "manifest.json"
 STAGES_PATH = ROOT / "skills" / "stages.json"
 
 
-def main():
+def main(argv=None):
+    # Round 6 (2-S4): the generator used to take no arguments at
+    # all, so --check was silently ignored and REWROTE the file it
+    # was supposed to only verify. argparse now owns the CLI:
+    # --check diffs and never writes; an unknown flag exits 2.
+    parser = argparse.ArgumentParser(
+        description="Regenerate skills/manifest.json from its sources."
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="verify the manifest matches its sources; exit 1 if it "
+        "differs, without writing anything",
+    )
+    args = parser.parse_args(argv)
+
     try:
         stages_data = json.loads(STAGES_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
@@ -132,6 +150,27 @@ def main():
         ),
         "skills": entries,
     }
+    if args.check:
+        # Compare parsed manifests, not text: key order and
+        # whitespace in the file are not a difference. The
+        # generated_by line is part of the manifest, so a stale
+        # boilerplate also fails the check — deliberately: --check
+        # means "exactly what a fresh run would write".
+        if old == manifest:
+            print(f"{MANIFEST_PATH} is up to date ({len(entries)} skills)")
+            return 0
+        differing = sorted(
+            name
+            for name in set(old_entries) | set(entries)
+            if old_entries.get(name) != entries.get(name)
+        )
+        print(
+            f"{MANIFEST_PATH} is out of date "
+            f"({len(differing)} skill(s) differ: {', '.join(differing) or 'none listed'}); "
+            f"run without --check to regenerate",
+            file=sys.stderr,
+        )
+        return 1
     MANIFEST_PATH.write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )

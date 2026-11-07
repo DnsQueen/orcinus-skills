@@ -2,6 +2,18 @@
 # verify.sh — monitoring config sanity gate. Read-only. Run inside YOUR project or
 # point it at a monitoring config/spec dir or file. CI runs the same file (parity).
 #
+# ORCINUS change notice (2026-11-07, round 6, 2-S3 / 3-F2-04 / 3-F2-05):
+# the checks below are HEURISTIC, haystack-wide keyword checks over
+# non-comment lines — not per-alert parsing. A runbook reference
+# anywhere in the alert rules passes check 4; it does not prove every
+# alert has one. Full-line comments (^[[:space:]]*#) are stripped
+# before any check, because comment keywords used to PASS the gate
+# vacuously (a config whose only mention of burn-rate/runbook was in
+# a comment passed). Inline trailing comments are NOT stripped — a
+# keyword after code on the same line still counts; that is a known
+# residual, not a claim. A nonexistent target exits 2 (INCOMPLETE):
+# nothing was checked, which is not a clean config.
+#
 # Usage:
 #   bash scripts/verify.sh [PATH]    # PATH defaults to "."
 #
@@ -11,11 +23,13 @@
 #   2. Health endpoints separate liveness from readiness (livez/liveness AND readyz/readiness).
 #   3. At least one alert is symptom/SLO/burn-rate based with TWO windows — FAIL only if
 #      alert rules exist and the ONLY thresholds are bare cpu/memory.
-#   4. Every alert block carries a runbook reference (runbook / runbook_url).
+#   4. At least one runbook reference (runbook / runbook_url) appears in the alert
+#      rules — haystack-wide, NOT one per alert (see the notice above).
 #   5. Banlist: Opsgenie introduced as a NEW setup; a monitor whose only target is "/".
 #
 # Dependency-light: bash + grep + find only. Portable to macOS bash 3.2 and CI bash 5.
-# Read-only: never writes, never mutates. Exits nonzero only on a real FAIL.
+# Read-only: never writes, never mutates. Exits nonzero only on a real FAIL,
+# except exit 2 when the target does not exist (nothing could be checked).
 #
 # Env: NO_COLOR=1 to disable color.
 set -euo pipefail
@@ -27,6 +41,7 @@ else YEL=$'\033[33m'; GRN=$'\033[32m'; RED=$'\033[31m'; RST=$'\033[0m'; fi
 ok()   { printf '%sPASS:%s %s\n' "$GRN" "$RST" "$*"; }
 fail() { printf '%sFAIL:%s %s\n' "$RED" "$RST" "$*"; }
 skip() { printf '%sSKIP:%s %s\n' "$YEL" "$RST" "$*"; }
+incomplete() { printf '%sINCOMPLETE:%s %s\n' "$YEL" "$RST" "$*"; }
 
 FAILED=0
 
@@ -42,13 +57,19 @@ elif [[ -d "$TARGET" ]]; then
     -o -type f \( -name '*.yml' -o -name '*.yaml' -o -name '*.json' \
        -o -name '*.rules' -o -name '*.conf' -o -name '*.md' \) -print0 2>/dev/null)
 else
-  skip "target not found: $TARGET — nothing to gate"; exit 0
+  incomplete "target not found: $TARGET — nothing was checked"; exit 2
 fi
+
+# Full-line comments carry no config: strip them before any check,
+# or a comment mentioning a keyword passes the gate vacuously.
+# grep -v returns 1 when every line is a comment; the || true keeps
+# set -e from killing the script on an all-comment file.
+stripped() { grep -v '^[[:space:]]*#' "$1" 2>/dev/null || true; }
 
 # Keep only files that look like monitoring artifacts (alerts/health/monitors).
 CAND=()
 for f in ${FILES[@]+"${FILES[@]}"}; do
-  if grep -liE 'alert|burn[_-]?rate|livez|readyz|liveness|readiness|monitor|uptime|escalation|runbook' "$f" >/dev/null 2>&1; then
+  if stripped "$f" | grep -qiE 'alert|burn[_-]?rate|livez|readyz|liveness|readiness|monitor|uptime|escalation|runbook'; then
     CAND+=("$f")
   fi
 done
@@ -58,8 +79,16 @@ if [[ ${#CAND[@]} -eq 0 ]]; then
   exit 0
 fi
 
-# Build a single haystack of the candidate contents for cross-file checks.
-HAY="$(cat ${CAND[@]+"${CAND[@]}"} 2>/dev/null || true)"
+# Build a single haystack of the candidate contents (comments
+# stripped) for cross-file checks.
+HAY=""
+for f in "${CAND[@]}"; do
+  HAY+="$(stripped "$f")"$'\n'
+done
+
+# How much was actually gated: candidate files, and alert blocks
+# (lines mentioning "alert" — an approximation, not a parse).
+ALERT_BLOCKS="$(printf '%s' "$HAY" | grep -ciE 'alert' || true)"
 
 # Helpers (case-insensitive grep against the haystack).
 has() { printf '%s' "$HAY" | grep -qiE "$1"; }
@@ -102,9 +131,11 @@ if has 'alert|expr|burn|rate\(|error[_ ]?rate|severity'; then
     FAILED=1
   fi
 
-  # 4. runbook reference on alerts.
+  # 4. runbook reference on alerts — haystack-wide: one reference
+  # anywhere in the alert rules passes. That is NOT one per alert;
+  # the script does not parse alert blocks.
   if has 'runbook'; then
-    ok "alerts reference a runbook"
+    ok "a runbook reference is present in the alert rules (haystack-wide — not proven per alert)"
   else
     fail "alert rules carry no runbook/runbook_url reference"
     FAILED=1
@@ -126,7 +157,9 @@ fi
 
 # 5b. banlist — a monitor whose only target is the homepage "/".
 # Flag url:"/" or path "/" used as a probe target with no critical-journey/readyz target.
-if printf '%s' "$HAY" | grep -qE '(url|path|target|target_url)["'"'"' :]+["'"'"']?/["'"'"']?\s*$' \
+# [[:space:]] (POSIX), not \s: BSD grep -E does not know \s and
+# would match a literal "s" instead (same class as round 6, S10).
+if printf '%s' "$HAY" | grep -qE '(url|path|target|target_url)["'"'"' :]+["'"'"']?/["'"'"']?[[:space:]]*$' \
    || printf '%s' "$HAY" | grep -qE '(url|path|target)["'"'"' :]+["'"'"']/["'"'"']'; then
   if has 'readyz|/api/|journey|checkout|login|critical'; then
     ok "homepage probe present but a deeper/critical-journey target also configured"
@@ -136,7 +169,9 @@ if printf '%s' "$HAY" | grep -qE '(url|path|target|target_url)["'"'"' :]+["'"'"'
   fi
 fi
 
-# summary
+# summary — with the counts, so a pass over one file cannot be
+# mistaken for a pass over the whole config.
+printf 'Gated %s candidate file(s), %s alert line(s).\n' "${#CAND[@]}" "$ALERT_BLOCKS"
 if [[ $FAILED -eq 0 ]]; then
   ok "all monitoring checks passed (skips are not failures)"
 else

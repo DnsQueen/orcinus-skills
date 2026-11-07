@@ -3,7 +3,7 @@ name: "database-designer"
 description: "Design a database schema: tables, relationships, indexes, normalization, SQL vs NoSQL, migration plans. Use whenever the user asks how to structure their data, which database to pick, or before writing DDL. Only invoke via the orcinus router."
 license: MIT
 user-invocable: false
-compatibility: Requires Python 3.10+.
+compatibility: Requires Python 3.11+.
 ---
 
 # Database Designer - POWERFUL Tier Skill

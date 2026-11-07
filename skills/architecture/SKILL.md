@@ -3,7 +3,7 @@ name: architecture
 description: Define a project's architecture before any code is written — stack choice as a decision record, file tree and invariants, public contract, layer rules, and dependency licences — and enforce it with a checker. Use when a calibrated brief exists and the project does not yet have a written architecture, or when a structural change is proposed. No code before the architecture is written. Only invoke via the orcinus router.
 license: MIT
 user-invocable: false
-compatibility: Requires Python 3.10+.
+compatibility: Requires Python 3.11+.
 ---
 
 # ARCHITECTURE — decide the shape before building it

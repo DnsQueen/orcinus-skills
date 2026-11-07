@@ -169,9 +169,10 @@ def _is_iso8601(value):
     accepts date-only strings and naive datetimes, and on 3.11+ it
     accepts week/basic formats that 3.10 rejects — so the same bundle
     would validate differently across the CI matrix. The regex makes
-    acceptance identical on every Python >= 3.10: it pins the
+    acceptance identical on every Python >= 3.11: it pins the
     fractional seconds to 3 or 6 digits (3.10's fromisoformat
-    accepts only those) and the year to 2000-2099, and
+    accepted only those; the regex keeps the same acceptance on
+    3.11+) and the year to 2000-2099, and
     fromisoformat then only validates the ranges."""
     if type(value) is not str:
         return False

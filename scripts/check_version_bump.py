@@ -55,8 +55,13 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 # change to scripts/content_digest.py with no bump used to pass
 # (reviewer 4, F6, round 5). docs/, evals/ and examples/ are
 # dev-docs only: they ship in the same checkout but change no
-# behaviour.
-SHIPPED_PREFIXES = ("skills/", "agents/", "commands/", "scripts/")
+# behaviour. Round 6 (S11) added .claude-plugin/ and hermes/ (both
+# ship) and the package.json / package-lock.json pair — the pinned
+# plugin-validate CLI install ships. The two root files are exact
+# matches, not prefixes: a prefix match would also catch e.g.
+# package.jsonx, which is not the manifest.
+SHIPPED_PREFIXES = ("skills/", "agents/", "commands/", "scripts/", ".claude-plugin/", "hermes/")
+SHIPPED_FILES = ("package.json", "package-lock.json")
 PLUGIN_JSON = ".claude-plugin/plugin.json"
 CHANGELOG = "CHANGELOG.md"
 
@@ -172,7 +177,7 @@ def check(repo, base, head):
     base = _resolve(repo, base)
     head = _resolve(repo, head)
     files = _changed_files(repo, base, head)
-    shipped = [f for f in files if f.startswith(SHIPPED_PREFIXES)]
+    shipped = [f for f in files if f.startswith(SHIPPED_PREFIXES) or f in SHIPPED_FILES]
     base_version = _plugin_version(repo, base)
     head_version = _plugin_version(repo, head)
     version_changed = base_version != head_version

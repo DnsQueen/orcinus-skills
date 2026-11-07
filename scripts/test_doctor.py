@@ -62,14 +62,15 @@ def test_check_shape():
 # --- Round-3 regression tests (reviewer 4, section 5). ---
 
 
-def test_python_minimum_is_3_10():
-    # Python 3.9 was dropped 2026-11-06 (EOL, no Ubuntu 26.04 build);
-    # doctor must not report 3.9 as ready.
-    assert doctor.MIN_PYTHON == (3, 10)
-    result = doctor.check_python((3, 9, 0))
+def test_python_minimum_is_3_11():
+    # Python 3.10 reached end-of-life 2026-10-01 (PEP 619) and was
+    # dropped 2026-11-07 (round 6, 2-S7), the same logic that dropped
+    # 3.9 in 2026-11-06; doctor must not report 3.10 as ready.
+    assert doctor.MIN_PYTHON == (3, 11)
+    result = doctor.check_python((3, 10, 0))
     assert result["status"] == "incompatible"
-    assert "3.10" in result["fix"]
-    assert doctor.check_python((3, 10, 0))["status"] == "ready"
+    assert "3.11" in result["fix"]
+    assert doctor.check_python((3, 11, 0))["status"] == "ready"
 
 
 def _patched_run(monkeypatch, mapping):
@@ -205,6 +206,109 @@ def test_waza_fallback_used_on_linux(monkeypatch):
     result = doctor.check_waza()
     assert result["status"] == "incomplete"
     assert called == [["/tmp/waza-linux-amd64", "--version"]]
+
+
+# --- Round 6 (2026-11-07): S3 + S4 + 2-S6 + 2-S7 ---
+
+
+def test_run_returns_none_on_permission_error(monkeypatch):
+    """S3: _run caught only FileNotFoundError/TimeoutExpired, so a
+    non-executable file raised PermissionError out of _run and out of
+    every check — an uncaught traceback, outside the 0/1/2 scheme.
+    PermissionError is an OSError; _run must return (None, '')."""
+    import subprocess
+
+    def boom(argv, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert doctor._run(["/nonexistent/noexec"]) == (None, "")
+
+
+def test_permission_error_in_check_is_controlled(monkeypatch):
+    """S3, end to end: a check whose tool run raises PermissionError
+    reports a status, it does not raise. (The run is faked at the
+    subprocess level, so the real _run — with its except — is what
+    is under test.)"""
+    import subprocess
+
+    def boom(argv, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/usr/bin/ruff")
+    result = doctor.check_ruff()
+    assert result["status"] in ("incomplete", "incompatible")
+
+
+def test_missing_mandatory_tools_are_incompatible(monkeypatch):
+    """S4: git missing and optional waza/node missing both returned
+    `incomplete` + exit 1, although the docstring defines incomplete
+    as 'the tool is missing, but the gate it serves can be skipped'
+    — false for git/python/pytest/ruff, whose gates cannot run at
+    all. A missing mandatory tool is incompatible (exit 2); only a
+    missing optional tool is incomplete."""
+    _patched_run(monkeypatch, {})
+    assert doctor.check_git()["status"] == "incompatible"
+    assert doctor.check_pytest()["status"] == "incompatible"
+    assert doctor.check_ruff()["status"] == "incompatible"
+
+
+def test_missing_optional_tools_stay_incomplete(monkeypatch):
+    """S4: node and waza are optional (the demo / eval suites, not
+    the Python gates) — missing them stays incomplete, exit 1."""
+    _patched_run(monkeypatch, {})
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    monkeypatch.setattr(doctor.sys, "platform", "linux")
+    assert doctor.check_node()["status"] == "incomplete"
+    assert doctor.check_waza()["status"] == "incomplete"
+
+
+def test_git_outside_repo_is_incompatible(monkeypatch):
+    """S4: the not-a-repo branch returned incomplete while its own
+    comment says 'the git gate cannot run here at all' — the
+    docstring's definition of incompatible."""
+    _patched_run(
+        monkeypatch,
+        {
+            ("git", "--version"): (0, "git version 2.40.0"),
+            ("git", "-C"): (128, "fatal: not a git repository"),
+        },
+    )
+    assert doctor.check_git()["status"] == "incompatible"
+
+
+def test_main_exit_2_for_missing_git(monkeypatch, capsys):
+    """S4: a machine with no git cannot verify at all — exit 2, not
+    the exit 1 of a merely-optional missing tool."""
+    _all_ready(monkeypatch, {"check_git": "incompatible"})
+    assert doctor.main() == 2
+
+
+def test_main_exit_1_for_missing_optional_only(monkeypatch, capsys):
+    """S4: a machine missing only node/waza stays exit 1."""
+    _all_ready(monkeypatch, {"check_node": "incomplete", "check_waza": "incomplete"})
+    assert doctor.main() == 1
+
+
+def test_ci_waza_hash_matches_doctor_pin():
+    """2-S6: the waza checksum pinned in CI must be the same value
+    doctor gates the /tmp fallback on — one pinned hash, not two
+    that can drift apart."""
+    import re
+
+    ci = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+    assert doctor.WAZA_LINUX_SHA256 in ci, (
+        "ci.yml does not pin the same waza SHA256 as doctor.WAZA_LINUX_SHA256"
+    )
+    assert "checksums.txt" not in ci, (
+        "ci.yml still downloads the checksum from the release — the "
+        "check is not anti-forgery while the hash comes from the same "
+        "release it verifies"
+    )
+    assert re.search(r"[0-9a-f]{64}", ci)
 
 
 # --- Round 6 (2026-11-07): S2 — the /tmp waza fallback is gated on
