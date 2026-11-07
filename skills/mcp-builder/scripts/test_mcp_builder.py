@@ -406,3 +406,19 @@ def test_cli_min_accuracy_enforced(tmp_path):
     rc, out = _cli(tmp_path, "--min-accuracy", "101", str(path))
     assert rc == 1, out
     assert "min-accuracy" in out.lower() or "accuracy" in out.lower()
+
+
+def test_cli_output_survives_non_utf8_stdout(tmp_path, monkeypatch):
+    """Windows: stdout defaults to cp1252, which cannot encode the
+    emoji the harness prints (🔗/✅/🚀/📋) or in the report (✅/❌) —
+    the CLI used to die with UnicodeEncodeError before doing
+    anything. PYTHONIOENCODING=cp1252 reproduces the Windows
+    console encoding on Linux. The harness reconfigures stdout /
+    stderr to UTF-8, and the report file is written as UTF-8, so
+    both survive a non-UTF-8 console."""
+    monkeypatch.setenv("PYTHONIOENCODING", "cp1252")
+    path = _qa_file(tmp_path, [("q", "42")])
+    out_path = tmp_path / "report.md"
+    rc, out = _cli(tmp_path, "--min-accuracy", "100", "-o", str(out_path), str(path))
+    assert rc == 0, out
+    assert "✅" in out_path.read_text(encoding="utf-8")

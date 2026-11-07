@@ -520,8 +520,11 @@ def test_missing_stdout_artifact_fails(tmp_path):
     assert any("stdout_artifact" in p for p in problems)
     assert any("stderr_artifact" in p for p in problems)
     (tmp_path / "logs").mkdir()
-    (tmp_path / "logs" / "pytest-stdout.log").write_text("test_capture_persian_only passed\n")
-    (tmp_path / "logs" / "pytest-stderr.log").write_text("")
+    # write_bytes, not write_text: the sha256 is computed over these
+    # exact bytes, and text mode translates "\n" to "\r\n" on Windows
+    # — the bytes on disk would no longer match the recorded hash.
+    (tmp_path / "logs" / "pytest-stdout.log").write_bytes(b"test_capture_persian_only passed\n")
+    (tmp_path / "logs" / "pytest-stderr.log").write_bytes(b"")
     b["checks"][0]["stdout_sha256"] = hashlib.sha256(
         b"test_capture_persian_only passed\n"
     ).hexdigest()
@@ -654,8 +657,33 @@ def test_artifact_with_correct_sha256_passes(tmp_path):
     b["checks"][0]["stdout_artifact"] = "logs/pytest-stdout.log"
     b["checks"][0]["stdout_sha256"] = hashlib.sha256(content.encode()).hexdigest()
     (tmp_path / "logs").mkdir()
-    (tmp_path / "logs" / "pytest-stdout.log").write_text(content)
+    # write_bytes, not write_text: the sha256 is computed over these
+    # exact bytes, and text mode translates "\n" to "\r\n" on Windows
+    # — the bytes on disk would no longer match the recorded hash.
+    (tmp_path / "logs" / "pytest-stdout.log").write_bytes(content.encode())
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
+
+
+def test_artifact_with_crlf_bytes_and_lf_hash_fails(tmp_path):
+    # Round-6 follow-up (Windows CI): the two tests above failed on
+    # Windows because their fixtures hashed the LF string but wrote
+    # the log with write_text — text mode translates "\n" to "\r\n"
+    # on Windows, so the bytes on disk no longer matched the recorded
+    # hash. That is the validator working correctly, not a bug in it:
+    # the sha256 is over exact bytes and must stay strict. This test
+    # pins that strictness — a CRLF file with an LF hash must still
+    # fail — which is also why the artifact fixtures must use
+    # write_bytes.
+    import hashlib
+
+    b = _good_bundle()
+    content = "2 passed in 0.12s\n"
+    b["checks"][0]["stdout_artifact"] = "logs/pytest-stdout.log"
+    b["checks"][0]["stdout_sha256"] = hashlib.sha256(content.encode()).hexdigest()
+    (tmp_path / "logs").mkdir()
+    (tmp_path / "logs" / "pytest-stdout.log").write_bytes(content.replace("\n", "\r\n").encode())
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("sha256" in p for p in problems)
 
 
 def test_sha256_must_be_hex():

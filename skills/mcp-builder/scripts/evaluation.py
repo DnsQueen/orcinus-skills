@@ -1,4 +1,4 @@
-# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — the minimum mcp version is 1.8.0 (streamable_http does not exist in 1.1.0; see scripts/requirements.txt). Round 6 (2026-11-07): tool results are serialised type-aware (a TextContent block used to raise TypeError inside json.dumps and the harness reported a fake "Error executing tool"); execution errors and serialisation errors are reported separately; ALL tool_use blocks in a turn are executed, not just the first; a malformed eval file, an incomplete qa_pair, or zero tasks raise a controlled error instead of reporting 0/0 with a passing exit; run_evaluation returns a structured result (report + correct/total/accuracy) and the CLI enforces --min-accuracy. The rest is verbatim; see ATTRIBUTION.md.
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — the minimum mcp version is 1.8.0 (streamable_http does not exist in 1.1.0; see scripts/requirements.txt). Round 6 (2026-11-07): tool results are serialised type-aware (a TextContent block used to raise TypeError inside json.dumps and the harness reported a fake "Error executing tool"); execution errors and serialisation errors are reported separately; ALL tool_use blocks in a turn are executed, not just the first; a malformed eval file, an incomplete qa_pair, or zero tasks raise a controlled error instead of reporting 0/0 with a passing exit; run_evaluation returns a structured result (report + correct/total/accuracy) and the CLI enforces --min-accuracy. Round-6 follow-up (2026-11-07): stdout/stderr are reconfigured to UTF-8 and the report is written as UTF-8 — on Windows the console defaults to cp1252, which cannot encode the emoji the harness prints. The rest is verbatim; see ATTRIBUTION.md.
 """MCP Server Evaluation Harness
 
 This script evaluates MCP servers by running test questions against them using Claude.
@@ -6,6 +6,7 @@ This script evaluates MCP servers by running test questions against them using C
 
 import argparse
 import asyncio
+import io
 import json
 import re
 import sys
@@ -52,6 +53,23 @@ Response Requirements:
 - For IDs, provide just the ID
 - For names or text, provide the exact text requested
 - Your response should go last"""
+
+
+def _ensure_utf8_output() -> None:
+    """Stdout and stderr emit UTF-8 even when the console encoding
+    is not: on Windows stdout defaults to cp1252, which cannot
+    encode the emoji this harness prints (🔗/✅/🚀/📋) or in the
+    report (✅/❌), and the CLI used to die with UnicodeEncodeError
+    before doing anything. Best-effort — a stream that is not a
+    TextIOWrapper or cannot be reconfigured keeps its encoding, and
+    a later write fails exactly as it would have without this call.
+    Same helper as skills/idea-capture/scripts/capture.py."""
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, io.TextIOWrapper):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except ValueError:
+                pass
 
 
 def parse_evaluation_file(file_path: Path) -> list[dict[str, Any]]:
@@ -371,6 +389,7 @@ def parse_env_vars(env_list: list[str]) -> dict[str, str]:
 
 
 async def main():
+    _ensure_utf8_output()
     parser = argparse.ArgumentParser(
         description="Evaluate MCP servers using test questions",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -444,7 +463,10 @@ Examples:
 
         report = result["report"]
         if args.output:
-            args.output.write_text(report)
+            # UTF-8, not the locale default: the report contains ✅/❌,
+            # which Windows cp1252 cannot encode (same failure as the
+            # stdout emoji this helper fixes above).
+            args.output.write_text(report, encoding="utf-8")
             print(f"\n✅ Report saved to {args.output}")
         else:
             print("\n" + report)
