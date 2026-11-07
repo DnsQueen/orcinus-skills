@@ -1358,3 +1358,29 @@ def test_docs_only_pass_with_empty_files_changed_passes():
     b = _docs_only_no_checks_bundle()
     b["files_changed"] = []
     assert _problems(b) == []
+
+
+def test_time_order_with_unvalidated_input_reports_instead_of_raising():
+    # F-11: check_time_order calls datetime.fromisoformat on strings
+    # it assumes the schema validated. Called directly on
+    # unvalidated input it raised TypeError (mixed naive/aware) or
+    # ValueError (garbage) — a latent coupling if the schema layer
+    # is ever relaxed. It must record a problem instead of raising.
+    for started, finished in [
+        ("2026-11-06T10:00:00Z", "2026-11-06T10:00:00"),  # aware vs naive
+        ("not-a-date", "2026-11-06T10:00:00Z"),  # garbage
+        ("2026-11-06T10:00:00", "2026-11-06T10:00:00Z"),  # naive vs aware
+    ]:
+        bundle = {
+            "checks": [
+                {
+                    "name": "test",
+                    "started_at": started,
+                    "finished_at": finished,
+                }
+            ]
+        }
+        problems = []
+        ve.check_time_order(bundle, problems)  # must not raise
+        assert problems, (started, finished)
+        assert any("test" in p for p in problems), problems

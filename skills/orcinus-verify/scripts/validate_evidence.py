@@ -856,15 +856,33 @@ def check_acceptance_criteria(bundle, problems):
 
 def check_time_order(bundle, problems):
     """finished_at must not precede started_at. The schema layer
-    already enforces RFC 3339 on both, so parsing cannot fail here."""
+    already enforces RFC 3339 on both, so parsing cannot fail here
+    — but the check must not depend on that: if it is ever called
+    on unvalidated input, a bad timestamp is a problem to record,
+    not an exception to raise (F-11)."""
     for c in _checks(bundle):
         started = c.get("started_at")
         finished = c.get("finished_at")
         if not isinstance(started, str) or not isinstance(finished, str):
             continue
-        start = datetime.fromisoformat(started.replace("Z", "+00:00"))
-        end = datetime.fromisoformat(finished.replace("Z", "+00:00"))
-        if end < start:
+        try:
+            start = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            end = datetime.fromisoformat(finished.replace("Z", "+00:00"))
+        except (ValueError, TypeError) as e:
+            problems.append(
+                f"check {c.get('name')!r} started_at {started!r} or "
+                f"finished_at {finished!r} could not be parsed: {e}"
+            )
+            continue
+        try:
+            out_of_order = end < start
+        except TypeError as e:
+            problems.append(
+                f"check {c.get('name')!r} started_at {started!r} and "
+                f"finished_at {finished!r} cannot be compared: {e}"
+            )
+            continue
+        if out_of_order:
             problems.append(
                 f"check {c.get('name')!r} finished_at {finished} is before started_at {started}"
             )
