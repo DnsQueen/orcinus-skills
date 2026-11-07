@@ -787,6 +787,34 @@ def check_change_type_files(bundle, problems):
             )
 
 
+def check_files_changed_for_behaviour_change(bundle, problems):
+    """A PASS for a behaviour change must name at least one file
+    changed: a change that touched nothing is not a behaviour
+    change, and a PASS with `files_changed: []` claims a change
+    with no evidence of one. The schema has no minItems on
+    files_changed, so this constraint lives in the semantic layer.
+    Pattern: github/spec-kit `.github/scripts/
+    check_extension_version_bump.py:174-272` invariant 1 (MIT,
+    pattern-only) — a semantic gate over a computed change-set,
+    not a schema rule. docs-only / config-only are exempt: they
+    have no behaviour to change, and the docs-only no-checks PASS
+    may list no files."""
+    if bundle.get("verdict") != "PASS":
+        return
+    plan = bundle.get("verification_plan")
+    if not isinstance(plan, dict):
+        return
+    if plan.get("change_type") not in BEHAVIOR_CHANGE_TYPES:
+        return
+    files = bundle.get("files_changed")
+    if not isinstance(files, list) or not files:
+        problems.append(
+            f"verdict is PASS for a behaviour change "
+            f"({plan.get('change_type')}) but files_changed is empty: "
+            f"a behaviour change must name the files it changed"
+        )
+
+
 def check_finding_categories(bundle, problems):
     """Security and data-loss findings are automatically blocking
     (2-V7): the category, not the self-declared severity, decides.
@@ -1068,6 +1096,7 @@ def validate_bundle(bundle, schema, bundle_dir=None):
     check_noop_commands(bundle, problems)
     check_plan_coverage(bundle, problems)
     check_change_type_files(bundle, problems)
+    check_files_changed_for_behaviour_change(bundle, problems)
     check_finding_categories(bundle, problems)
     check_acceptance_criteria(bundle, problems)
     check_time_order(bundle, problems)

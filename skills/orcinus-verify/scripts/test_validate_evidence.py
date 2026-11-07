@@ -1336,3 +1336,25 @@ def test_identity_genuinely_different_passes():
     b["reviewer_identity"] = "bob (review session)"
     b["implementer_identity"] = "alice (author session)"
     assert _problems(b) == []
+
+
+def test_behaviour_change_pass_with_empty_files_changed_fails():
+    # F-06: a behaviour-change PASS that lists no files changed
+    # claims a change that touched nothing. The schema has no
+    # minItems on files_changed, so this is a semantic constraint,
+    # added here — not a schema change.
+    for change_type in ("bug-fix", "feature", "refactor"):
+        b = _good_bundle()
+        b["verification_plan"]["change_type"] = change_type
+        b["files_changed"] = []
+        problems = _problems(b)
+        assert any("files_changed" in p for p in problems), change_type
+
+
+def test_docs_only_pass_with_empty_files_changed_passes():
+    # F-06 control: the docs-only no-checks exemption must not
+    # regress — a docs-only PASS with no files listed (nothing to
+    # run, nothing changed in code) is still valid.
+    b = _docs_only_no_checks_bundle()
+    b["files_changed"] = []
+    assert _problems(b) == []
