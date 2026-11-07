@@ -10,11 +10,21 @@ data type. Run:
     python3 -m pytest skills/database-designer/test_migration_generator.py -q
 """
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from migration_generator import MigrationGenerator, SchemaComparator
+from migration_generator import (
+    MigrationGenerator,
+    SchemaComparator,
+    ValidationGenerator,
+    format_migration_plan_text,
+    quote_literal,
+)
 
 
 def schema(tables):
@@ -70,7 +80,7 @@ def test_unique_only_change_produces_valid_sql(tmp_path):
     assert len(steps) == 1
     sql = steps[0].sql_forward
     assert "ADD CONSTRAINT" in sql and "UNIQUE" in sql and "email" in sql
-    assert sql.strip() != "ALTER TABLE users\n    ;"
+    assert sql.strip() != 'ALTER TABLE "users"\n    ;'
     assert "ALTER TABLE users\n    ;" not in sql
 
 
@@ -81,7 +91,7 @@ def test_unique_removal_drops_the_constraint():
     sql = step_sql(plan, "MODIFY_COLUMN")[0].sql_forward
     # Dropping a constraint does not restate its type; the constraint
     # name carries it.
-    assert "DROP CONSTRAINT uq_users_email" in sql
+    assert 'DROP CONSTRAINT "uq_users_email"' in sql
 
 
 def test_foreign_key_change_produces_sql():
@@ -91,7 +101,7 @@ def test_foreign_key_change_produces_sql():
     target = {"orders": table({"user_id": col("INTEGER", foreign_key="users.id")})}
     _, plan = compare_and_generate(current, target)
     sql = step_sql(plan, "MODIFY_COLUMN")[0].sql_forward
-    assert "FOREIGN KEY" in sql and "REFERENCES users(id)" in sql
+    assert "FOREIGN KEY" in sql and 'REFERENCES "users"("id")' in sql
 
 
 def test_check_only_change_produces_sql():
@@ -174,8 +184,8 @@ def test_zero_downtime_drop_is_high_risk_and_temp_column_is_type_only():
     apply = step_sql(plan, "APPLY_CONSTRAINTS")[0].sql_forward
     assert "SET NOT NULL" in apply
     assert "SET DEFAULT 'x'" in apply
-    assert "ADD CONSTRAINT uq_t_v UNIQUE (v)" in apply
-    assert "ADD CONSTRAINT ck_t_v CHECK (v <> '')" in apply
+    assert 'ADD CONSTRAINT "uq_t_v" UNIQUE ("v")' in apply
+    assert "ADD CONSTRAINT \"ck_t_v\" CHECK (v <> '')" in apply
     assert "zero_downtime_warning" in plan.summary
     assert "DRAFT" in plan.summary["zero_downtime_warning"]
 
@@ -227,7 +237,7 @@ def test_same_name_index_change_is_detected():
     assert len(changes["indexes_dropped"]) == 1
     assert len(changes["indexes_added"]) == 1
     assert any(
-        "DROP INDEX idx_orders_search" in s.sql_forward for s in step_sql(plan, "DROP_INDEX")
+        'DROP INDEX "idx_orders_search"' in s.sql_forward for s in step_sql(plan, "DROP_INDEX")
     )
     assert any("created_at" in s.sql_forward for s in step_sql(plan, "ADD_INDEX"))
 
@@ -258,7 +268,7 @@ def test_rename_with_column_drop_uses_new_name():
     assert len(changes["tables_renamed"]) == 1
     drops = step_sql(plan, "DROP_COLUMN")
     assert len(drops) == 1
-    assert "ALTER TABLE purchases DROP COLUMN note" in drops[0].sql_forward
+    assert 'ALTER TABLE "purchases" DROP COLUMN "note"' in drops[0].sql_forward
     # And the drop really comes after the rename in execution order.
     order = [s.step_type for s in plan.steps]
     assert order.index("RENAME_TABLE") < order.index("DROP_COLUMN")
@@ -277,7 +287,7 @@ def test_create_table_fk_uses_table_column_syntax():
     _, plan = compare_and_generate({}, target)
     creates = [s for s in step_sql(plan, "CREATE_TABLE") if s.table == "books"]
     assert len(creates) == 1
-    assert "REFERENCES authors(id)" in creates[0].sql_forward
+    assert 'REFERENCES "authors"("id")' in creates[0].sql_forward
     assert "REFERENCES authors.id" not in creates[0].sql_forward
 
 
@@ -293,8 +303,8 @@ def test_create_table_emits_table_level_constraints():
     }
     _, plan = compare_and_generate({}, target)
     sql = step_sql(plan, "CREATE_TABLE")[0].sql_forward
-    assert "CONSTRAINT uq_t_a_b UNIQUE (a, b)" in sql
-    assert "CONSTRAINT ck_t_v CHECK (v > 0)" in sql
+    assert 'CONSTRAINT "uq_t_a_b" UNIQUE ("a", "b")' in sql
+    assert 'CONSTRAINT "ck_t_v" CHECK (v > 0)' in sql
 
 
 def test_add_column_keeps_constraints():
@@ -317,12 +327,12 @@ def test_add_column_keeps_constraints():
     }
     _, plan = compare_and_generate(current, target)
     constraints = [s.sql_forward for s in step_sql(plan, "ADD_CONSTRAINT")]
-    assert any("ADD CONSTRAINT uq_users_email UNIQUE (email)" in s for s in constraints)
+    assert any('ADD CONSTRAINT "uq_users_email" UNIQUE ("email")' in s for s in constraints)
     assert any(
-        "ADD CONSTRAINT ck_users_status CHECK (status IN ('a', 'b'))" in s for s in constraints
+        "ADD CONSTRAINT \"ck_users_status\" CHECK (status IN ('a', 'b'))" in s for s in constraints
     )
     assert any(
-        "ADD CONSTRAINT fk_users_group_id FOREIGN KEY (group_id) REFERENCES groups(id)" in s
+        'ADD CONSTRAINT "fk_users_group_id" FOREIGN KEY ("group_id") REFERENCES "groups"("id")' in s
         for s in constraints
     )
     # And the ADD COLUMN steps themselves carry no inline constraints.
@@ -347,7 +357,7 @@ def test_new_table_indexes_are_created():
     _, plan = compare_and_generate({}, target)
     adds = step_sql(plan, "ADD_INDEX")
     assert len(adds) == 1
-    assert "CREATE INDEX idx_t_email ON t (email)" in adds[0].sql_forward
+    assert 'CREATE INDEX "idx_t_email" ON "t" ("email")' in adds[0].sql_forward
     # And it runs after the CREATE TABLE.
     order = [s.step_type for s in plan.steps]
     assert order.index("CREATE_TABLE") < order.index("ADD_INDEX")
@@ -459,10 +469,10 @@ def test_create_table_names_all_constraints():
     }
     _, plan = compare_and_generate({}, target)
     sql = [s for s in step_sql(plan, "CREATE_TABLE") if s.table == "t"][0].sql_forward
-    assert "CONSTRAINT pk_t PRIMARY KEY (id)" in sql
-    assert "CONSTRAINT fk_t_author_id FOREIGN KEY (author_id) REFERENCES authors(id)" in sql
-    assert "CONSTRAINT uq_t_email UNIQUE (email)" in sql
-    assert "CONSTRAINT ck_t_price CHECK (price > 0)" in sql
+    assert 'CONSTRAINT "pk_t" PRIMARY KEY ("id")' in sql
+    assert 'CONSTRAINT "fk_t_author_id" FOREIGN KEY ("author_id") REFERENCES "authors"("id")' in sql
+    assert 'CONSTRAINT "uq_t_email" UNIQUE ("email")' in sql
+    assert 'CONSTRAINT "ck_t_price" CHECK (price > 0)' in sql
     assert "\n    PRIMARY KEY (" not in sql
     assert "\n    FOREIGN KEY (" not in sql
     assert "email TEXT UNIQUE" not in sql
@@ -491,13 +501,13 @@ def test_add_column_emits_named_constraints():
     email_sql = [v for k, v in adds.items() if "email" in k][0]
     assert "UNIQUE" not in email_sql  # not inline any more
     constraints = [s.sql_forward for s in step_sql(plan, "ADD_CONSTRAINT")]
-    assert any("ADD CONSTRAINT uq_users_email UNIQUE (email)" in s for s in constraints)
+    assert any('ADD CONSTRAINT "uq_users_email" UNIQUE ("email")' in s for s in constraints)
     assert any(
-        "ADD CONSTRAINT fk_users_group_id FOREIGN KEY (group_id) REFERENCES groups(id)" in s
+        'ADD CONSTRAINT "fk_users_group_id" FOREIGN KEY ("group_id") REFERENCES "groups"("id")' in s
         for s in constraints
     )
     assert any(
-        "ADD CONSTRAINT ck_users_status CHECK (status IN ('a', 'b'))" in s for s in constraints
+        "ADD CONSTRAINT \"ck_users_status\" CHECK (status IN ('a', 'b'))" in s for s in constraints
     )
 
 
@@ -515,8 +525,8 @@ def test_create_then_modify_constraint_round_trips():
         target_v1, {"t": table({"id": col("INTEGER"), "email": col("TEXT")}, primary_key=["id"])}
     )
     drop = step_sql(plan_v2, "MODIFY_COLUMN")[0].sql_forward
-    assert "DROP CONSTRAINT uq_t_email" in drop
-    assert "CONSTRAINT uq_t_email UNIQUE (email)" in created
+    assert 'DROP CONSTRAINT "uq_t_email"' in drop
+    assert 'CONSTRAINT "uq_t_email" UNIQUE ("email")' in created
 
 
 def test_zero_downtime_temp_column_is_nullable_and_type_only():
@@ -572,15 +582,15 @@ def test_zero_downtime_applies_constraints_after_rename():
     sql = apply[0].sql_forward
     assert "SET NOT NULL" in sql
     assert "SET DEFAULT 'x'" in sql
-    assert "ADD CONSTRAINT uq_t_v UNIQUE (v)" in sql
-    assert "ADD CONSTRAINT ck_t_v CHECK (v <> '')" in sql
+    assert 'ADD CONSTRAINT "uq_t_v" UNIQUE ("v")' in sql
+    assert "ADD CONSTRAINT \"ck_t_v\" CHECK (v <> '')" in sql
     order = [s.step_type for s in plan.steps]
     assert order.index("RENAME_COLUMN") < order.index("APPLY_CONSTRAINTS")
     assert "backfill" in apply[0].description.lower()
     # The copy step carries the backfill check.
     copy = step_sql(plan, "COPY_COLUMN_DATA")[0]
     assert copy.validation_sql is not None
-    assert "v_new IS NULL" in copy.validation_sql
+    assert '"v_new" IS NULL' in copy.validation_sql
 
 
 def test_schema_hashes_are_real():
@@ -615,7 +625,7 @@ def test_drop_table_rollback_recreates_the_table():
     _, plan = compare_and_generate(current, {})
     drop = step_sql(plan, "DROP_TABLE")[0]
     assert "implementation needed" not in drop.sql_rollback
-    assert "CREATE TABLE t" in drop.sql_rollback
+    assert 'CREATE TABLE "t"' in drop.sql_rollback
     assert drop.reversibility == "schema-only"
 
 
@@ -781,8 +791,8 @@ def test_fk_cycle_is_deferred_not_rejected():
         assert "REFERENCES" not in step.sql_forward
     deferred = step_sql(plan, "ADD_CONSTRAINT")
     assert sorted(s.sql_forward for s in deferred) == [
-        "ALTER TABLE a ADD CONSTRAINT fk_a_b_id FOREIGN KEY (b_id) REFERENCES b(id);",
-        "ALTER TABLE b ADD CONSTRAINT fk_b_a_id FOREIGN KEY (a_id) REFERENCES a(id);",
+        'ALTER TABLE "a" ADD CONSTRAINT "fk_a_b_id" FOREIGN KEY ("b_id") REFERENCES "b"("id");',
+        'ALTER TABLE "b" ADD CONSTRAINT "fk_b_a_id" FOREIGN KEY ("a_id") REFERENCES "a"("id");',
     ]
 
 
@@ -856,7 +866,7 @@ def test_fk_to_new_column_on_existing_table_is_deferred():
         for s in plan.steps
         if s.step_type == "ADD_CONSTRAINT" and "fk_events_user_external_id" in s.sql_forward
     )
-    assert "REFERENCES users(external_id)" in add_fk.sql_forward
+    assert 'REFERENCES "users"("external_id")' in add_fk.sql_forward
     assert positions[add_column.step_id] < positions[add_fk.step_id]
     assert positions[add_unique.step_id] < positions[add_fk.step_id]
     assert add_fk.dependencies == ["events", "users"]
@@ -928,7 +938,7 @@ def test_fk_to_preexisting_unique_column_stays_inline():
     }
     _, plan = compare_and_generate(current, target)
     creates = step_sql(plan, "CREATE_TABLE")
-    assert "REFERENCES users(external_id)" in creates[0].sql_forward
+    assert 'REFERENCES "users"("external_id")' in creates[0].sql_forward
     assert not [s for s in plan.steps if "fk_events_user_external_id" in s.sql_forward][1:]
 
 
@@ -971,3 +981,263 @@ def test_column_fk_to_new_column_is_deferred_in_zero_downtime_mode():
     )
     assert positions[apply_unique.step_id] < positions[add_fk.step_id]
     assert add_fk.dependencies == ["orders", "users"]
+
+
+# --- Round 6 (M1–M4): migration safety -------------------------------
+# 2-S1 SQL injection, 3-P0-1 schema typo, 3-P0-2 zero-downtime,
+# 3-P1-3 index validation. Each test failed on the pre-fix code
+# (hostile names interpolated verbatim, a typo silently dropping a
+# table, a runnable zero-downtime script with no enforced stop, an
+# index check against a MySQL-only view).
+
+
+def run_cli(tmp_path, current_raw, target_raw, *extra):
+    """Run migration_generator.py as a subprocess (the real CLI)."""
+    cur = tmp_path / "current.json"
+    tgt = tmp_path / "target.json"
+    cur.write_text(json.dumps(current_raw))
+    tgt.write_text(json.dumps(target_raw))
+    return subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parent / "migration_generator.py"),
+            "-c",
+            str(cur),
+            "-t",
+            str(tgt),
+            *extra,
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_hostile_table_name_is_rejected():
+    """2-S1: a table name carrying a second statement used to be
+    interpolated verbatim into CREATE TABLE."""
+    current = {}
+    target = {"x; DROP TABLE users; -- (": table({"id": col("INTEGER")})}
+    comp = SchemaComparator()
+    with pytest.raises(ValueError):
+        comp.load_schemas(schema(current), schema(target))
+
+
+def test_hostile_column_name_is_rejected():
+    current = {"t": table({"id": col("INTEGER")})}
+    target = {"t": table({"id": col("INTEGER"), "x; DROP TABLE t; --": col("TEXT")})}
+    comp = SchemaComparator()
+    with pytest.raises(ValueError):
+        comp.load_schemas(schema(current), schema(target))
+
+
+def test_reserved_word_names_are_quoted():
+    """2-S1: reserved words are legal identifiers once quoted —
+    `order` / `group` / `select` must not come out bare."""
+    current = {}
+    target = {"order": table({"group": col("TEXT"), "select": col("INTEGER")})}
+    _, plan = compare_and_generate(current, target)
+    sql = step_sql(plan, "CREATE_TABLE")[0].sql_forward
+    assert 'CREATE TABLE "order"' in sql, sql
+    assert '"group"' in sql and '"select"' in sql, sql
+    assert "CREATE TABLE order (" not in sql
+
+
+def test_hostile_default_is_rejected():
+    """2-S1: a DEFAULT carrying a second statement must not reach SQL."""
+    current = {"t": table({"v": col("TEXT")})}
+    target = {"t": table({"v": col("TEXT", default="0; DROP TABLE t; --")})}
+    comp = SchemaComparator()
+    with pytest.raises(ValueError):
+        comp.load_schemas(schema(current), schema(target))
+
+
+def test_unbalanced_default_is_rejected():
+    """2-S1 (reviewer's example): `it's a 'quoted' value` is not a
+    valid SQL fragment — unbalanced quotes — so it is rejected
+    instead of being emitted as broken SQL."""
+    current = {"t": table({"v": col("TEXT")})}
+    target = {"t": table({"v": col("TEXT", default="it's a 'quoted' value")})}
+    comp = SchemaComparator()
+    with pytest.raises(ValueError):
+        comp.load_schemas(schema(current), schema(target))
+
+
+def test_hostile_data_type_is_rejected():
+    current = {"t": table({"v": col("TEXT")})}
+    target = {"t": table({"v": col("TEXT); DROP TABLE t; --")})}
+    comp = SchemaComparator()
+    with pytest.raises(ValueError):
+        comp.load_schemas(schema(current), schema(target))
+
+
+def test_hostile_check_constraint_is_rejected():
+    current = {"t": table({"v": col("INTEGER")})}
+    target = {"t": table({"v": col("INTEGER", check_constraint="v > 0; DROP TABLE t; --")})}
+    comp = SchemaComparator()
+    with pytest.raises(ValueError):
+        comp.load_schemas(schema(current), schema(target))
+
+
+def test_quote_literal_escapes_single_quotes():
+    """2-S1: a string literal in validation SQL must double its quotes."""
+    assert quote_literal("o'clock") == "'o''clock'"
+    assert quote_literal("plain") == "'plain'"
+
+
+def test_missing_tables_key_is_rejected(tmp_path):
+    """3-P0-1: the exact repro — target {"tablez": {}} silently
+    parsed as an empty schema and produced DROP TABLE users."""
+    current = {"users": table({"id": col("INTEGER")})}
+    comp = SchemaComparator()
+    with pytest.raises(ValueError):
+        comp.load_schemas(schema(current), {"tablez": {}})
+
+
+def test_unknown_top_level_key_is_rejected():
+    comp = SchemaComparator()
+    with pytest.raises(ValueError):
+        comp.load_schemas(
+            schema({"t": table({"id": col("INTEGER")})}),
+            {"tables": {}, "tablez": {}},
+        )
+
+
+def test_unknown_table_and_column_keys_are_rejected():
+    comp = SchemaComparator()
+    with pytest.raises(ValueError):
+        comp.load_schemas(
+            schema({"t": table({"id": col("INTEGER")})}),
+            schema({"t": {"columns": {"id": col("INTEGER")}, "bogus_key": 1}}),
+        )
+    with pytest.raises(ValueError):
+        comp.load_schemas(
+            schema({"t": table({"id": col("INTEGER")})}),
+            schema({"t": table({"id": {**col("INTEGER"), "bogus_key": 1}})}),
+        )
+
+
+def test_explicit_empty_target_drops_all_tables():
+    """3-P0-1: dropping everything is still possible — but only with
+    an explicit {"tables": {}} target, never from a typo."""
+    current = {"users": table({"id": col("INTEGER")})}
+    changes, plan = compare_and_generate(current, {})
+    assert [d["table"] for d in changes["tables_dropped"]] == ["users"]
+    drops = step_sql(plan, "DROP_TABLE")
+    assert len(drops) == 1
+    assert drops[0].table == "users"
+
+
+def test_drop_table_uses_if_exists():
+    """3-P0-1: a DROP TABLE must not fail a re-run."""
+    current = {"users": table({"id": col("INTEGER")})}
+    _, plan = compare_and_generate(current, {})
+    assert 'DROP TABLE IF EXISTS "users";' in step_sql(plan, "DROP_TABLE")[0].sql_forward
+
+
+def test_index_validation_uses_pg_indexes():
+    """3-P1-3: information_schema.statistics is MySQL's view — it
+    does not exist in PostgreSQL. The check must use pg_indexes."""
+    current = {"users": table({"id": col("INTEGER")}, primary_key=["id"])}
+    target = {
+        "users": table(
+            {"id": col("INTEGER")},
+            primary_key=["id"],
+            indexes=[{"name": "idx_users_id", "columns": ["id"]}],
+        )
+    }
+    _, plan = compare_and_generate(current, target)
+    validations = ValidationGenerator().generate_validations(plan)
+    idx = [v for v in validations if v.check_type == "INDEX_EXISTS"]
+    assert len(idx) == 1
+    query = idx[0].sql_query
+    assert "information_schema.statistics" not in query, query
+    assert "pg_indexes" in query, query
+    assert "schemaname = current_schema()" in query, query
+    assert "tablename = 'users'" in query, query
+    assert "indexname = 'idx_users_id'" in query, query
+
+
+def test_index_validation_checks_definition():
+    """3-P1-3: the check must also verify the index definition, not
+    just that a name exists."""
+    current = {"users": table({"id": col("INTEGER")}, primary_key=["id"])}
+    target = {
+        "users": table(
+            {"id": col("INTEGER")},
+            primary_key=["id"],
+            indexes=[{"name": "idx_users_id", "columns": ["id"]}],
+        )
+    }
+    _, plan = compare_and_generate(current, target)
+    validations = ValidationGenerator().generate_validations(plan)
+    idx = [v for v in validations if v.check_type == "INDEX_EXISTS"][0]
+    assert "strpos(indexdef, '(id)') > 0" in idx.sql_query, idx.sql_query
+
+
+def test_zero_downtime_text_output_prints_warning():
+    """3-P0-2: the warning used to live only in the JSON summary —
+    the text output never printed it."""
+    current = {"orders": table({"amount": col("INTEGER")})}
+    target = {"orders": table({"amount": col("BIGINT")})}
+    _, plan = compare_and_generate(current, target, zero_downtime=True)
+    text = format_migration_plan_text(plan)
+    assert "NOT AUTO-RUNNABLE" in text, text
+    assert plan.summary["zero_downtime_warning"] in text, text
+
+
+def test_cli_typo_target_fails_without_drop(tmp_path):
+    """3-P0-1, CLI end-to-end: a misspelled `tables` key exits
+    non-zero and emits no DROP."""
+    current = {"users": table({"id": col("INTEGER")})}
+    result = run_cli(tmp_path, schema(current), {"tablez": {}}, "-f", "sql")
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "DROP TABLE" not in result.stdout
+    assert "tablez" in result.stderr and "unknown key" in result.stderr
+
+
+def test_cli_drop_all_needs_confirmation(tmp_path):
+    """3-P0-1: an explicit empty target drops everything only with
+    a separate --confirm-destructive."""
+    current = {"users": table({"id": col("INTEGER")})}
+    denied = run_cli(tmp_path, schema(current), {"tables": {}}, "-f", "sql")
+    assert denied.returncode != 0, denied.stdout + denied.stderr
+    assert "DROP TABLE" not in denied.stdout
+    assert "confirm-destructive" in denied.stderr
+    allowed = run_cli(
+        tmp_path, schema(current), {"tables": {}}, "-f", "sql", "--confirm-destructive"
+    )
+    assert allowed.returncode == 0, allowed.stdout + allowed.stderr
+    assert 'DROP TABLE IF EXISTS "users";' in allowed.stdout
+
+
+def test_cli_zero_downtime_sql_withholds_contract_by_default(tmp_path):
+    """3-P0-2: the default SQL output must not be a single runnable
+    script — CONTRACT steps are withheld until the backfill check
+    has been verified and --allow-contract is passed."""
+    current = {"orders": table({"amount": col("INTEGER")})}
+    target = {"orders": table({"amount": col("BIGINT")})}
+    result = run_cli(tmp_path, schema(current), schema(target), "-z", "-f", "sql")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "ADD COLUMN" in result.stdout
+    assert "UPDATE" in result.stdout  # the backfill itself is harmless
+    assert "DROP COLUMN" not in result.stdout
+    assert "RENAME COLUMN" not in result.stdout
+    assert "DRAFT" in result.stdout
+    assert "NOT AUTO-RUNNABLE" in result.stdout
+    assert "--allow-contract" in result.stdout
+    assert "SELECT COUNT(*)" in result.stdout  # the backfill check to run
+
+
+def test_cli_zero_downtime_sql_with_allow_contract_emits_contract(tmp_path):
+    """3-P0-2: with the explicit acknowledgment the full plan is
+    emitted — still labelled a draft, with the warning printed."""
+    current = {"orders": table({"amount": col("INTEGER")})}
+    target = {"orders": table({"amount": col("BIGINT")})}
+    result = run_cli(
+        tmp_path, schema(current), schema(target), "-z", "-f", "sql", "--allow-contract"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "DROP COLUMN" in result.stdout
+    assert "RENAME COLUMN" in result.stdout
+    assert "DRAFT" in result.stdout
+    assert "NOT AUTO-RUNNABLE" in result.stdout

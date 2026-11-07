@@ -326,6 +326,8 @@ For production systems, use the zero-downtime flag to generate expand-contract m
 3. **Backfill**: Populate new structures with existing data
 4. **Contract Phase**: Remove old structures after validation
 
+The SQL output is a DRAFT, not auto-runnable: by default it contains only the EXPAND phase, and the CONTRACT phase is withheld until you re-run with `--allow-contract` after the backfill check returns 0. Nothing in the generator enforces the dual-write or the cutover — that is application coordination.
+
 ### Integration with CI/CD
 Integrate these tools into your deployment pipeline:
 

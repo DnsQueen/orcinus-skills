@@ -346,10 +346,10 @@ def test_add_column_with_check_and_fk_executes():
     assert conn.execute("SELECT status, group_id FROM users WHERE id = 1").fetchone() == ("a", 1)
     constraints = [s.sql_forward for s in plan.steps if s.step_type == "ADD_CONSTRAINT"]
     assert any(
-        "ADD CONSTRAINT ck_users_status CHECK (status IN ('a', 'b'))" in s for s in constraints
+        "ADD CONSTRAINT \"ck_users_status\" CHECK (status IN ('a', 'b'))" in s for s in constraints
     )
     assert any(
-        "ADD CONSTRAINT fk_users_group_id FOREIGN KEY (group_id) REFERENCES groups(id)" in s
+        'ADD CONSTRAINT "fk_users_group_id" FOREIGN KEY ("group_id") REFERENCES "groups"("id")' in s
         for s in constraints
     )
 

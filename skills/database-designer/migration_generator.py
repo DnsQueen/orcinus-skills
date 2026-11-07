@@ -41,6 +41,88 @@ def _json_default(obj):
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
 
+# 2-S1: schema JSON is untrusted input — a name like
+# `x; DROP TABLE users; --` used to be interpolated verbatim into the
+# emitted SQL. Every identifier that reaches SQL goes through
+# quote_ident (allowlist + double quotes), every string literal
+# through quote_literal, and every SQL fragment the schema carries
+# (a DEFAULT, a CHECK condition, an index predicate) is rejected
+# unless it is a single statement with balanced quotes and parens.
+# A fragment that fails is rejected, not mangled: the generator
+# cannot tell a value from an expression.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+_DATA_TYPE_RE = re.compile(r"^[A-Za-z]+(?: [A-Za-z]+){0,3}(?:\(\d+(?:,\d+)?\))?(?:\[\])?$")
+_FRAGMENT_FORBIDDEN = (";", "--", "/*", "*/")
+
+
+def quote_ident(name: str) -> str:
+    """A PostgreSQL identifier, double-quoted. Names outside the
+    allowlist are rejected: quoting alone would turn `x; DROP...`
+    into a legal — but absurd — table name instead of failing loudly.
+    Quoting also makes reserved words (`order`, `group`) legal."""
+    if not isinstance(name, str) or not _IDENTIFIER_RE.match(name):
+        raise ValueError(f"invalid identifier: {name!r}")
+    return '"' + name.replace('"', '""') + '"'
+
+
+def quote_literal(value: Any) -> str:
+    """A string literal: single quotes doubled."""
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _check_sql_fragment(value: Any, what: str) -> Any:
+    """A SQL fragment from the schema (DEFAULT, CHECK, index
+    predicate/expression) must be one statement: no `;`, no comments,
+    balanced quotes and parens. Returns the value unchanged."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        raise ValueError(f"{what} must be a string or a number, got {value!r}")
+    text = str(value)
+    for token in _FRAGMENT_FORBIDDEN:
+        if token in text:
+            raise ValueError(f"{what} must not contain {token!r}: {value!r}")
+    if text.count("'") % 2:
+        raise ValueError(f"{what} has unbalanced quotes: {value!r}")
+    depth = 0
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth < 0:
+                raise ValueError(f"{what} has unbalanced parentheses: {value!r}")
+    if depth:
+        raise ValueError(f"{what} has unbalanced parentheses: {value!r}")
+    return value
+
+
+def _validate_data_type(data_type: Any) -> str:
+    """A column type is a bare type name with an optional size, not
+    an arbitrary expression: `TEXT); DROP TABLE...` is not a type."""
+    if not isinstance(data_type, str) or not _DATA_TYPE_RE.match(data_type):
+        raise ValueError(f"invalid data type: {data_type!r}")
+    return data_type
+
+
+def _reject_unknown_keys(mapping: Dict[str, Any], allowed: Set[str], what: str) -> None:
+    unknown = sorted(set(mapping) - allowed)
+    if unknown:
+        raise ValueError(f"{what} has unknown key(s): {', '.join(unknown)}")
+
+
+_SCHEMA_KEYS = {"tables"}
+_TABLE_KEYS = {"columns", "primary_key", "unique_constraints", "check_constraints", "indexes"}
+_COLUMN_KEYS = {
+    "type",
+    "nullable",
+    "unique",
+    "foreign_key",
+    "default",
+    "check_constraint",
+    "cardinality_estimate",  # analyser metadata; ignored here
+}
+_INDEX_KEYS = {"name", "columns", "unique", "where", "predicate", "method", "using", "expression"}
+
+
 @dataclass
 class Column:
     name: str
@@ -136,46 +218,178 @@ class SchemaComparator:
         self.target_schema = self._parse_schema(target_data)
 
     def _parse_schema(self, schema_data: Dict[str, Any]) -> Dict[str, Table]:
-        """Parse schema JSON into Table objects."""
-        tables: Dict[str, Table] = {}
-
+        """Parse schema JSON into Table objects. Strict: the schema is
+        untrusted input — a missing or misspelled `tables` key used to
+        parse as an empty schema, so a typo silently dropped every
+        table (3-P0-1), and unknown keys were silently ignored."""
+        if not isinstance(schema_data, dict):
+            raise ValueError(f"schema must be a JSON object, got {type(schema_data).__name__}")
+        _reject_unknown_keys(schema_data, _SCHEMA_KEYS, "schema")
         if "tables" not in schema_data:
-            return tables
+            raise ValueError(
+                "schema must contain a 'tables' object — a missing or "
+                "misspelled 'tables' key is rejected, not read as an empty schema"
+            )
+        tables_data = schema_data["tables"]
+        if not isinstance(tables_data, dict):
+            raise ValueError("'tables' must be an object mapping table names to definitions")
 
-        for table_name, table_def in schema_data["tables"].items():
+        tables: Dict[str, Table] = {}
+        for table_name, table_def in tables_data.items():
+            quote_ident(table_name)
+            if not isinstance(table_def, dict):
+                raise ValueError(f"table {table_name!r} must be an object")
+            _reject_unknown_keys(table_def, _TABLE_KEYS, f"table {table_name!r}")
+
             columns = {}
             primary_key = table_def.get("primary_key", [])
             foreign_keys = {}
 
-            # Parse columns
-            for col_name, col_def in table_def.get("columns", {}).items():
+            columns_data = table_def.get("columns", {})
+            if not isinstance(columns_data, dict):
+                raise ValueError(f"table {table_name!r} 'columns' must be an object")
+            for col_name, col_def in columns_data.items():
+                quote_ident(col_name)
+                if not isinstance(col_def, dict):
+                    raise ValueError(f"column {table_name}.{col_name} must be an object")
+                _reject_unknown_keys(col_def, _COLUMN_KEYS, f"column {table_name}.{col_name}")
+                data_type = _validate_data_type(col_def.get("type", "VARCHAR(255)"))
+                nullable = col_def.get("nullable", True)
+                if not isinstance(nullable, bool):
+                    raise ValueError(f"column {table_name}.{col_name} 'nullable' must be a boolean")
+                unique = col_def.get("unique", False)
+                if not isinstance(unique, bool):
+                    raise ValueError(f"column {table_name}.{col_name} 'unique' must be a boolean")
+                foreign_key = col_def.get("foreign_key")
+                if foreign_key is not None:
+                    self._validate_reference(
+                        foreign_key, f"column {table_name}.{col_name} 'foreign_key'"
+                    )
+                default_value = col_def.get("default")
+                if default_value is not None:
+                    _check_sql_fragment(default_value, f"column {table_name}.{col_name} 'default'")
+                check_constraint = col_def.get("check_constraint")
+                if check_constraint is not None:
+                    if not isinstance(check_constraint, str):
+                        raise ValueError(
+                            f"column {table_name}.{col_name} 'check_constraint' must be a string"
+                        )
+                    _check_sql_fragment(
+                        check_constraint, f"column {table_name}.{col_name} 'check_constraint'"
+                    )
+                cardinality = col_def.get("cardinality_estimate")
+                if cardinality is not None and (
+                    isinstance(cardinality, bool) or not isinstance(cardinality, (int, float))
+                ):
+                    raise ValueError(
+                        f"column {table_name}.{col_name} 'cardinality_estimate' must be a number"
+                    )
                 column = Column(
                     name=col_name,
-                    data_type=col_def.get("type", "VARCHAR(255)"),
-                    nullable=col_def.get("nullable", True),
+                    data_type=data_type,
+                    nullable=nullable,
                     primary_key=col_name in primary_key,
-                    unique=col_def.get("unique", False),
-                    foreign_key=col_def.get("foreign_key"),
-                    default_value=col_def.get("default"),
-                    check_constraint=col_def.get("check_constraint"),
+                    unique=unique,
+                    foreign_key=foreign_key,
+                    default_value=default_value,
+                    check_constraint=check_constraint,
                 )
                 columns[col_name] = column
 
                 if column.foreign_key:
                     foreign_keys[col_name] = column.foreign_key
 
+            self._validate_name_list(primary_key, columns, f"table {table_name!r} 'primary_key'")
+            unique_constraints = table_def.get("unique_constraints", [])
+            if not isinstance(unique_constraints, list):
+                raise ValueError(f"table {table_name!r} 'unique_constraints' must be a list")
+            for constraint in unique_constraints:
+                self._validate_name_list(
+                    constraint, columns, f"table {table_name!r} 'unique_constraints'"
+                )
+            check_constraints = table_def.get("check_constraints", {})
+            if not isinstance(check_constraints, dict):
+                raise ValueError(f"table {table_name!r} 'check_constraints' must be an object")
+            for ck_name, condition in check_constraints.items():
+                quote_ident(ck_name)
+                if not isinstance(condition, str):
+                    raise ValueError(
+                        f"table {table_name!r} check constraint {ck_name!r} must be a string"
+                    )
+                _check_sql_fragment(condition, f"table {table_name!r} check constraint {ck_name!r}")
+            indexes = table_def.get("indexes", [])
+            if not isinstance(indexes, list):
+                raise ValueError(f"table {table_name!r} 'indexes' must be a list")
+            for idx in indexes:
+                self._validate_index(idx, table_name, columns)
+
             table = Table(
                 name=table_name,
                 columns=columns,
                 primary_key=primary_key,
                 foreign_keys=foreign_keys,
-                unique_constraints=table_def.get("unique_constraints", []),
-                check_constraints=table_def.get("check_constraints", {}),
-                indexes=table_def.get("indexes", []),
+                unique_constraints=unique_constraints,
+                check_constraints=check_constraints,
+                indexes=indexes,
             )
             tables[table_name] = table
 
         return tables
+
+    @staticmethod
+    def _validate_reference(ref: Any, what: str) -> None:
+        """A foreign-key reference is `table.column`, both plain
+        identifiers. Only the shape is checked here: the referenced
+        table may live in the other schema of the pair."""
+        if not isinstance(ref, str) or ref.count(".") != 1:
+            raise ValueError(f"{what} must be 'table.column', got {ref!r}")
+        ref_table, ref_col = ref.split(".")
+        quote_ident(ref_table)
+        quote_ident(ref_col)
+
+    @staticmethod
+    def _validate_name_list(names: Any, columns: Dict[str, Column], what: str) -> None:
+        if not isinstance(names, list) or any(not isinstance(c, str) for c in names):
+            raise ValueError(f"{what} must be a list of column names")
+        for name in names:
+            quote_ident(name)
+            if name not in columns:
+                raise ValueError(f"{what} names unknown column {name!r}")
+
+    @staticmethod
+    def _validate_index(idx: Any, table_name: str, columns: Dict[str, Column]) -> None:
+        if not isinstance(idx, dict):
+            raise ValueError(f"index in table {table_name!r} must be an object")
+        _reject_unknown_keys(idx, _INDEX_KEYS, f"index in table {table_name!r}")
+        if "name" not in idx:
+            raise ValueError(f"index in table {table_name!r} must have a 'name'")
+        quote_ident(idx["name"])
+        if "unique" in idx and not isinstance(idx["unique"], bool):
+            raise ValueError(f"index {idx['name']!r} 'unique' must be a boolean")
+        for key in ("where", "predicate", "expression"):
+            if idx.get(key) is not None:
+                if not isinstance(idx[key], str):
+                    raise ValueError(f"index {idx['name']!r} {key!r} must be a string")
+                _check_sql_fragment(idx[key], f"index {idx['name']!r} {key!r}")
+        for key in ("method", "using"):
+            if idx.get(key) is not None:
+                if not isinstance(idx[key], str) or not _IDENTIFIER_RE.match(idx[key]):
+                    raise ValueError(
+                        f"index {idx['name']!r} {key!r} must be a plain identifier, "
+                        f"got {idx[key]!r}"
+                    )
+        cols = idx.get("columns") or []
+        if not isinstance(cols, list) or any(not isinstance(c, str) for c in cols):
+            raise ValueError(f"index {idx['name']!r} 'columns' must be a list of column names")
+        for col_name in cols:
+            quote_ident(col_name)
+            if col_name not in columns:
+                raise ValueError(
+                    f"index {idx['name']!r} names unknown column {col_name!r} "
+                    f"in table {table_name!r}"
+                )
+        if not cols and not idx.get("expression"):
+            raise ValueError(f"index {idx['name']!r} has neither 'columns' nor an 'expression'")
 
     def compare_schemas(self) -> Dict[str, List[Dict[str, Any]]]:
         """Compare schemas and identify all changes. The changes are
@@ -805,7 +1019,8 @@ class MigrationGenerator:
         # Primary key, named.
         if table.primary_key:
             columns_sql.append(
-                f"CONSTRAINT pk_{table.name} PRIMARY KEY ({', '.join(table.primary_key)})"
+                f"CONSTRAINT {quote_ident('pk_' + table.name)} PRIMARY KEY "
+                f"({', '.join(quote_ident(c) for c in table.primary_key)})"
             )
 
         # Foreign keys (stored as "table.column", SQL wants
@@ -818,17 +1033,21 @@ class MigrationGenerator:
             if col_name in exclude_fks:
                 continue
             columns_sql.append(
-                f"CONSTRAINT fk_{table.name}_{col_name} FOREIGN KEY "
-                f"({col_name}) REFERENCES {self._references_sql(ref)}"
+                f"CONSTRAINT {quote_ident('fk_' + table.name + '_' + col_name)} FOREIGN KEY "
+                f"({quote_ident(col_name)}) REFERENCES {self._references_sql(ref)}"
             )
 
         # Column-level unique and check constraints, named.
         for col_name, column in table.columns.items():
             if column.unique:
-                columns_sql.append(f"CONSTRAINT uq_{table.name}_{col_name} UNIQUE ({col_name})")
+                columns_sql.append(
+                    f"CONSTRAINT {quote_ident('uq_' + table.name + '_' + col_name)} "
+                    f"UNIQUE ({quote_ident(col_name)})"
+                )
             if column.check_constraint:
                 columns_sql.append(
-                    f"CONSTRAINT ck_{table.name}_{col_name} CHECK ({column.check_constraint})"
+                    f"CONSTRAINT {quote_ident('ck_' + table.name + '_' + col_name)} "
+                    f"CHECK ({column.check_constraint})"
                 )
 
         # Table-level unique constraints, with the same conventional
@@ -836,13 +1055,17 @@ class MigrationGenerator:
         # so a later drop can find them.
         for cols in table.unique_constraints:
             name = f"uq_{table.name}_{'_'.join(cols)}"
-            columns_sql.append(f"CONSTRAINT {name} UNIQUE ({', '.join(cols)})")
+            columns_sql.append(
+                f"CONSTRAINT {quote_ident(name)} UNIQUE ({', '.join(quote_ident(c) for c in cols)})"
+            )
 
         # Table-level check constraints, under their schema names.
         for name, condition in table.check_constraints.items():
-            columns_sql.append(f"CONSTRAINT {name} CHECK ({condition})")
+            columns_sql.append(f"CONSTRAINT {quote_ident(name)} CHECK ({condition})")
 
-        return f"CREATE TABLE {table.name} (\n    " + ",\n    ".join(columns_sql) + "\n);"
+        return (
+            f"CREATE TABLE {quote_ident(table.name)} (\n    " + ",\n    ".join(columns_sql) + "\n);"
+        )
 
     def _create_table_step(
         self,
@@ -855,7 +1078,7 @@ class MigrationGenerator:
         CONSTRAINT step (a foreign-key cycle); dependencies names
         the tables this CREATE depends on."""
         create_sql = self._create_table_sql(table, exclude_fks=deferred_fks)
-        drop_sql = f"DROP TABLE IF EXISTS {table.name};"
+        drop_sql = f"DROP TABLE IF EXISTS {quote_ident(table.name)};"
 
         return MigrationStep(
             step_id=self._generate_step_id(),
@@ -864,7 +1087,7 @@ class MigrationGenerator:
             description=f"Create table {table.name} with {len(table.columns)} columns",
             sql_forward=create_sql,
             sql_rollback=drop_sql,
-            validation_sql=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{table.name}';",
+            validation_sql=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(table.name)};",
             dependencies=dependencies if dependencies is not None else [],
             risk_level="LOW",
         )
@@ -897,8 +1120,8 @@ class MigrationGenerator:
 
         col_sql = self._column_definition_sql(column.name, column)
 
-        add_sql = f"ALTER TABLE {table} ADD COLUMN {col_sql};"
-        drop_sql = f"ALTER TABLE {table} DROP COLUMN {column.name};"
+        add_sql = f"ALTER TABLE {quote_ident(table)} ADD COLUMN {col_sql};"
+        drop_sql = f"ALTER TABLE {quote_ident(table)} DROP COLUMN {quote_ident(column.name)};"
 
         risk_level = "HIGH" if not column.nullable and column.default_value is None else "LOW"
 
@@ -909,7 +1132,7 @@ class MigrationGenerator:
             description=f"Add column {column.name} to {table}",
             sql_forward=add_sql,
             sql_rollback=drop_sql,
-            validation_sql=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '{table}' AND column_name = '{column.name}';",
+            validation_sql=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(table)} AND column_name = {quote_literal(column.name)};",
             risk_level=risk_level,
         )
 
@@ -923,12 +1146,12 @@ class MigrationGenerator:
         column = col_info["definition"]
 
         # Phase 1: add as nullable with default if needed.
-        col_sql = f"{column.name} {column.data_type}"
+        col_sql = f"{quote_ident(column.name)} {column.data_type}"
         if column.default_value is not None:
             col_sql += f" DEFAULT {column.default_value}"
 
-        add_sql = f"ALTER TABLE {table} ADD COLUMN {col_sql};"
-        drop_sql = f"ALTER TABLE {table} DROP COLUMN {column.name};"
+        add_sql = f"ALTER TABLE {quote_ident(table)} ADD COLUMN {col_sql};"
+        drop_sql = f"ALTER TABLE {quote_ident(table)} DROP COLUMN {quote_ident(column.name)};"
 
         return MigrationStep(
             step_id=self._generate_step_id(),
@@ -937,7 +1160,7 @@ class MigrationGenerator:
             description=f"Add column {column.name} to {table} (zero-downtime phase 1)",
             sql_forward=add_sql,
             sql_rollback=drop_sql,
-            validation_sql=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '{table}' AND column_name = '{column.name}';",
+            validation_sql=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(table)} AND column_name = {quote_literal(column.name)};",
             risk_level="LOW",
             zero_downtime_phase="EXPAND",
         )
@@ -957,11 +1180,13 @@ class MigrationGenerator:
         actions = []
         rollback_actions = []
         if not column.nullable:
-            actions.append(f"ALTER COLUMN {column.name} SET NOT NULL")
-            rollback_actions.append(f"ALTER COLUMN {column.name} DROP NOT NULL")
+            actions.append(f"ALTER COLUMN {quote_ident(column.name)} SET NOT NULL")
+            rollback_actions.append(f"ALTER COLUMN {quote_ident(column.name)} DROP NOT NULL")
         if column.default_value is not None:
-            actions.append(f"ALTER COLUMN {column.name} SET DEFAULT {column.default_value}")
-            rollback_actions.append(f"ALTER COLUMN {column.name} DROP DEFAULT")
+            actions.append(
+                f"ALTER COLUMN {quote_ident(column.name)} SET DEFAULT {column.default_value}"
+            )
+            rollback_actions.append(f"ALTER COLUMN {quote_ident(column.name)} DROP DEFAULT")
         # An FK to a column (or unique) this migration adds cannot
         # be applied here: the follow-up runs in the column-addition
         # phase, before the referenced column and its unique exist
@@ -979,8 +1204,10 @@ class MigrationGenerator:
             rollback_actions.append(f"DROP CONSTRAINT {name}")
         if not actions:
             return None
-        forward = f"ALTER TABLE {table}\n    " + ",\n    ".join(actions) + ";"
-        rollback = f"ALTER TABLE {table}\n    " + ",\n    ".join(rollback_actions) + ";"
+        forward = f"ALTER TABLE {quote_ident(table)}\n    " + ",\n    ".join(actions) + ";"
+        rollback = (
+            f"ALTER TABLE {quote_ident(table)}\n    " + ",\n    ".join(rollback_actions) + ";"
+        )
         return MigrationStep(
             step_id=self._generate_step_id(),
             step_type="APPLY_COLUMN_CONSTRAINTS",
@@ -995,11 +1222,11 @@ class MigrationGenerator:
     @staticmethod
     def _references_sql(foreign_key: str) -> str:
         """A foreign key is stored as "table.column"; SQL wants
-        "table(column)"."""
+        "table(column)", both parts quoted."""
         if "." in foreign_key:
             ref_table, ref_col = foreign_key.rsplit(".", 1)
-            return f"{ref_table}({ref_col})"
-        return foreign_key
+            return f"{quote_ident(ref_table)}({quote_ident(ref_col)})"
+        return quote_ident(foreign_key)
 
     def _column_definition_sql(self, name: str, column: Column) -> str:
         """The column definition: type, NOT NULL, DEFAULT. UNIQUE,
@@ -1009,7 +1236,7 @@ class MigrationGenerator:
         fk_) would fail. Those live in _column_constraint_actions
         instead, as named ADD CONSTRAINT actions. A default of 0 is
         a real default: the test is `is not None`, not truthiness."""
-        sql = f"{name} {column.data_type}"
+        sql = f"{quote_ident(name)} {column.data_type}"
         if not column.nullable:
             sql += " NOT NULL"
         if column.default_value is not None:
@@ -1027,14 +1254,21 @@ class MigrationGenerator:
         instead (its referenced column does not exist yet)."""
         actions = []
         if column.unique:
-            actions.append(f"ADD CONSTRAINT uq_{table}_{name} UNIQUE ({name})")
+            actions.append(
+                f"ADD CONSTRAINT {quote_ident('uq_' + table + '_' + name)} "
+                f"UNIQUE ({quote_ident(name)})"
+            )
         if column.foreign_key and include_fk:
             actions.append(
-                f"ADD CONSTRAINT fk_{table}_{name} FOREIGN KEY ({name}) "
+                f"ADD CONSTRAINT {quote_ident('fk_' + table + '_' + name)} FOREIGN KEY "
+                f"({quote_ident(name)}) "
                 f"REFERENCES {self._references_sql(column.foreign_key)}"
             )
         if column.check_constraint:
-            actions.append(f"ADD CONSTRAINT ck_{table}_{name} CHECK ({column.check_constraint})")
+            actions.append(
+                f"ADD CONSTRAINT {quote_ident('ck_' + table + '_' + name)} "
+                f"CHECK ({column.check_constraint})"
+            )
         return actions
 
     def _column_constraint_steps(self, col_info: Dict[str, Any]) -> List[MigrationStep]:
@@ -1088,10 +1322,10 @@ class MigrationGenerator:
         the zero-downtime DROP_OLD_COLUMN. The column comes back
         empty — the data is not restored (reversibility schema-only)."""
         statements = [
-            f"ALTER TABLE {table} ADD COLUMN {self._column_definition_sql(column.name, column)};"
+            f"ALTER TABLE {quote_ident(table)} ADD COLUMN {self._column_definition_sql(column.name, column)};"
         ]
         for action in self._column_constraint_actions(table, column.name, column):
-            statements.append(f"ALTER TABLE {table} {action};")
+            statements.append(f"ALTER TABLE {quote_ident(table)} {action};")
         return "\n".join(statements)
 
     def _generate_column_modification_steps(self, columns_modified: List[Dict[str, Any]]):
@@ -1117,33 +1351,37 @@ class MigrationGenerator:
 
         # Handle different types of changes
         if current_def.data_type != target_def.data_type:
-            alter_statements.append(f"ALTER COLUMN {column} TYPE {target_def.data_type}")
-            rollback_statements.append(f"ALTER COLUMN {column} TYPE {current_def.data_type}")
+            alter_statements.append(
+                f"ALTER COLUMN {quote_ident(column)} TYPE {target_def.data_type}"
+            )
+            rollback_statements.append(
+                f"ALTER COLUMN {quote_ident(column)} TYPE {current_def.data_type}"
+            )
 
         if current_def.nullable != target_def.nullable:
             if target_def.nullable:
-                alter_statements.append(f"ALTER COLUMN {column} DROP NOT NULL")
-                rollback_statements.append(f"ALTER COLUMN {column} SET NOT NULL")
+                alter_statements.append(f"ALTER COLUMN {quote_ident(column)} DROP NOT NULL")
+                rollback_statements.append(f"ALTER COLUMN {quote_ident(column)} SET NOT NULL")
             else:
-                alter_statements.append(f"ALTER COLUMN {column} SET NOT NULL")
-                rollback_statements.append(f"ALTER COLUMN {column} DROP NOT NULL")
+                alter_statements.append(f"ALTER COLUMN {quote_ident(column)} SET NOT NULL")
+                rollback_statements.append(f"ALTER COLUMN {quote_ident(column)} DROP NOT NULL")
 
         if current_def.default_value != target_def.default_value:
             # A default of 0 is a real default: `is not None`, not
             # truthiness — SET DEFAULT 0 must not become DROP DEFAULT.
             if target_def.default_value is not None:
                 alter_statements.append(
-                    f"ALTER COLUMN {column} SET DEFAULT {target_def.default_value}"
+                    f"ALTER COLUMN {quote_ident(column)} SET DEFAULT {target_def.default_value}"
                 )
             else:
-                alter_statements.append(f"ALTER COLUMN {column} DROP DEFAULT")
+                alter_statements.append(f"ALTER COLUMN {quote_ident(column)} DROP DEFAULT")
 
             if current_def.default_value is not None:
                 rollback_statements.append(
-                    f"ALTER COLUMN {column} SET DEFAULT {current_def.default_value}"
+                    f"ALTER COLUMN {quote_ident(column)} SET DEFAULT {current_def.default_value}"
                 )
             else:
-                rollback_statements.append(f"ALTER COLUMN {column} DROP DEFAULT")
+                rollback_statements.append(f"ALTER COLUMN {quote_ident(column)} DROP DEFAULT")
 
         # Unique, foreign key and check changes are constraint changes.
         # _columns_different detects them, so this step must convert them
@@ -1152,39 +1390,43 @@ class MigrationGenerator:
         if current_def.unique != target_def.unique:
             constraint_name = f"uq_{table}_{column}"
             if target_def.unique:
-                alter_statements.append(f"ADD CONSTRAINT {constraint_name} UNIQUE ({column})")
-                rollback_statements.append(f"DROP CONSTRAINT {constraint_name}")
+                alter_statements.append(
+                    f"ADD CONSTRAINT {quote_ident(constraint_name)} UNIQUE ({quote_ident(column)})"
+                )
+                rollback_statements.append(f"DROP CONSTRAINT {quote_ident(constraint_name)}")
             else:
-                alter_statements.append(f"DROP CONSTRAINT {constraint_name}")
-                rollback_statements.append(f"ADD CONSTRAINT {constraint_name} UNIQUE ({column})")
+                alter_statements.append(f"DROP CONSTRAINT {quote_ident(constraint_name)}")
+                rollback_statements.append(
+                    f"ADD CONSTRAINT {quote_ident(constraint_name)} UNIQUE ({quote_ident(column)})"
+                )
 
         if current_def.foreign_key != target_def.foreign_key:
             constraint_name = f"fk_{table}_{column}"
             if current_def.foreign_key:
-                alter_statements.append(f"DROP CONSTRAINT {constraint_name}")
+                alter_statements.append(f"DROP CONSTRAINT {quote_ident(constraint_name)}")
                 rollback_statements.append(
-                    f"ADD CONSTRAINT {constraint_name} FOREIGN KEY ({column}) "
+                    f"ADD CONSTRAINT {quote_ident(constraint_name)} FOREIGN KEY ({quote_ident(column)}) "
                     f"REFERENCES {self._references_sql(current_def.foreign_key)}"
                 )
             if target_def.foreign_key:
                 alter_statements.append(
-                    f"ADD CONSTRAINT {constraint_name} FOREIGN KEY ({column}) "
+                    f"ADD CONSTRAINT {quote_ident(constraint_name)} FOREIGN KEY ({quote_ident(column)}) "
                     f"REFERENCES {self._references_sql(target_def.foreign_key)}"
                 )
-                rollback_statements.append(f"DROP CONSTRAINT {constraint_name}")
+                rollback_statements.append(f"DROP CONSTRAINT {quote_ident(constraint_name)}")
 
         if current_def.check_constraint != target_def.check_constraint:
             constraint_name = f"ck_{table}_{column}"
             if current_def.check_constraint:
-                alter_statements.append(f"DROP CONSTRAINT {constraint_name}")
+                alter_statements.append(f"DROP CONSTRAINT {quote_ident(constraint_name)}")
                 rollback_statements.append(
-                    f"ADD CONSTRAINT {constraint_name} CHECK ({current_def.check_constraint})"
+                    f"ADD CONSTRAINT {quote_ident(constraint_name)} CHECK ({current_def.check_constraint})"
                 )
             if target_def.check_constraint:
                 alter_statements.append(
-                    f"ADD CONSTRAINT {constraint_name} CHECK ({target_def.check_constraint})"
+                    f"ADD CONSTRAINT {quote_ident(constraint_name)} CHECK ({target_def.check_constraint})"
                 )
-                rollback_statements.append(f"DROP CONSTRAINT {constraint_name}")
+                rollback_statements.append(f"DROP CONSTRAINT {quote_ident(constraint_name)}")
 
         if not alter_statements:
             # A detected change with no SQL handler must stop here, not
@@ -1195,8 +1437,12 @@ class MigrationGenerator:
             )
 
         # Build SQL
-        alter_sql = f"ALTER TABLE {table}\n    " + ",\n    ".join(alter_statements) + ";"
-        rollback_sql = f"ALTER TABLE {table}\n    " + ",\n    ".join(rollback_statements) + ";"
+        alter_sql = (
+            f"ALTER TABLE {quote_ident(table)}\n    " + ",\n    ".join(alter_statements) + ";"
+        )
+        rollback_sql = (
+            f"ALTER TABLE {quote_ident(table)}\n    " + ",\n    ".join(rollback_statements) + ";"
+        )
 
         # Assess risk
         risk_level = self._assess_column_modification_risk(current_def, target_def)
@@ -1208,7 +1454,7 @@ class MigrationGenerator:
             description=f"Modify column {column}: {', '.join(changes)}",
             sql_forward=alter_sql,
             sql_rollback=rollback_sql,
-            validation_sql=f"SELECT data_type, is_nullable FROM information_schema.columns WHERE table_name = '{table}' AND column_name = '{column}';",
+            validation_sql=f"SELECT data_type, is_nullable FROM information_schema.columns WHERE table_name = {quote_literal(table)} AND column_name = {quote_literal(column)};",
             risk_level=risk_level,
         )
 
@@ -1253,8 +1499,8 @@ class MigrationGenerator:
             step_type="ADD_TEMP_COLUMN",
             table=table,
             description=f"Add temporary column {temp_column} in {table} (type only — constraints are applied after the rename)",
-            sql_forward=f"ALTER TABLE {table} ADD COLUMN {temp_column} {target_def.data_type};",
-            sql_rollback=f"ALTER TABLE {table} DROP COLUMN {temp_column};",
+            sql_forward=f"ALTER TABLE {quote_ident(table)} ADD COLUMN {quote_ident(temp_column)} {target_def.data_type};",
+            sql_rollback=f"ALTER TABLE {quote_ident(table)} DROP COLUMN {quote_ident(temp_column)};",
             risk_level="LOW",
             zero_downtime_phase="EXPAND",
         )
@@ -1263,20 +1509,20 @@ class MigrationGenerator:
         # Step 2: Copy data, with a backfill check that must return 0
         # before the contract phase runs.
         if not target_def.nullable:
-            backfill_sql = f"SELECT COUNT(*) FROM {table} WHERE {temp_column} IS NULL;"
+            backfill_sql = f"SELECT COUNT(*) FROM {quote_ident(table)} WHERE {quote_ident(temp_column)} IS NULL;"
         else:
             backfill_sql = (
-                f"SELECT COUNT(*) FROM {table} "
-                f"WHERE {temp_column} IS NULL "
-                f"AND {column} IS NOT NULL;"
+                f"SELECT COUNT(*) FROM {quote_ident(table)} "
+                f"WHERE {quote_ident(temp_column)} IS NULL "
+                f"AND {quote_ident(column)} IS NOT NULL;"
             )
         step2 = MigrationStep(
             step_id=self._generate_step_id(),
             step_type="COPY_COLUMN_DATA",
             table=table,
             description=f"Copy data from {column} to {temp_column} in {table} — the backfill check must return 0 before the contract phase",
-            sql_forward=f"UPDATE {table} SET {temp_column} = {column};",
-            sql_rollback=f"UPDATE {table} SET {temp_column} = NULL;",
+            sql_forward=f"UPDATE {quote_ident(table)} SET {quote_ident(temp_column)} = {quote_ident(column)};",
+            sql_rollback=f"UPDATE {quote_ident(table)} SET {quote_ident(temp_column)} = NULL;",
             validation_sql=backfill_sql,
             risk_level="MEDIUM",
             zero_downtime_phase="EXPAND",
@@ -1292,7 +1538,7 @@ class MigrationGenerator:
             step_type="DROP_OLD_COLUMN",
             table=table,
             description=f"Drop original column {column} in {table} — the rollback re-adds the column empty; the data is not restored. Back up before running.",
-            sql_forward=f"ALTER TABLE {table} DROP COLUMN {column};",
+            sql_forward=f"ALTER TABLE {quote_ident(table)} DROP COLUMN {quote_ident(column)};",
             sql_rollback=self._recreate_column_sql(table, current_def),
             risk_level="HIGH",
             zero_downtime_phase="CONTRACT",
@@ -1306,8 +1552,8 @@ class MigrationGenerator:
             step_type="RENAME_COLUMN",
             table=table,
             description=f"Rename {temp_column} to {column}",
-            sql_forward=f"ALTER TABLE {table} RENAME COLUMN {temp_column} TO {column};",
-            sql_rollback=f"ALTER TABLE {table} RENAME COLUMN {column} TO {temp_column};",
+            sql_forward=f"ALTER TABLE {quote_ident(table)} RENAME COLUMN {quote_ident(temp_column)} TO {quote_ident(column)};",
+            sql_rollback=f"ALTER TABLE {quote_ident(table)} RENAME COLUMN {quote_ident(column)} TO {quote_ident(temp_column)};",
             risk_level="MEDIUM",
             zero_downtime_phase="CONTRACT",
         )
@@ -1333,40 +1579,46 @@ class MigrationGenerator:
         actions = []
         rollback_actions = []
         if not target_def.nullable and current_def.nullable:
-            actions.append(f"ALTER COLUMN {column} SET NOT NULL")
-            rollback_actions.append(f"ALTER COLUMN {column} DROP NOT NULL")
+            actions.append(f"ALTER COLUMN {quote_ident(column)} SET NOT NULL")
+            rollback_actions.append(f"ALTER COLUMN {quote_ident(column)} DROP NOT NULL")
         if (
             target_def.default_value != current_def.default_value
             and target_def.default_value is not None
         ):
-            actions.append(f"ALTER COLUMN {column} SET DEFAULT {target_def.default_value}")
+            actions.append(
+                f"ALTER COLUMN {quote_ident(column)} SET DEFAULT {target_def.default_value}"
+            )
             if current_def.default_value is not None:
                 rollback_actions.append(
-                    f"ALTER COLUMN {column} SET DEFAULT {current_def.default_value}"
+                    f"ALTER COLUMN {quote_ident(column)} SET DEFAULT {current_def.default_value}"
                 )
             else:
-                rollback_actions.append(f"ALTER COLUMN {column} DROP DEFAULT")
+                rollback_actions.append(f"ALTER COLUMN {quote_ident(column)} DROP DEFAULT")
         if target_def.unique and not current_def.unique:
-            actions.append(f"ADD CONSTRAINT uq_{table}_{column} UNIQUE ({column})")
-            rollback_actions.append(f"DROP CONSTRAINT uq_{table}_{column}")
+            actions.append(
+                f"ADD CONSTRAINT {quote_ident('uq_' + table + '_' + column)} UNIQUE ({quote_ident(column)})"
+            )
+            rollback_actions.append(f"DROP CONSTRAINT {quote_ident('uq_' + table + '_' + column)}")
         if target_def.foreign_key and target_def.foreign_key != current_def.foreign_key:
             actions.append(
-                f"ADD CONSTRAINT fk_{table}_{column} FOREIGN KEY ({column}) "
+                f"ADD CONSTRAINT {quote_ident('fk_' + table + '_' + column)} FOREIGN KEY ({quote_ident(column)}) "
                 f"REFERENCES {self._references_sql(target_def.foreign_key)}"
             )
-            rollback_actions.append(f"DROP CONSTRAINT fk_{table}_{column}")
+            rollback_actions.append(f"DROP CONSTRAINT {quote_ident('fk_' + table + '_' + column)}")
         if (
             target_def.check_constraint
             and target_def.check_constraint != current_def.check_constraint
         ):
             actions.append(
-                f"ADD CONSTRAINT ck_{table}_{column} CHECK ({target_def.check_constraint})"
+                f"ADD CONSTRAINT {quote_ident('ck_' + table + '_' + column)} CHECK ({target_def.check_constraint})"
             )
-            rollback_actions.append(f"DROP CONSTRAINT ck_{table}_{column}")
+            rollback_actions.append(f"DROP CONSTRAINT {quote_ident('ck_' + table + '_' + column)}")
         if not actions:
             return None
-        forward = f"ALTER TABLE {table}\n    " + ",\n    ".join(actions) + ";"
-        rollback = f"ALTER TABLE {table}\n    " + ",\n    ".join(rollback_actions) + ";"
+        forward = f"ALTER TABLE {quote_ident(table)}\n    " + ",\n    ".join(actions) + ";"
+        rollback = (
+            f"ALTER TABLE {quote_ident(table)}\n    " + ",\n    ".join(rollback_actions) + ";"
+        )
         return MigrationStep(
             step_id=self._generate_step_id(),
             step_type="APPLY_CONSTRAINTS",
@@ -1414,15 +1666,19 @@ class MigrationGenerator:
         if constraint_type == "PRIMARY_KEY":
             columns = constraint_info["columns"]
             constraint_name = f"pk_{table}"
-            add_sql = f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} PRIMARY KEY ({', '.join(columns)});"
-            drop_sql = f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name};"
+            add_sql = f"ALTER TABLE {quote_ident(table)} ADD CONSTRAINT {quote_ident(constraint_name)} PRIMARY KEY ({', '.join(quote_ident(c) for c in columns)});"
+            drop_sql = (
+                f"ALTER TABLE {quote_ident(table)} DROP CONSTRAINT {quote_ident(constraint_name)};"
+            )
             description = f"Add primary key on {', '.join(columns)}"
 
         elif constraint_type == "UNIQUE":
             columns = constraint_info["columns"]
             constraint_name = f"uq_{table}_{'_'.join(columns)}"
-            add_sql = f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} UNIQUE ({', '.join(columns)});"
-            drop_sql = f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name};"
+            add_sql = f"ALTER TABLE {quote_ident(table)} ADD CONSTRAINT {quote_ident(constraint_name)} UNIQUE ({', '.join(quote_ident(c) for c in columns)});"
+            drop_sql = (
+                f"ALTER TABLE {quote_ident(table)} DROP CONSTRAINT {quote_ident(constraint_name)};"
+            )
             description = f"Add unique constraint on {', '.join(columns)}"
 
         elif constraint_type == "FOREIGN_KEY":
@@ -1430,17 +1686,21 @@ class MigrationGenerator:
             constraint_name = f"fk_{table}_{'_'.join(columns)}"
             references = self._references_sql(constraint_info["references"])
             add_sql = (
-                f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} "
-                f"FOREIGN KEY ({', '.join(columns)}) REFERENCES {references};"
+                f"ALTER TABLE {quote_ident(table)} ADD CONSTRAINT {quote_ident(constraint_name)} "
+                f"FOREIGN KEY ({', '.join(quote_ident(c) for c in columns)}) REFERENCES {references};"
             )
-            drop_sql = f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name};"
+            drop_sql = (
+                f"ALTER TABLE {quote_ident(table)} DROP CONSTRAINT {quote_ident(constraint_name)};"
+            )
             description = f"Add foreign key on {', '.join(columns)} referencing {references}"
 
         elif constraint_type == "CHECK":
             constraint_name = constraint_info["constraint_name"]
             condition = constraint_info["condition"]
-            add_sql = f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} CHECK ({condition});"
-            drop_sql = f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name};"
+            add_sql = f"ALTER TABLE {quote_ident(table)} ADD CONSTRAINT {quote_ident(constraint_name)} CHECK ({condition});"
+            drop_sql = (
+                f"ALTER TABLE {quote_ident(table)} DROP CONSTRAINT {quote_ident(constraint_name)};"
+            )
             description = f"Add check constraint: {condition}"
 
         else:
@@ -1483,12 +1743,12 @@ class MigrationGenerator:
         if expression:
             columns_sql = expression
         else:
-            columns_sql = ", ".join(index.get("columns") or [])
+            columns_sql = ", ".join(quote_ident(c) for c in (index.get("columns") or []))
         predicate = index.get("where") or index.get("predicate")
         where = f" WHERE {predicate}" if predicate else ""
         return (
-            f"CREATE {unique_keyword}INDEX {index['name']} "
-            f"ON {table}{using} ({columns_sql}){where};"
+            f"CREATE {unique_keyword}INDEX {quote_ident(index['name'])} "
+            f"ON {quote_ident(table)}{using} ({columns_sql}){where};"
         )
 
     def _add_index_step(self, index_info: Dict[str, Any]) -> MigrationStep:
@@ -1497,7 +1757,7 @@ class MigrationGenerator:
         index = index_info["index"]
 
         create_sql = self._index_create_sql(index, table)
-        drop_sql = f"DROP INDEX {index['name']};"
+        drop_sql = f"DROP INDEX {quote_ident(index['name'])};"
 
         columns_sql = index.get("expression") or ", ".join(index.get("columns") or [])
         return MigrationStep(
@@ -1522,8 +1782,8 @@ class MigrationGenerator:
         old_name = rename_info["old_name"]
         new_name = rename_info["new_name"]
 
-        rename_sql = f"ALTER TABLE {old_name} RENAME TO {new_name};"
-        rollback_sql = f"ALTER TABLE {new_name} RENAME TO {old_name};"
+        rename_sql = f"ALTER TABLE {quote_ident(old_name)} RENAME TO {quote_ident(new_name)};"
+        rollback_sql = f"ALTER TABLE {quote_ident(new_name)} RENAME TO {quote_ident(old_name)};"
 
         similarity = rename_info.get("similarity_score")
         similarity_note = (
@@ -1541,7 +1801,7 @@ class MigrationGenerator:
             description=f"Rename table {old_name} to {new_name}{similarity_note}",
             sql_forward=rename_sql,
             sql_rollback=rollback_sql,
-            validation_sql=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{new_name}';",
+            validation_sql=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(new_name)};",
             risk_level="MEDIUM",
         )
 
@@ -1562,7 +1822,7 @@ class MigrationGenerator:
         table = col_info["table"]
         column = col_info["definition"]
 
-        drop_sql = f"ALTER TABLE {table} DROP COLUMN {column.name};"
+        drop_sql = f"ALTER TABLE {quote_ident(table)} DROP COLUMN {quote_ident(column.name)};"
 
         add_sql = self._recreate_column_sql(table, column)
 
@@ -1591,23 +1851,29 @@ class MigrationGenerator:
 
         if constraint_type == "PRIMARY_KEY":
             constraint_name = f"pk_{table}"
-            drop_sql = f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name};"
+            drop_sql = (
+                f"ALTER TABLE {quote_ident(table)} DROP CONSTRAINT {quote_ident(constraint_name)};"
+            )
             columns = constraint_info["columns"]
-            add_sql = f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} PRIMARY KEY ({', '.join(columns)});"
+            add_sql = f"ALTER TABLE {quote_ident(table)} ADD CONSTRAINT {quote_ident(constraint_name)} PRIMARY KEY ({', '.join(quote_ident(c) for c in columns)});"
             description = "Drop primary key constraint"
 
         elif constraint_type == "UNIQUE":
             columns = constraint_info["columns"]
             constraint_name = f"uq_{table}_{'_'.join(columns)}"
-            drop_sql = f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name};"
-            add_sql = f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} UNIQUE ({', '.join(columns)});"
+            drop_sql = (
+                f"ALTER TABLE {quote_ident(table)} DROP CONSTRAINT {quote_ident(constraint_name)};"
+            )
+            add_sql = f"ALTER TABLE {quote_ident(table)} ADD CONSTRAINT {quote_ident(constraint_name)} UNIQUE ({', '.join(quote_ident(c) for c in columns)});"
             description = f"Drop unique constraint on {', '.join(columns)}"
 
         elif constraint_type == "CHECK":
             constraint_name = constraint_info["constraint_name"]
             condition = constraint_info.get("condition", "")
-            drop_sql = f"ALTER TABLE {table} DROP CONSTRAINT {constraint_name};"
-            add_sql = f"ALTER TABLE {table} ADD CONSTRAINT {constraint_name} CHECK ({condition});"
+            drop_sql = (
+                f"ALTER TABLE {quote_ident(table)} DROP CONSTRAINT {quote_ident(constraint_name)};"
+            )
+            add_sql = f"ALTER TABLE {quote_ident(table)} ADD CONSTRAINT {quote_ident(constraint_name)} CHECK ({condition});"
             description = f"Drop check constraint {constraint_name}"
 
         else:
@@ -1638,7 +1904,7 @@ class MigrationGenerator:
         table = index_info["table"]
         index = index_info["index"]
 
-        drop_sql = f"DROP INDEX {index['name']};"
+        drop_sql = f"DROP INDEX {quote_ident(index['name'])};"
 
         # Recreate for rollback — the full definition, not just the
         # column list.
@@ -1684,7 +1950,7 @@ class MigrationGenerator:
         the summary marks the step as a data-loss step."""
         table = table_info["definition"]
 
-        drop_sql = f"DROP TABLE {table.name};"
+        drop_sql = f"DROP TABLE IF EXISTS {quote_ident(table.name)};"
 
         create_statements = [self._create_table_sql(table)]
         for index in table.indexes:
@@ -1803,14 +2069,14 @@ class ValidationGenerator:
             check_type="TABLE_EXISTS",
             table=step.table,
             description=f"Verify table {step.table} exists",
-            sql_query=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{step.table}';",
+            sql_query=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(step.table)};",
             expected_result=1,
         )
 
     def _add_column_validation(self, step: MigrationStep) -> ValidationCheck:
         """Create validation for column addition."""
-        # Extract column name from SQL
-        column_match = re.search(r"ADD COLUMN (\w+)", step.sql_forward)
+        # Extract column name from SQL (quoted now: ADD COLUMN "name").
+        column_match = re.search(r'ADD COLUMN "?([\w$]+)"?', step.sql_forward)
         column_name = column_match.group(1) if column_match else "unknown"
 
         return ValidationCheck(
@@ -1818,7 +2084,7 @@ class ValidationGenerator:
             check_type="COLUMN_EXISTS",
             table=step.table,
             description=f"Verify column {column_name} exists in {step.table}",
-            sql_query=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '{step.table}' AND column_name = '{column_name}';",
+            sql_query=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(step.table)} AND column_name = {quote_literal(column_name)};",
             expected_result=1,
         )
 
@@ -1834,17 +2100,38 @@ class ValidationGenerator:
         )
 
     def _add_index_validation(self, step: MigrationStep) -> ValidationCheck:
-        """Create validation for index addition."""
-        # Extract index name from SQL
-        index_match = re.search(r"INDEX (\w+)", step.sql_forward)
+        """Create validation for index addition. PostgreSQL has no
+        information_schema.statistics (that is MySQL's view): the
+        check reads pg_indexes, filtered to the current schema, the
+        table and the index name, and verifies the definition
+        contains the indexed columns or expression (strpos, not
+        LIKE, so `_` and `%` in a name cannot over-match)."""
+        # Extract index name from SQL (quoted now: INDEX "idx_name").
+        index_match = re.search(r'INDEX "?([\w$]+)"?', step.sql_forward)
         index_name = index_match.group(1) if index_match else "unknown"
+
+        # The indexed columns or expression: the first parenthesised
+        # group before WHERE or `;` (an expression index has parens
+        # of its own, so the match is greedy to the last `)`).
+        definition_match = re.search(r"\(\s*(.*)\s*\)\s*(?:WHERE|;)", step.sql_forward)
+        definition = definition_match.group(1).replace('"', "") if definition_match else ""
+
+        query = (
+            "SELECT COUNT(*) FROM pg_indexes "
+            "WHERE schemaname = current_schema() "
+            f"AND tablename = {quote_literal(step.table)} "
+            f"AND indexname = {quote_literal(index_name)}"
+        )
+        if definition:
+            query += f" AND strpos(indexdef, {quote_literal('(' + definition + ')')}) > 0"
+        query += ";"
 
         return ValidationCheck(
             check_id=f"validate_{step.step_id}",
             check_type="INDEX_EXISTS",
             table=step.table,
             description=f"Verify index {index_name} exists",
-            sql_query=f"SELECT COUNT(*) FROM information_schema.statistics WHERE index_name = '{index_name}';",
+            sql_query=query,
             expected_result=1,
         )
 
@@ -1854,7 +2141,7 @@ class ValidationGenerator:
         — because the step is schema-only: once it runs, the data is
         gone and the rollback restores the column empty. The old
         generator emitted no validation at all for DROP COLUMN."""
-        column_match = re.search(r"DROP COLUMN (\w+)", step.sql_forward)
+        column_match = re.search(r'DROP COLUMN "?([\w$]+)"?', step.sql_forward)
         column_name = column_match.group(1) if column_match else "unknown"
 
         return ValidationCheck(
@@ -1862,7 +2149,7 @@ class ValidationGenerator:
             check_type="COLUMN_EXISTS_BEFORE_DROP",
             table=step.table,
             description=f"Verify column {column_name} exists in {step.table} before dropping it",
-            sql_query=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '{step.table}' AND column_name = '{column_name}';",
+            sql_query=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(step.table)} AND column_name = {quote_literal(column_name)};",
             expected_result=1,
         )
 
@@ -1875,7 +2162,7 @@ class ValidationGenerator:
             check_type="TABLE_EXISTS_BEFORE_DROP",
             table=step.table,
             description=f"Verify table {step.table} exists before dropping it",
-            sql_query=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '{step.table}';",
+            sql_query=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(step.table)};",
             expected_result=1,
         )
 
@@ -1916,6 +2203,12 @@ def format_migration_plan_text(
             f"BACKUP REQUIRED: steps {', '.join(summary['data_loss_steps'])} "
             f"restore the structure but not the data."
         )
+    if summary.get("zero_downtime_warning"):
+        # 3-P0-2: the warning used to live only in the JSON summary —
+        # the text output never printed it.
+        lines.append("ZERO-DOWNTIME WARNING")
+        lines.append("-" * 21)
+        lines.append("DRAFT - NOT AUTO-RUNNABLE. " + summary["zero_downtime_warning"])
     lines.append("")
 
     # Migration Steps
@@ -1970,6 +2263,18 @@ def main():
     parser.add_argument(
         "--include-validations", action="store_true", help="Include validation queries in output"
     )
+    parser.add_argument(
+        "--confirm-destructive",
+        action="store_true",
+        help="Confirm dropping every table (required when the target schema has no tables)",
+    )
+    parser.add_argument(
+        "--allow-contract",
+        action="store_true",
+        help="Zero-downtime only: emit the CONTRACT phase. Only pass after the "
+        "backfill validation query returns 0 and the application dual-writes "
+        "during EXPAND with a cutover.",
+    )
 
     args = parser.parse_args()
 
@@ -1997,6 +2302,23 @@ def main():
             changes, current_schema=current_schema, target_schema=target_schema
         )
 
+        # 3-P0-1: an explicit empty target drops every table — that
+        # needs a separate confirmation, so a typo can never do it.
+        # (The typo itself is already rejected by _parse_schema; this
+        # is the second layer for the deliberate case.)
+        if (
+            not args.validate_only
+            and comparator.current_schema
+            and not comparator.target_schema
+            and not args.confirm_destructive
+        ):
+            print(
+                "Error: the target schema has no tables, so this migration drops "
+                "every table. Re-run with --confirm-destructive to confirm.",
+                file=sys.stderr,
+            )
+            return 1
+
         # Generate validations if requested
         validations = None
         if args.include_validations or args.validate_only:
@@ -2017,10 +2339,53 @@ def main():
             sql_lines.append(f"-- Migration ID: {migration_plan.migration_id}")
             sql_lines.append(f"-- Created: {migration_plan.created_at}")
             sql_lines.append("")
+            if migration_plan.summary.get("zero_downtime_warning"):
+                sql_lines.append("-- DRAFT - NOT AUTO-RUNNABLE")
+                sql_lines.append(f"-- {migration_plan.summary['zero_downtime_warning']}")
+                sql_lines.append("")
 
-            for step in migration_plan.steps:
+            steps = migration_plan.steps
+            withheld = []
+            if args.zero_downtime and not args.allow_contract:
+                # 3-P0-2: without the acknowledgment the SQL output is
+                # the EXPAND phase only. The CONTRACT phase — and any
+                # data-loss step — is withheld: a single runnable file
+                # would otherwise lose writes made after the backfill
+                # and before the DROP+RENAME. Nothing here enforces
+                # the backfill check or the dual-write/cutover; that
+                # is application coordination, and the file says so.
+                withheld = [
+                    s
+                    for s in steps
+                    if s.zero_downtime_phase == "CONTRACT" or s.reversibility == "schema-only"
+                ]
+                withheld_ids = {s.step_id for s in withheld}
+                steps = [s for s in steps if s.step_id not in withheld_ids]
+
+            for step in steps:
                 sql_lines.append(f"-- Step: {step.description}")
                 sql_lines.append(step.sql_forward)
+                sql_lines.append("")
+
+            if withheld:
+                sql_lines.append("-- STOP - CONTRACT PHASE WITHHELD")
+                sql_lines.append(
+                    "-- The steps below are NOT in this file. Do not run this "
+                    "script and assume the migration is done."
+                )
+                for step in withheld:
+                    sql_lines.append(f"--   withheld: {step.step_id} {step.description}")
+                for step in migration_plan.steps:
+                    if step.step_type == "COPY_COLUMN_DATA" and step.validation_sql:
+                        sql_lines.append(
+                            "--   backfill check (must return 0 before the contract "
+                            f"phase): {step.validation_sql}"
+                        )
+                sql_lines.append(
+                    "-- After the backfill check returns 0, and the application "
+                    "dual-writes during EXPAND with a cutover, re-run with "
+                    "--allow-contract to emit the contract phase."
+                )
                 sql_lines.append("")
 
             output = "\n".join(sql_lines)
