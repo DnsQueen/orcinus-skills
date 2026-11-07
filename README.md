@@ -39,11 +39,19 @@ before publishing a change to them.
 
 Agent Skills (generic) — one unit, all 36 skills, no mid-work fetch:
 
+Requires Node.js 22.20 or later — the skills CLI declares
+`node >= 22.20.0` in its engines field. Run this from your project:
+
 ```bash
 npx skills@latest add DnsQueen/orcinus-skills
 ```
 
 The CLI asks which agent to install into and which skills to install. Pick your agent, then the ORCINUS skills — all 36 is the one-install system, the router is the entry point and loads sub-skills on demand. The user never picks a sub-skill mid-work.
+
+An exit code of 0 is not proof the install worked: an invalid
+`--agent` name prints `Invalid agents: <name>` and installs nothing
+while still exiting 0. The real confirmation is the
+`✓ <skill> (copied)` line for each skill.
 
 To install every skill to every agent without prompting (for example in CI), add `--all` (`--skill '*' --agent '*' -y`).
 
