@@ -87,7 +87,7 @@ jobs:
         run: /tmp/waza-linux-amd64 run evals/waza-orcinus-verify/eval.yaml --output /tmp/waza-results.json
       - name: Upload the waza results
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # actions/upload-artifact@v7.0.2
         with:
           name: waza-results
           path: /tmp/waza-results.json
