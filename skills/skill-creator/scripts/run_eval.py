@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — every trial is three-state (TRIGGERED / NOT_TRIGGERED / ERROR): an infrastructure failure (missing `claude` CLI, timeout, non-zero exit, unparseable output) is an ERROR, never a NOT_TRIGGERED, so an error cannot pass a should_trigger: false case; trigger rates are computed only over valid trials, a query with no valid trial cannot pass, errors are surfaced in the JSON output, and the CLI exits non-zero when any query has none. The rest is verbatim; see ATTRIBUTION.md.
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — every trial is three-state (TRIGGERED / NOT_TRIGGERED / ERROR): an infrastructure failure (missing `claude` CLI, timeout, non-zero exit, unparseable output) is an ERROR, never a NOT_TRIGGERED, so an error cannot pass a should_trigger: false case; trigger rates are computed only over valid trials, a query with no valid trial cannot pass, errors are surfaced in the JSON output, and the CLI exits non-zero when any query has none. `claude` is resolved with `shutil.which` (PATHEXT-aware, so the npm-installed `claude.cmd` on Windows is found and run via cmd.exe — a bare Popen cannot start it), and stdout is pumped by a reader thread (`select` cannot wait on a pipe on Windows). The rest is verbatim; see ATTRIBUTION.md.
 """Run trigger evaluation for a skill description.
 
 Tests whether a skill's description causes Claude to trigger (read the skill)
@@ -16,9 +16,11 @@ pass, and the CLI exits non-zero when any query has none.
 import argparse
 import json
 import os
-import select
+import queue
+import shutil
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -38,6 +40,49 @@ def find_project_root() -> Path:
         if (parent / ".claude").is_dir():
             return parent
     return current
+
+
+def _resolve_claude() -> list[str] | None:
+    """Resolve the `claude` CLI to a runnable argv prefix.
+
+    `shutil.which` honours PATHEXT on Windows, so it finds both
+    `claude.exe` and the npm-installed `claude.cmd`; a bare
+    `Popen(["claude", ...])` does not — CreateProcess only tries
+    the exact name and `.exe`, and cannot run a `.cmd` at all. A
+    batch file therefore has to go through the command interpreter.
+    Returns None when no `claude` is on PATH.
+    """
+    path = shutil.which("claude")
+    if path is None:
+        return None
+    if sys.platform == "win32" and os.path.splitext(path)[1].lower() in (".bat", ".cmd"):
+        comspec = os.environ.get("ComSpec")
+        if not comspec:
+            system_root = os.environ.get("SystemRoot", r"C:\Windows")
+            comspec = os.path.join(system_root, "System32", "cmd.exe")
+        return [comspec, "/c", path]
+    return [path]
+
+
+def _pump_stdout(stream, chunks: queue.Queue[bytes]) -> None:
+    """Read a process stdout stream into a queue until EOF.
+
+    Runs in a daemon thread: `select.select` cannot wait on a pipe
+    on Windows (Winsock only accepts sockets, so it raises
+    `OSError: [WinError 10038]`), so stdout is pumped by a thread
+    on every platform instead of by select. The empty chunk is the
+    EOF sentinel; it is always enqueued, even if the read fails.
+    """
+    try:
+        while True:
+            chunk = os.read(stream.fileno(), 8192)
+            if not chunk:
+                break
+            chunks.put(chunk)
+    except (OSError, ValueError):
+        pass
+    finally:
+        chunks.put(b"")
 
 
 def run_single_query(
@@ -82,8 +127,10 @@ def run_single_query(
         )
         command_file.write_text(command_content)
 
-        cmd = [
-            "claude",
+        claude_argv = _resolve_claude()
+        if claude_argv is None:
+            return ("ERROR", "could not start 'claude': 'claude' is not on PATH")
+        cmd = claude_argv + [
             "-p", query,
             "--output-format", "stream-json",
             "--verbose",
@@ -120,91 +167,127 @@ def run_single_query(
         pending_tool_name = None
         accumulated_json = ""
 
-        try:
-            while time.time() - start_time < timeout:
-                if process.poll() is not None:
-                    remaining = process.stdout.read()
-                    if remaining:
-                        buffer += remaining.decode("utf-8", errors="replace")
-                    break
+        def _feed(chunk: bytes) -> tuple[str, str | None] | None:
+            """Feed one stdout chunk through the event parser.
 
-                ready, _, _ = select.select([process.stdout], [], [], 1.0)
-                if not ready:
+            Appends to the buffer and processes complete lines.
+            Returns an early outcome (TRIGGERED / NOT_TRIGGERED) or
+            None to keep reading.
+            """
+            nonlocal buffer, events_seen, triggered
+            nonlocal pending_tool_name, accumulated_json
+            buffer += chunk.decode("utf-8", errors="replace")
+
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                line = line.strip()
+                if not line:
                     continue
 
-                chunk = os.read(process.stdout.fileno(), 8192)
-                if not chunk:
-                    break
-                buffer += chunk.decode("utf-8", errors="replace")
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                events_seen += 1
 
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
-                    line = line.strip()
-                    if not line:
-                        continue
+                # Early detection via stream events
+                if event.get("type") == "stream_event":
+                    se = event.get("event", {})
+                    se_type = se.get("type", "")
 
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    events_seen += 1
-
-                    # Early detection via stream events
-                    if event.get("type") == "stream_event":
-                        se = event.get("event", {})
-                        se_type = se.get("type", "")
-
-                        if se_type == "content_block_start":
-                            cb = se.get("content_block", {})
-                            if cb.get("type") == "tool_use":
-                                tool_name = cb.get("name", "")
-                                if tool_name in ("Skill", "Read"):
-                                    pending_tool_name = tool_name
-                                    accumulated_json = ""
-                                else:
-                                    return ("NOT_TRIGGERED", None)
-
-                        elif se_type == "content_block_delta" and pending_tool_name:
-                            delta = se.get("delta", {})
-                            if delta.get("type") == "input_json_delta":
-                                accumulated_json += delta.get("partial_json", "")
-                                if clean_name in accumulated_json:
-                                    return ("TRIGGERED", None)
-
-                        elif se_type in ("content_block_stop", "message_stop"):
-                            if pending_tool_name:
-                                return (
-                                    ("TRIGGERED", None)
-                                    if clean_name in accumulated_json
-                                    else ("NOT_TRIGGERED", None)
-                                )
-                            if se_type == "message_stop":
+                    if se_type == "content_block_start":
+                        cb = se.get("content_block", {})
+                        if cb.get("type") == "tool_use":
+                            tool_name = cb.get("name", "")
+                            if tool_name in ("Skill", "Read"):
+                                pending_tool_name = tool_name
+                                accumulated_json = ""
+                            else:
                                 return ("NOT_TRIGGERED", None)
 
-                    # Fallback: full assistant message
-                    elif event.get("type") == "assistant":
-                        message = event.get("message", {})
-                        for content_item in message.get("content", []):
-                            if content_item.get("type") != "tool_use":
-                                continue
-                            tool_name = content_item.get("name", "")
-                            tool_input = content_item.get("input", {})
-                            if tool_name == "Skill" and clean_name in tool_input.get("skill", ""):
-                                triggered = True
-                            elif tool_name == "Read" and clean_name in tool_input.get("file_path", ""):
-                                triggered = True
-                            return ("TRIGGERED", None) if triggered else ("NOT_TRIGGERED", None)
+                    elif se_type == "content_block_delta" and pending_tool_name:
+                        delta = se.get("delta", {})
+                        if delta.get("type") == "input_json_delta":
+                            accumulated_json += delta.get("partial_json", "")
+                            if clean_name in accumulated_json:
+                                return ("TRIGGERED", None)
 
-                    elif event.get("type") == "result":
+                    elif se_type in ("content_block_stop", "message_stop"):
+                        if pending_tool_name:
+                            return (
+                                ("TRIGGERED", None)
+                                if clean_name in accumulated_json
+                                else ("NOT_TRIGGERED", None)
+                            )
+                        if se_type == "message_stop":
+                            return ("NOT_TRIGGERED", None)
+
+                # Fallback: full assistant message
+                elif event.get("type") == "assistant":
+                    message = event.get("message", {})
+                    for content_item in message.get("content", []):
+                        if content_item.get("type") != "tool_use":
+                            continue
+                        tool_name = content_item.get("name", "")
+                        tool_input = content_item.get("input", {})
+                        if tool_name == "Skill" and clean_name in tool_input.get("skill", ""):
+                            triggered = True
+                        elif tool_name == "Read" and clean_name in tool_input.get("file_path", ""):
+                            triggered = True
                         return ("TRIGGERED", None) if triggered else ("NOT_TRIGGERED", None)
+
+                elif event.get("type") == "result":
+                    return ("TRIGGERED", None) if triggered else ("NOT_TRIGGERED", None)
+            return None
+
+        chunks: queue.Queue[bytes] = queue.Queue()
+        reader = threading.Thread(
+            target=_pump_stdout, args=(process.stdout, chunks), daemon=True
+        )
+        reader.start()
+        saw_eof = False
+        try:
+            while True:
+                remaining = timeout - (time.time() - start_time)
+                if remaining <= 0:
+                    break
+                try:
+                    chunk = chunks.get(timeout=min(1.0, remaining))
+                except queue.Empty:
+                    continue
+                if chunk == b"":
+                    saw_eof = True
+                    break
+                outcome = _feed(chunk)
+                if outcome is not None:
+                    return outcome
+            # The loop ended on EOF or on the deadline. If the process
+            # finished, its last output may still be queued behind the
+            # reader: drain it (bounded) so a trial that finished just
+            # before the deadline is judged on its real output.
+            if not saw_eof and process.poll() is not None:
+                drain_deadline = time.time() + 2.0
+                while time.time() < drain_deadline:
+                    try:
+                        chunk = chunks.get(
+                            timeout=max(0.0, drain_deadline - time.time())
+                        )
+                    except queue.Empty:
+                        break
+                    if chunk == b"":
+                        break
+                    outcome = _feed(chunk)
+                    if outcome is not None:
+                        return outcome
             # The loop ended without an early return: either the
-            # process finished (break above) or the timeout expired.
+            # process finished or the timeout expired.
             timed_out = process.poll() is None and time.time() - start_time >= timeout
         finally:
             # Clean up process on any exit path (return, exception, timeout)
             if process.poll() is None:
                 process.kill()
                 process.wait()
+            reader.join(timeout=5)
 
         if timed_out:
             return ("ERROR", f"claude timed out after {timeout}s")

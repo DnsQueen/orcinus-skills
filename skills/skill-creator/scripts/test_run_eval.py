@@ -14,6 +14,8 @@ Run: python3 -m pytest skills/skill-creator/scripts/test_run_eval.py -q
 
 import json
 import os
+import select
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,10 +28,28 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _fake_claude(bin_dir, body):
-    """A fake `claude` executable running the given Python body."""
+    """A fake `claude` executable running the given Python body.
+
+    Plants both the POSIX script (`claude`, shebang + exec bit) and
+    the Windows form (`claude.cmd` forwarding to `fake_claude.py`
+    via the current interpreter): Windows cannot execute an
+    extensionless file — CreateProcess only tries the exact name
+    and `.exe`, never PATHEXT — so the script alone is never
+    started there and every trial failed with "could not start
+    'claude': [WinError 2]". run_eval resolves the tool with
+    shutil.which (PATHEXT-aware), so it finds the .cmd.
+    """
+    text = "#!/usr/bin/env python3\nimport sys\n" + body
     script = bin_dir / "claude"
-    script.write_text("#!/usr/bin/env python3\nimport sys\n" + body, encoding="utf-8")
+    script.write_text(text, encoding="utf-8")
     script.chmod(0o755)
+    impl = bin_dir / "fake_claude.py"
+    impl.write_text(text, encoding="utf-8")
+    wrapper = bin_dir / "claude.cmd"
+    wrapper.write_text(
+        f"@echo off\r\n\"{sys.executable}\" \"%~dp0fake_claude.py\" %*\r\n",
+        encoding="utf-8",
+    )
     return script
 
 
@@ -39,13 +59,26 @@ def _run_one(tmp_path, bin_dir, timeout=10):
     The bin dir comes first so the fake wins; /usr/bin:/bin stay
     so the fake's `#!/usr/bin/env python3` shebang still resolves.
     There is no real `claude` in /usr/bin:/bin in this VM, so the
-    missing-CLI test still reproduces.
+    missing-CLI test still reproduces. The PATH is built with
+    os.pathsep: the old `f"{bin_dir}:/usr/bin:/bin"` was one
+    unparsable entry on Windows, so the fake was never on PATH
+    there at all.
     """
+    if sys.platform == "win32":
+        system_root = os.environ.get("SystemRoot", r"C:\Windows")
+        path_entries = [
+            str(bin_dir),
+            os.path.join(system_root, "System32"),
+            system_root,
+        ]
+    else:
+        path_entries = [str(bin_dir), "/usr/bin", "/bin"]
+    path = os.pathsep.join(path_entries)
     env = dict(os.environ)
-    env["PATH"] = f"{bin_dir}:/usr/bin:/bin"
+    env["PATH"] = path
     env.pop("CLAUDECODE", None)
     old_path = os.environ.get("PATH")
-    os.environ["PATH"] = f"{bin_dir}:/usr/bin:/bin"
+    os.environ["PATH"] = path
     try:
         return re_mod.run_single_query(
             "how do I write a haiku about the sea",
@@ -70,6 +103,65 @@ def test_missing_claude_is_error_not_not_triggered(tmp_path):
     assert error and "claude" in error
 
 
+def test_run_single_query_does_not_depend_on_select(tmp_path, monkeypatch):
+    # Windows: select.select only accepts sockets, so waiting on the
+    # claude stdout pipe raises OSError [WinError 10038] and the
+    # trial crashed instead of returning NOT_TRIGGERED. Simulate
+    # that here: run_single_query must not depend on select at all.
+    def _boom(*args, **kwargs):
+        raise OSError(10038, "An operation was attempted on something that is not a socket")
+
+    monkeypatch.setattr(select, "select", _boom)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_claude(
+        bin_dir,
+        'import json\n'
+        'print(json.dumps({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "Bash"}}}))\n',
+    )
+    status, error = _run_one(tmp_path, bin_dir)
+    assert status == "NOT_TRIGGERED"
+    assert error is None
+
+
+def test_fake_claude_is_planted_windows_runnable(tmp_path):
+    # Windows cannot execute an extensionless file: CreateProcess
+    # only tries the exact name and `.exe`, never PATHEXT, so the
+    # `claude` script alone is never started there. The fake must
+    # also be planted as `claude.cmd` forwarding to the Python impl.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_claude(bin_dir, 'print("hi")\n')
+    wrapper = bin_dir / "claude.cmd"
+    assert wrapper.is_file()
+    assert "fake_claude.py" in wrapper.read_text(encoding="utf-8")
+    assert (bin_dir / "fake_claude.py").is_file()
+
+
+def test_resolve_claude_wraps_batch_file_on_windows(monkeypatch):
+    # The npm-installed `claude` on Windows is a `claude.cmd` shim:
+    # shutil.which finds it via PATHEXT, but CreateProcess cannot
+    # run a .cmd directly — it has to go through cmd.exe.
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(shutil, "which", lambda cmd: r"C:\fake\bin\claude.cmd")
+    monkeypatch.setenv("ComSpec", r"C:\Windows\System32\cmd.exe")
+    assert re_mod._resolve_claude() == [
+        r"C:\Windows\System32\cmd.exe",
+        "/c",
+        r"C:\fake\bin\claude.cmd",
+    ]
+
+
+def test_resolve_claude_returns_executable_directly(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda cmd: "/usr/bin/claude")
+    assert re_mod._resolve_claude() == ["/usr/bin/claude"]
+
+
+def test_resolve_claude_returns_none_when_missing(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda cmd: None)
+    assert re_mod._resolve_claude() is None
+
+
 def test_other_tool_is_not_triggered(tmp_path):
     # Control: the model using a different tool is a real negative,
     # not an infrastructure error.
@@ -82,6 +174,28 @@ def test_other_tool_is_not_triggered(tmp_path):
     )
     status, error = _run_one(tmp_path, bin_dir)
     assert status == "NOT_TRIGGERED"
+    assert error is None
+
+
+def test_skill_tool_use_is_triggered(tmp_path):
+    # The TRIGGERED path through the reader thread: the fake reads
+    # the command file run_single_query wrote (its stem is the skill
+    # name claude was told to read) and emits a Skill tool_use for
+    # it. Guards the event-parser move into _feed (a missing
+    # nonlocal would break exactly this path).
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_claude(
+        bin_dir,
+        'from pathlib import Path\n'
+        'import glob, json\n'
+        'cmds = sorted(glob.glob(".claude/commands/*.md"))\n'
+        'name = Path(cmds[0]).stem if cmds else "missing"\n'
+        'print(json.dumps({"type": "stream_event", "event": {"type": "content_block_start", "content_block": {"type": "tool_use", "name": "Skill"}}}))\n'
+        'print(json.dumps({"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"type": "input_json_delta", "partial_json": json.dumps({"skill": name})}}}))\n',
+    )
+    status, error = _run_one(tmp_path, bin_dir)
+    assert status == "TRIGGERED"
     assert error is None
 
 
