@@ -3,6 +3,38 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.7] — 2026-11-07
+
+Follow-up to the unreleased 0.9.6: the first CI run on 0.9.6 failed
+on two jobs (macOS, Windows), and the fixes below change shipped
+files, so the releasable version moves to 0.9.7 (the version-bump
+gate requires an increase whenever shipped content changes).
+
+### Fixed
+
+- CI: the Windows job failed 14 script tests. The two new
+  `with_server` tests failed on Windows themselves — they called
+  `os.getpgid` and `signal.SIGKILL` unconditionally in their own
+  setup and cleanup. The doctor now trusts the token's
+  default-owner SID as well as the user SID, so a trusted waza
+  fallback binary is no longer reported "incompatible". The
+  `verify.sh` fake `bash` stub is now a `.cmd` resolved
+  PATHEXT-aware (an extensionless stub can never execute on
+  Windows, so real Git Bash ran it and returned the wrong code).
+  Idea-capture reads the lock PID from offset 1 and probes dead
+  PIDs without `os.kill(pid, 0)`; `package_skill` only prompts when
+  stdin and stdout are both terminals (the NUL device reports
+  `isatty()` on Windows) and its fixtures write exact bytes.
+- CI: the macOS job failed the same 11 `with_server` tests. The
+  cause is still unproven, but the 0.9.6 diagnostics narrowed it:
+  the log-heavy test's 2000 lines print after `import http.server`
+  and before the constructor, so the import chain completes and the
+  stall is inside the `HTTPServer` constructor, at or before
+  `listen()` returns. This version adds startup-step markers
+  (`after-import`, `socket-created`, `bound`, `listening`, `READY`)
+  plus a raw-socket probe, so the next failure names the exact
+  stalled step.
+
 ## [0.9.6] — 2026-11-07
 
 Follow-up to the unreleased 0.9.5: the first CI run on 0.9.5 failed
