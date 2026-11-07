@@ -40,6 +40,7 @@ Stdlib only.
 import argparse
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -187,6 +188,53 @@ def validate_state(data, repo=None):
     return problems
 
 
+def _tree_is_dirty(repo, revision):
+    """True when the working tree has uncommitted changes outside
+    the two excluded dirs. Applies only when `revision` is HEAD:
+    for an older revision the working tree is irrelevant — the
+    digest describes that revision's tree, not the work in
+    progress. `git ls-tree` cannot see untracked files, so this is
+    a separate check from the digest. A git failure counts as
+    dirty, never "clean by accident". `--untracked-files=normal`
+    excludes ignored files; the `:(exclude)` pathspecs exclude the
+    two places where recording verification itself writes, so
+    committing the state file or an evidence bundle never counts
+    as dirt (the same exclusions as the digest)."""
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if head.returncode != 0:
+            return True
+        if not head.stdout.strip().startswith(revision):
+            return False
+        status = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "status",
+                "--porcelain",
+                "--untracked-files=normal",
+                "--",
+                ".",
+                ":(exclude).orcinus",
+                ":(exclude)docs/verification",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if status.returncode != 0:
+            return True
+        return bool(status.stdout.strip())
+    except (subprocess.TimeoutExpired, OSError):
+        return True
+
+
 def transition(
     data, to_stage, revision, evidence_bundle=None, note="", repo=ROOT, expect_digest=None
 ):
@@ -200,7 +248,10 @@ def transition(
     change to any stage but BUILDING, VERIFIED without an evidence
     bundle, or RELEASE_READY without an approval bound to the
     recomputed digest. `expect_digest`, when given, only asserts
-    against the recomputed digest — it is never stored. The history
+    against the recomputed digest — it is never stored. VERIFIED
+    and RELEASE_READY also refuse on a dirty tree at HEAD: the
+    digest describes committed content only, and `ls-tree` cannot
+    see untracked files, so the tree is checked separately. The history
     is append-only: the old entries are kept verbatim and one entry
     is added."""
     problems = validate_state(data, repo=repo)
@@ -230,6 +281,12 @@ def transition(
         raise ValueError(
             f"not an allowed transition: {current} -> {to_stage} "
             f"(allowed: {', '.join(sorted(ALLOWED_TRANSITIONS[current])) or 'none'})"
+        )
+    if to_stage in ("VERIFIED", "RELEASE_READY") and _tree_is_dirty(repo, revision):
+        raise ValueError(
+            "working tree is dirty: VERIFIED and RELEASE_READY require a clean tree "
+            "(uncommitted changes outside .orcinus/ and docs/verification/) — "
+            "commit or stash first, the digest describes committed content only"
         )
     if to_stage == "VERIFIED" and not (evidence_bundle or data.get("evidence_bundle")):
         raise ValueError("VERIFIED requires evidence_bundle")

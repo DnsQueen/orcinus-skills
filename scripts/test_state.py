@@ -392,6 +392,75 @@ def test_transition_appends_history_without_rewriting_it(tmp_path):
     assert data["history"][1]["stage"] == "BLOCKED"
 
 
+def test_verified_refused_on_dirty_tree(tmp_path):
+    """F-07: the digest covers committed content only — VERIFIED
+    on a dirty tree would bind the stage to content that was
+    never committed. Untracked files where recording verification
+    writes (.orcinus/, docs/verification/) and ignored files are
+    not dirt."""
+    repo = _repo(tmp_path)
+    (repo / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "ignore logs")
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    bundle = _write_bundle(repo)
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    (repo / "src" / "app.py").write_text("x = 2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="dirty"):
+        st.transition(data, "VERIFIED", revision, repo=repo, evidence_bundle=bundle)
+    (repo / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "src" / "new.py").write_text("y = 1\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="dirty"):
+        st.transition(data, "VERIFIED", revision, repo=repo, evidence_bundle=bundle)
+    (repo / "src" / "new.py").unlink()
+    (repo / ".orcinus").mkdir(exist_ok=True)
+    (repo / ".orcinus" / "state.json").write_text("{}\n", encoding="utf-8")
+    (repo / "docs" / "verification" / "other.json").write_text("{}\n", encoding="utf-8")
+    (repo / "x.log").write_text("log\n", encoding="utf-8")
+    data = st.transition(data, "VERIFIED", revision, repo=repo, evidence_bundle=bundle)
+    assert data["stage"] == "VERIFIED"
+
+
+def test_release_ready_refused_on_dirty_tree(tmp_path):
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _at_stage(repo, "AWAITING_APPROVAL", revision, digest)
+    data["approval"] = {
+        "approved_by": "x",
+        "revision": revision,
+        "content_digest": digest,
+        "artifact": "a.tgz",
+        "at": "2026-11-07T00:00:00+00:00",
+    }
+    (repo / "src" / "app.py").write_text("x = 2\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="dirty"):
+        st.transition(data, "RELEASE_READY", revision, repo=repo)
+    (repo / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+    data = st.transition(data, "RELEASE_READY", revision, repo=repo)
+    assert data["stage"] == "RELEASE_READY"
+
+
+def test_dirty_check_skipped_for_older_revision(tmp_path):
+    """The dirty-tree check applies only when the revision IS
+    HEAD: for an older revision the working tree is irrelevant —
+    the digest describes that revision's tree, not the work in
+    progress."""
+    repo = _repo(tmp_path)
+    old_revision = _head(repo)
+    old_digest = cd.content_digest(repo, old_revision)
+    _commit_change(repo)  # HEAD moves on
+    (repo / "src" / "app.py").write_text("x = 3\n", encoding="utf-8")  # dirty, uncommitted
+    data = _building(digest=old_digest, revision=old_revision)
+    data["stage"] = "VERIFYING"
+    data = st.transition(
+        data, "VERIFIED", old_revision, repo=repo, evidence_bundle=_write_bundle(repo)
+    )
+    assert data["stage"] == "VERIFIED"
+
+
 def test_cli_validate_and_transition(tmp_path, capsys):
     repo = _repo(tmp_path)
     revision = _head(repo)
