@@ -56,7 +56,7 @@ Return the report in this form:
 - Mutation score with the exact numbers.
 - Killed mutants (at least one, with file and line).
 - Surviving mutants (every one, with file, line, and the missing test).
-- Verdict: PASS (score recorded, at least one mutant killed, all survivors listed) or FAIL (Stryker did not run, no mutant killed, or survivors hidden).
+- Verdict: PASS (score recorded and at or above the configured break threshold, at least one mutant killed, all survivors listed; a passing score does not cover rounding — see Step 3) or FAIL (Stryker did not run, no mutant killed, survivors hidden, or score below the break threshold).
 
 ## Scope
 

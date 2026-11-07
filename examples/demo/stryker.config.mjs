@@ -12,5 +12,10 @@ export default {
   // Give each mutant run enough time to reach a real verdict.
   timeoutMS: 120000,
   timeoutFactor: 10,
-  thresholds: { high: 80, low: 60, break: 0 },
+  // break: 80 (was 0) — with break: 0 the gate can never fail on score
+  // (Stryker: "Setting break=0 ensures that the build will never fail").
+  // A score below 80 now exits 1. Note this gates only the mutation
+  // score: Stryker generates no Math.round mutant, so it cannot catch a
+  // rounding swap — the boundary test in tests/summary.test.ts does.
+  thresholds: { high: 80, low: 60, break: 80 },
 };
