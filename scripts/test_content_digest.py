@@ -104,6 +104,70 @@ def test_digest_of_non_repo_fails():
         raise AssertionError("expected ContentDigestError for a non-repo")
 
 
+def test_cli_rev_flag(capsys):
+    """F-15: --rev names the revision. `content_digest.py [repo]
+    [--rev REV]`, default HEAD."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        repo = _repo(Path(d))
+        assert cd.main([str(repo), "--rev", "HEAD"]) == 0
+        assert capsys.readouterr().out.strip() == cd.content_digest(repo)
+        assert cd.main([str(repo)]) == 0
+        assert capsys.readouterr().out.strip() == cd.content_digest(repo)
+
+
+def test_cli_bare_rev_rejected(capsys, monkeypatch):
+    """F-15: a bare revision is ambiguous with a repo path — the
+    old CLI silently treated it as a repo path and failed with a
+    confusing git error. It is now a usage error (exit 2) that
+    says to use --rev."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        repo = _repo(Path(d))
+        monkeypatch.chdir(repo)
+        assert cd.main(["HEAD"]) == 2
+        err = capsys.readouterr().err
+        assert "--rev" in err
+        assert cd.main(["HEAD", "--rev", "HEAD"]) == 2
+
+
+def test_cli_repo_rev_positionals_still_work(capsys):
+    """F-15: the documented [repo] [rev] form still works."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        repo = _repo(Path(d))
+        assert cd.main([str(repo), "HEAD"]) == 0
+        assert capsys.readouterr().out.strip() == cd.content_digest(repo)
+
+
+def test_cli_rev_flag_conflicts_with_positional_rev():
+    """--rev and a positional revision together are a usage error:
+    give one."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        repo = _repo(Path(d))
+        assert cd.main([str(repo), "HEAD", "--rev", "HEAD"]) == 2
+
+
+def test_cli_git_failure_is_exit_1(capsys):
+    """Exit codes follow the spec-kit CLI shape: 2 bad usage, 1
+    violation, 0 success. A git failure on valid arguments (not
+    a repo, unknown revision) is a violation — exit 1, not 2."""
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        repo = _repo(Path(d))
+        assert cd.main([str(repo), "--rev", "no-such-rev"]) == 1
+        assert "content_digest:" in capsys.readouterr().err
+        assert cd.main([str(repo), "no-such-rev"]) == 1
+        assert cd.main([str(Path(d))]) == 1  # an existing dir that is not a repo
+        assert cd.main(["/nonexistent-path-orcinus-xyz"]) == 2  # not a dir: usage, not a repo
+
+
 def _repo_with_persian_code(tmp_path):
     """A repo whose tree contains a non-ASCII path: the case the
     v1 digest got wrong (git quotes such paths unless -z is used)."""

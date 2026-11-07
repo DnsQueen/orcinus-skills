@@ -38,11 +38,19 @@ The digest covers committed content only: a dirty working tree is
 never VERIFIED, because the digest would not describe what was
 verified. Record VERIFIED only when the tree is clean.
 
-Usage: python3 scripts/content_digest.py [repo] [rev]
-Exit 0 and print the digest; exit 2 for a usage error or when git
-cannot produce the tree (not a repository, unknown revision).
+Usage: python3 scripts/content_digest.py [repo] [--rev REV]
+The [repo] [rev] form still works. A bare revision is ambiguous
+with a repo path — `content_digest.py HEAD` used to be silently
+treated as a repo path and fail with a confusing git error — so a
+single positional that is not an existing directory is a usage
+error: use --rev for a revision. --rev and a positional revision
+together are also a usage error: give one.
+Exit 0 and print the digest; exit 2 for a usage error (prints
+usage to stderr); exit 1 when git cannot produce the tree (not a
+repository, unknown revision).
 """
 
+import argparse
 import hashlib
 import subprocess
 import sys
@@ -89,16 +97,42 @@ def content_digest(repo, rev="HEAD"):
 
 
 def main(argv):
-    if len(argv) > 3:
-        print("usage: python3 scripts/content_digest.py [repo] [rev]", file=sys.stderr)
+    parser = argparse.ArgumentParser(
+        description="Print the content digest of a revision's tree.",
+        usage="python3 scripts/content_digest.py [repo] [--rev REV]",
+    )
+    parser.add_argument(
+        "repo", nargs="?", default=None, help="the repo (default: current directory)"
+    )
+    parser.add_argument("rev", nargs="?", default=None, help="the revision (default: HEAD)")
+    parser.add_argument("--rev", default=None, dest="rev_flag", metavar="REV", help="the revision")
+    args = parser.parse_args(argv)
+    if args.rev is not None and args.rev_flag is not None:
+        print(
+            "content_digest: --rev REV and a positional revision conflict: give one",
+            file=sys.stderr,
+        )
+        parser.print_usage(sys.stderr)
         return 2
-    repo = Path(argv[1]) if len(argv) > 1 else Path.cwd()
-    rev = argv[2] if len(argv) > 2 else "HEAD"
+    if args.repo is not None and not Path(args.repo).is_dir():
+        # A bare revision is ambiguous with a repo path: the old
+        # CLI silently treated it as a repo path and failed with a
+        # confusing git error. Reject it — a single positional must
+        # name an existing directory, or it is not a repo at all.
+        print(
+            f"content_digest: {args.repo!r} is not a directory — if it is a revision, "
+            "use --rev REV",
+            file=sys.stderr,
+        )
+        parser.print_usage(sys.stderr)
+        return 2
+    repo = Path(args.repo) if args.repo is not None else Path.cwd()
+    rev = args.rev_flag if args.rev_flag is not None else (args.rev or "HEAD")
     try:
         print(content_digest(repo, rev))
     except ContentDigestError as e:
         print(f"content_digest: {e}", file=sys.stderr)
-        return 2
+        return 1
     return 0
 
 
