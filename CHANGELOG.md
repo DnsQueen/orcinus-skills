@@ -3,6 +3,37 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.8] — 2026-11-07
+
+Follow-up to the unreleased 0.9.7: the first CI run on 0.9.7 failed
+on one job (macOS), and the fix below changes a shipped file, so the
+releasable version moves to 0.9.8 (the version-bump gate requires an
+increase whenever shipped content changes).
+
+### Fixed
+
+- CI: the macOS job failed the same 12 `with_server` tests. Root
+  cause found by research into how other repos handle macOS CI:
+  `HTTPServer.server_bind` calls `socket.getfqdn()` after binding,
+  a reverse DNS lookup that stalls on hosts without working reverse
+  DNS (e.g. GitHub Actions macOS runners) before the server can
+  accept a single request. The fixture server is now a
+  `LoopbackHTTPServer` subclass whose `server_bind` calls
+  `TCPServer.server_bind` and sets `server_name`/`server_port`
+  from the literal address, so it never resolves its own hostname
+  (same fix as ikamensh/kodo and pywbem/pywbem, both of which hit
+  this on GitHub Actions macOS). The Local Network / TCC prompt and
+  the application firewall were investigated and ruled out as the
+  cause. Whether `getfqdn` actually hangs on the macOS 26 runner
+  is still unproven from this VM — the 0.9.8 CI run is the
+  confirmation: green macOS confirms the diagnosis, the same stall
+  refutes it.
+- CI: the tool's readiness polling connected to `"localhost"`,
+  which on macOS can resolve `::1` first and add a per-poll
+  connect delay before falling back to `127.0.0.1`. The three
+  connection targets in `with_server.py` now use the literal
+  `127.0.0.1`.
+
 ## [0.9.7] — 2026-11-07
 
 Follow-up to the unreleased 0.9.6: the first CI run on 0.9.6 failed
