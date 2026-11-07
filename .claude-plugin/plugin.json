@@ -2,7 +2,7 @@
   "author": {
     "name": "DnsQueen"
   },
-  "description": "ORCINUS: a verification-first engineering skill collection \u2014 one integrated nervous system for the 0\u2013100 software lifecycle, from raw idea to release. Router + 35 focused sub-skills, shared glossary, evidence bundles, independent review. No auto-merge, no weakened tests.",
+  "description": "ORCINUS: a verification-first engineering skill collection \u2014 one integrated nervous system for the 0\u2013100 software lifecycle, from raw idea to release. Router + 35 focused sub-skills, shared glossary, evidence bundles, independent review. No auto-merge, no weakened tests. Evidence bundles make an incomplete or self-contradictory verification impossible to file as PASS; they do not prove the commands ran.",
   "homepage": "https://github.com/DnsQueen/orcinus-skills",
   "keywords": [
     "engineering",

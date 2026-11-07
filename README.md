@@ -12,13 +12,13 @@ ORCINUS is a guided workflow, not an enforcement layer: it tells the agent what 
 2. Invoke the router: `/orcinus` (or `/orcinus-skills:orcinus` for the plugin install).
 3. Say what you want to build; ORCINUS names the stage and routes to the skill for it.
 4. Confirm the two major gates: idea → code, code → done.
-5. Done means verified: failing test first, then build + lint + typecheck + tests pass, with the evidence bundle.
+5. Done means verified: failing test first, then build + lint + typecheck + tests pass, with the evidence bundle recording every check — the bundle records what ran; it does not prove the commands ran.
 
 ## What it is
 
 - **One entry:** `orcinus`. The router detects the stage from evidence (no repo yet, code without tests, failing checks, ready to release) and routes to a focused sub-skill.
 - **One companion:** idea → architecture → scaffolding → step-by-step coding → testing → security → debugging → verification → finalize → publish.
-- **Verification-first:** a feature is not done because the agent says so. It is done when the evidence says so: failing test first, then build + lint + typecheck + tests pass, with no weakened tests. The verifier is a separate skill invocation that reads code and evidence, not the implementer's summary — same agent session, not a separate process.
+- **Verification-first:** a feature is not done because the agent says so. It is done when the evidence bundle checks out: failing test first, then build + lint + typecheck + tests pass, with no weakened tests, every check recorded by `record_check.py` with a binding the validator recomputes. The bundle makes an incomplete or self-contradictory verification impossible to file as PASS — it does not prove the commands ran. The verifier is a separate skill invocation that reads code and evidence, not the implementer's summary — same agent session, not a separate process.
 
 ## Install
 
