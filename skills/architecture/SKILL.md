@@ -42,6 +42,16 @@ Repomix (MIT) packs the repository into one file. Read the packed file list: it 
 
 ### 5. Check dependency licences
 
+This skill — and its checker — are npm/TypeScript-only: they read
+the dependency list from `package.json` and each licence from
+`node_modules/<dep>/package.json`, and the checker scans `.ts`,
+`.tsx`, `.js` and `.jsx` files under `src/`. For any other stack
+(Python, Go, Rust, …) there is no manifest adapter: the licence
+step files INCOMPLETE with the reason (the checker names the stack
+it detected, e.g. `pyproject.toml` present), and the agent follows
+that stack's own licence check instead of inventing one. A check
+that did not run is never reported as passed.
+
 List every direct dependency in `package.json` and read its licence from `node_modules/<dep>/package.json`. Allowed by default: MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause, ISC. A copyleft licence (GPL, AGPL, LGPL) or an unknown licence is a FAIL until a decision is recorded in an ADR — the project does not ship a licence nobody looked at.
 
 ### 6. Run the checker
@@ -50,7 +60,7 @@ List every direct dependency in `package.json` and read its licence from `node_m
 python3 skills/architecture/scripts/check_architecture.py --root <project>
 ```
 
-The checker verifies what is mechanically checkable: no source file imports from outside `src/` (that includes the test directory), no circular import among source files, every relative import resolves to a file, and every direct dependency's licence is allowed (SPDX expressions and the legacy `licenses[]` array are understood). It reads `.ts`, `.tsx`, `.js` and `.jsx` files, follows dynamic `import()`, and resolves tsconfig `paths` aliases. `import type` and imports in comments are not runtime imports and are ignored. A `baseUrl` or `paths` inherited from a base config resolve against the base config's directory, not the child's (TypeScript's rule for `extends` chains). It is a limited check of relative imports, not a full module resolver; for a project that needs a complete graph, use a real resolver (dependency-cruiser, madge). Two limits to know: it does not follow re-exports through barrel files or evaluate conditional or computed imports, and a string literal containing the text of an import statement is counted as an import — the scanner is a regex over comment-stripped text, not a parser, so a file that quotes an import in a string can report a false "unresolved import". If it finds no source files at all it reports INCOMPLETE, never clean.
+The checker verifies what is mechanically checkable: no source file imports from outside `src/` (that includes the test directory), no circular import among source files, every relative import resolves to a file, and every direct dependency's licence is allowed (SPDX expressions and the legacy `licenses[]` array are understood). It reads `.ts`, `.tsx`, `.js` and `.jsx` files, follows dynamic `import()`, and resolves tsconfig `paths` aliases. `import type` and imports in comments are not runtime imports and are ignored. A `baseUrl` or `paths` inherited from a base config resolve against the base config's directory, not the child's (TypeScript's rule for `extends` chains). It is a limited check of relative imports, not a full module resolver; for a project that needs a complete graph, use a real resolver (dependency-cruiser, madge). Two limits to know: it does not follow re-exports through barrel files or evaluate conditional or computed imports, and a string literal containing the text of an import statement is counted as an import — the scanner is a regex over comment-stripped text, not a parser, so a file that quotes an import in a string can report a false "unresolved import". If it finds no source files at all it reports INCOMPLETE, never clean — and exits 2, not 1: exit 2 means nothing (or nothing trustworthy) was checked, exit 1 means something was checked and failed. The same exit 2 applies when the tsconfig exists but cannot be used: the import graph is unknown, so no import verdict is trustworthy. A missing `package.json` is a violation when source files were found (the import checks ran) and part of the INCOMPLETE result when none were (nothing at all was checked).
 
 ## Report
 

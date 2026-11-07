@@ -184,8 +184,62 @@ def test_no_source_files_is_incomplete_not_clean(tmp_path):
     root = tmp_path / "proj"
     pkg(root)
     rc, out, _ = run(root)
-    assert rc == 1, out
+    assert rc == 2, out
     assert "INCOMPLETE" in out or "nothing was checked" in out
+
+
+def test_empty_dir_is_incomplete_exit_2(tmp_path):
+    """Round 7 (F-13): an empty directory — no source files and no
+    package.json — checked nothing, so it exits 2 (INCOMPLETE), not
+    1. Exit 1 is for a real violation; exit 2 means nothing was
+    checked (the same rule as monitoring's verify.sh)."""
+    root = tmp_path / "proj"
+    root.mkdir()
+    rc, out, _ = run(root)
+    assert rc == 2, out
+    assert "INCOMPLETE" in out
+    assert "nothing was checked" in out
+    assert "package.json not found" in out
+
+
+def test_python_project_is_incomplete_exit_2_names_the_stack(tmp_path):
+    """Round 7 (F-08/F-13): a Python project has no TypeScript source
+    and no package.json, so nothing was checked — exit 2, and the
+    reason names the stack it detected instead of only saying what
+    is missing. The checker is npm/TypeScript-only; it does not
+    pretend to check a Python project."""
+    root = tmp_path / "proj"
+    write(root / "pyproject.toml", '[project]\nname = "fixture"\n')
+    write(root / "src" / "main.py", "print('hello')\n")
+    rc, out, _ = run(root)
+    assert rc == 2, out
+    assert "INCOMPLETE" in out
+    assert "Python" in out
+
+
+def test_go_project_is_incomplete_exit_2_names_the_stack(tmp_path):
+    """Round 7 (F-08/F-13): same as the Python case, for a Go
+    project (go.mod, .go files under src/)."""
+    root = tmp_path / "proj"
+    write(root / "go.mod", "module fixture\n\ngo 1.22\n")
+    write(root / "src" / "main.go", "package main\n")
+    rc, out, _ = run(root)
+    assert rc == 2, out
+    assert "INCOMPLETE" in out
+    assert "Go" in out
+
+
+def test_real_licence_violation_stays_exit_1(tmp_path):
+    """Round 7 (F-13): exit 2 is only for nothing-checked. A real
+    violation — here a GPL dependency in an otherwise valid npm
+    project — still exits 1."""
+    root = tmp_path / "proj"
+    write(root / "src" / "a.ts", "export const a = 1;\n")
+    pkg(root, deps={"gpl-dep": "1.0.0"})
+    _dep_with_licence(root, "gpl-dep", {"license": "GPL-3.0"})
+    rc, out, _ = run(root)
+    assert rc == 1, out
+    assert "gpl-dep" in out
 
 
 def test_deep_chain_does_not_hit_the_recursion_limit(tmp_path):
@@ -225,14 +279,16 @@ def test_jsonc_tsconfig_with_comments_is_parsed(tmp_path):
 
 def test_unparseable_tsconfig_is_incomplete_not_clean(tmp_path):
     """A tsconfig that exists but cannot be parsed must not silently
-    shrink the import graph — the run is INCOMPLETE."""
+    shrink the import graph — the run is INCOMPLETE. Round 7 (F-13):
+    the import graph is unknown, so nothing trustworthy was checked
+    — exit 2, the same as the nothing-checked case, not 1."""
     root = tmp_path / "proj"
     write(root / "tsconfig.json", '{"compilerOptions": {"paths": {"@/*": ["src/*"]')
     write(root / "src" / "a.ts", 'import { b } from "@/b";\nexport const a = b;\n')
     write(root / "src" / "b.ts", "export const b = 1;\n")
     pkg(root)
     rc, out, _ = run(root)
-    assert rc == 1, out
+    assert rc == 2, out
     assert "INCOMPLETE" in out
     assert "tsconfig" in out
 

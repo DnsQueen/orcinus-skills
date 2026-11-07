@@ -45,9 +45,21 @@ Usage:
     python3 check_architecture.py --root <project> [--allow-licences MIT,Apache-2.0,...]
     [--licence-allowlist <file>] [--src-dir src] [--test-dir tests] [--tsconfig <file>]
 
-Exit 0 when clean, 1 when any violation is found (including when
-nothing could be checked — a scan that covered no files is INCOMPLETE,
-never clean). Stdlib only. Requires Python 3.11+.
+Exit 0 when clean, 1 when any violation is found, 2 when nothing
+(or nothing trustworthy) was checked. A scan that covered no files
+is INCOMPLETE, never clean — and never a violation: exit 2 means
+"nothing was checked", exit 1 means "something was checked and
+failed". The exit-2 half follows the in-repo precedent of
+skills/monitoring/scripts/verify.sh (a nonexistent target exits 2:
+nothing was checked, which is not a clean config) and the same
+three-way shape waza uses (a Diff observation with no
+caller-supplied context returns `not_assessed` rather than pass or
+fail). This is NOT a repo-wide "INCOMPLETE = exit 2" convention —
+docs/report-format.md says nothing about exit codes, and
+validate_evidence.py uses exit 2 for usage errors while a valid
+INCOMPLETE bundle exits 0 — so the claim here is only this
+checker's own rule, stated in this docstring. Stdlib only.
+Requires Python 3.11+.
 """
 
 import argparse
@@ -193,6 +205,39 @@ def collect_ts_files(root, src_dir):
             if name.endswith(TS_EXTENSIONS):
                 out.append(os.path.join(dirpath, name))
     return sorted(out)
+
+
+def _detect_stack(root, src_dir):
+    """The stack a non-JavaScript/TypeScript project looks like, for
+    the INCOMPLETE reason only — never a manifest adapter: this
+    checker reads package.json and TS/JS files, nothing else. A
+    Python project gets "Python (pyproject.toml present)", a Go
+    project "Go (go.mod present)", a Rust project "Rust
+    (Cargo.toml present)". Returns None when nothing recognisable
+    was found, and the generic reason stands."""
+    for manifest, name in (
+        ("pyproject.toml", "Python"),
+        ("setup.py", "Python"),
+        ("go.mod", "Go"),
+        ("Cargo.toml", "Rust"),
+    ):
+        if os.path.isfile(os.path.join(root, manifest)):
+            return f"{name} ({manifest} present)"
+    base = os.path.join(root, src_dir)
+    seen = set()
+    for _dirpath, _dirnames, filenames in os.walk(base):
+        for name in filenames:
+            if name.endswith(".py"):
+                seen.add("Python")
+            elif name.endswith(".go"):
+                seen.add("Go")
+            elif name.endswith(".rs"):
+                seen.add("Rust")
+        if seen:
+            break
+    if seen:
+        return ", ".join(sorted(seen)) + " files under src/"
+    return None
 
 
 def _load_json(path):
@@ -571,11 +616,23 @@ def main():
         tsconfig = load_tsconfig_paths(root, args.tsconfig)
     except TsconfigError as e:
         # A tsconfig that exists but cannot be used must not silently
-        # shrink the import graph: the run is INCOMPLETE, not clean.
-        print(f"FAIL: 1 violation(s)\n  - tsconfig: {e} (INCOMPLETE, not clean)")
-        return 1
+        # shrink the import graph: the run is INCOMPLETE, not clean —
+        # and it exits 2, not 1. The import graph is unknown, so
+        # nothing trustworthy was checked: a broken mapping could
+        # hide a layer violation as easily as invent one. Exit 2 is
+        # this checker's "nothing (trustworthy) was checked" code,
+        # following skills/monitoring/scripts/verify.sh ("nothing
+        # checked → 2"); it is not a repo-wide INCOMPLETE convention
+        # (see the module docstring). The licence stage never ran
+        # either — this is a fail-fast return before any check — so
+        # no real violation is being hidden behind the 2.
+        print(
+            f"FAIL: 1 violation(s) (INCOMPLETE, not clean)\n  - tsconfig: {e} (INCOMPLETE, not clean)"
+        )
+        return 2
 
     violations = []
+    incomplete = []
     src_base = os.path.join(root, args.src_dir)
     test_base = os.path.join(root, args.test_dir)
 
@@ -583,10 +640,18 @@ def main():
     graph = defaultdict(set)
     files = collect_ts_files(root, args.src_dir)
     if not files:
-        violations.append(
+        reason = (
             f"no source files found under {args.src_dir}/ — nothing was "
             f"checked (INCOMPLETE, not clean)"
         )
+        stack = _detect_stack(root, args.src_dir)
+        if stack is not None:
+            reason += (
+                f" — this looks like a {stack} project, and this "
+                f"checker is npm/TypeScript-only: it reads .ts/.js "
+                f"files and licences from package.json/node_modules"
+            )
+        incomplete.append(reason)
     for path in files:
         try:
             with open(path, encoding="utf-8", errors="ignore") as f:
@@ -629,7 +694,16 @@ def main():
     dep_licences = {}
     pkg_path = os.path.join(root, "package.json")
     if not os.path.isfile(pkg_path):
-        violations.append("package.json not found")
+        # A missing package.json is a real violation when source
+        # files WERE found — the import checks ran, and an npm
+        # project without a manifest cannot have its licences
+        # checked. When no source files were found either, nothing
+        # at all was checked, so it joins the INCOMPLETE list and
+        # the run exits 2 instead of 1.
+        if files:
+            violations.append("package.json not found")
+        else:
+            incomplete.append("package.json not found")
     else:
         try:
             pkg = _load_json(pkg_path)
@@ -671,7 +745,14 @@ def main():
         print(f"FAIL: {len(violations)} violation(s)")
         for v in violations:
             print(f"  - {v}")
+        for v in incomplete:
+            print(f"  - {v}")
         return 1
+    if incomplete:
+        print(f"FAIL: {len(incomplete)} violation(s) (INCOMPLETE, not clean)")
+        for v in incomplete:
+            print(f"  - {v}")
+        return 2
     print("OK: no layer violations, no circular imports, all dependency licences allowed")
     for name in sorted(dep_licences):
         print(f"  licence: {name}: {dep_licences[name]}")
