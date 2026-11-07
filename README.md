@@ -100,9 +100,24 @@ and 3 skill-creator agents (`analyzer`, `comparator`, `grader`). The
 `independent-review` skill still describes the review procedure; the
 agent follows it inline instead of spawning registered reviewers.
 The repo-root `scripts/` do not travel either — `npx skills` and
-Hermes copy per-skill folders, so `doctor.py`, `clean_copy_check.py`,
-the repo validator, and the drift check are absent there; the Claude
-Code plugin path installs the whole repo, so they are present there.
+Hermes copy per-skill folders whole, including each skill's
+`scripts/` directory, so `doctor.py`, `clean_copy_check.py`, the repo
+validator, and the drift check are absent there; the Claude Code
+plugin path installs the whole repo, so they are present there.
+
+<!-- Measured 2026-11-08 (round 7, F-09): 42 .py files under
+skills/ — re-verify with `find skills -name '*.py' | wc -l`. 31
+live under per-skill scripts/; 11 at skill roots
+(database-designer: index_optimizer.py, migration_generator.py,
+schema_analyzer.py + 3 tests; security-review/test_secret_scan.py;
+skill-creator/eval-viewer/generate_review.py;
+webapp-testing/examples/*.py x3). skills/monitoring/scripts/ holds
+only verify.sh, no .py. The auditor's live npx install
+(skills@1.7.6, v0.9.8) counted 40; the +2 are
+skills/orcinus-verify/scripts/record_check.py +
+test_record_check.py, added in the round-7 fix pass. Per-skill
+folders travel whole; repo-root scripts/ and plugin-root agents/
+and commands/ do not. -->
 And `${CLAUDE_PLUGIN_ROOT}` paths in skill text (one place:
 `orcinus-verify`) mean the Claude Code plugin root — in Hermes use
 the installed skill folder, or `${HERMES_SKILL_DIR}` inside a skill

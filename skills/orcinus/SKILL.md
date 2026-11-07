@@ -91,7 +91,7 @@ Check the skill's status in `references/skill-status.md` first — the table is 
 | Required and missing (not installed) | Stop, name the missing skill, and say what is blocked. Do not improvise its procedure from memory. |
 | Optional and missing | Use the named fallback in `references/rules.md` (Fallbacks for external-optional skills) and say which fallback you used. |
 | Not built (MAP status `todo`) | Say so plainly, do the closest covered step, and record the gap. Do not invent a sub-skill. |
-| Host-incompatible (any install other than the Claude Code plugin: the plugin-root `agents/` and `commands/` do not travel there, and per-skill `scripts/` do not travel on npx-skills or Hermes installs) | File INCOMPLETE for that step with the reason, and do the closest covered step the host allows. |
+| Host-incompatible (any install other than the Claude Code plugin: the plugin-root `agents/` and `commands/` and the repo-root `scripts/` do not travel there — per-skill folders, including each skill's `scripts/`, ARE copied whole, so a step that needs a per-skill script runs there) | File INCOMPLETE for that step with the reason, and do the closest covered step the host allows. |
 
 Before routing, confirm the sub-skill is installed: a host may silently skip a skill that is not present (a Hermes bundle skips missing skills instead of failing), so an absent sub-skill is an absence you must check for, not an error you will see.
 
