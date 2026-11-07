@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — stdout/stderr are drained in background threads, readiness is an HTTP check with a liveness check, cleanup signals the whole process group, and the test command has a timeout. Round 6 (2026-11-07): readiness requires a 2xx response (any status used to count, so a 500/503 counted as ready); --ready-path is repeatable per server; a port already held by another service is rejected before starting; cleanup SIGKILLs the process group even when the leader exits promptly (a SIGTERM-ignoring child used to survive). Round-6 follow-up (2026-11-07): on Windows cleanup killed only the cmd.exe shell (no process groups there), so the server kept listening and the next run found the port held; cleanup now kills the whole tree with taskkill /PID <pid> /T /F. Round-6 follow-up (2026-11-07): on macOS CI the servers never became ready with no output anywhere (8 tests, 'failed to start within 30s', process alive, empty stderr) — a server stuck before listen looked exactly like a slow one; a readiness failure now prints the server's recent output, so the next failure names whether the server printed anything at all. The rest is verbatim; see ATTRIBUTION.md.
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — stdout/stderr are drained in background threads, readiness is an HTTP check with a liveness check, cleanup signals the whole process group, and the test command has a timeout. Round 6 (2026-11-07): readiness requires a 2xx response (any status used to count, so a 500/503 counted as ready); --ready-path is repeatable per server; a port already held by another service is rejected before starting; cleanup SIGKILLs the process group even when the leader exits promptly (a SIGTERM-ignoring child used to survive). Round-6 follow-up (2026-11-07): on Windows cleanup killed only the cmd.exe shell (no process groups there), so the server kept listening and the next run found the port held; cleanup now kills the whole tree with taskkill /PID <pid> /T /F. Round-6 follow-up (2026-11-07): on macOS CI the servers never became ready with no output anywhere (8 tests, 'failed to start within 30s', process alive, empty stderr) — a server stuck before listen looked exactly like a slow one; a readiness failure now prints the server's recent output, so the next failure names whether the server printed anything at all. Round-6 follow-up (2026-11-07): readiness polling connected to "localhost", which on macOS can resolve ::1 first and add a per-poll connect delay before falling back to 127.0.0.1; the three connection targets (_http_ready, _port_is_busy, is_server_ready) now use the literal 127.0.0.1. The rest is verbatim; see ATTRIBUTION.md.
 """
 Start one or more servers, wait for them to be ready, run a command, then clean up.
 
@@ -128,7 +128,7 @@ def _http_ready(port, path, timeout=2, ok_statuses=None):
     response (500, 503, ...) is a service that is not ready."""
     ok = set(range(200, 300)) if ok_statuses is None else set(ok_statuses)
     try:
-        conn = http.client.HTTPConnection("localhost", port, timeout=timeout)
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
         conn.request("GET", path)
         response = conn.getresponse()
         response.read()
@@ -142,7 +142,7 @@ def _port_is_busy(port):
     """True when something already accepts TCP connections on the
     port — the port is held by another service."""
     try:
-        with socket.create_connection(("localhost", port), timeout=1):
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
             return True
     except OSError:
         return False
@@ -157,7 +157,7 @@ def is_server_ready(port, timeout=30, ready_path=None, process=None, ok_statuses
         if process is not None and process.poll() is not None:
             return False  # the server died; waiting longer will not help
         try:
-            with socket.create_connection(("localhost", port), timeout=1):
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
                 pass
         except (socket.error, ConnectionRefusedError):
             time.sleep(0.5)

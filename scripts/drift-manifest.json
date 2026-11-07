@@ -118,7 +118,7 @@
   "skills/webapp-testing/examples/console_logging.py": "ea46877289acb82da7e7ce59d0bc37c8977cd57e2a006d0c88d7a1c625bf95da",
   "skills/webapp-testing/examples/element_discovery.py": "d63c89604a22f8845d724e95dda45db49b1bf57c25ce0a83afbb7b8da3d402f0",
   "skills/webapp-testing/examples/static_html_automation.py": "9d533aafb875ee3ab8b8ebf8f5b9003ac8d999da3d09b285cce252e623140064",
-  "skills/webapp-testing/scripts/with_server.py": "93a73ae095b96b13d39f7e559782bad45f6ee960f9216bc3023dd0f289ab66b5",
+  "skills/webapp-testing/scripts/with_server.py": "de58889872a3bff753bf207f596121612a728c47f029166294df88ca24bafbb3",
   "agents/analyzer.md": "d0c3146b6482820eb4ebd309fd77a42260c07cc87a27b5ca73dd96732a44109b",
   "agents/code-reviewer.md": "019395c3ce457460115cc703e2f4a86fed4bbe560dc58355051c4d877155d366",
   "agents/code-simplifier.md": "976ddb22b84bc5a714216531a75db5e73169554add6b953442beeedb49b56891",

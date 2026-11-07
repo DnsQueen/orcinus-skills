@@ -1178,3 +1178,41 @@ def test_raw_socket_listens_after_http_server_import(tmp_path):
         if proc.poll() is None:
             proc.terminate()
         proc.wait(timeout=10)
+
+
+def test_readiness_connects_to_literal_loopback(tmp_path, monkeypatch):
+    """Round-6 follow-up (CI 0.9.7): the tool's readiness polling
+    connected to "localhost" — _http_ready, _port_is_busy and
+    is_server_ready. On macOS "localhost" can resolve ::1 first,
+    so each poll pays a connect delay/failure before falling back
+    to 127.0.0.1. The tool must connect to the literal 127.0.0.1
+    and never to "localhost" — pinned by recording the address
+    every socket.create_connection call is given (HTTPConnection
+    connects through it too), against a server bound only on
+    127.0.0.1. This is a behaviour pin, not a timing test: the
+    ::1-first delay itself is macOS-only and not reproducible on
+    Linux, where "localhost" resolves to 127.0.0.1 and the old
+    code still connects — just under the wrong name."""
+    port = free_port()
+    proc, err_file, out_file = _start_server(tmp_path, "loop.py", _status_server_script(port, 200))
+    try:
+        assert _wait_port_open(port), (
+            f"server on {port} never listened ({_server_detail(proc, err_file, out_file)})"
+        )
+        seen = []
+        real_create_connection = socket.create_connection
+
+        def recording_create_connection(address, *args, **kwargs):
+            seen.append(address)
+            return real_create_connection(address, *args, **kwargs)
+
+        monkeypatch.setattr(socket, "create_connection", recording_create_connection)
+        assert with_server._port_is_busy(port) is True
+        assert with_server._http_ready(port, "/") is True
+        assert with_server.is_server_ready(port, timeout=5) is True
+        assert seen, "no connection was recorded"
+        assert all(host == "127.0.0.1" for host, _ in seen), seen
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait(timeout=10)
