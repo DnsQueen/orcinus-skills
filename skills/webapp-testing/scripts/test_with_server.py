@@ -68,12 +68,49 @@ def _http_server_construct_snippet(port, handler_expr):
     printed — but the log-heavy child printed its 2000 lines,
     which come after the import, so the import is exonerated and
     the stall is at or after this constructor call. The markers
-    say which step: socket-created, bound, or listening."""
+    say which step: socket-created, bound, or listening.
+
+    Since CI 0.9.7 the markers prove the stall is INSIDE
+    server_bind() (socket-created printed, bound never reached),
+    so server_bind() itself is inlined here step by step instead
+    of called whole: the steps mirror socketserver.TCPServer.
+    server_bind (CPython 3.12, socketserver.py:463-475) — the two
+    guarded setsockopt calls, socket.bind(), getsockname() — plus
+    the HTTPServer.server_bind override's getfqdn line
+    (http/server.py:134-139), each followed by a flushed marker.
+    The inlining changes nothing about the bind: same calls, same
+    order, same guards (allow_reuse_address / allow_reuse_port),
+    only a marker between steps. The getfqdn step is the only
+    network-I/O step in the whole interval — socket.getfqdn(host)
+    does a reverse DNS lookup via gethostbyaddr('127.0.0.1')
+    (socket.py:781-805), and gethostbyaddr has no timeout, so a
+    hanging resolver on the runner would stall exactly here while
+    a raw socket binds fine. That is the prime suspect by
+    elimination (verified locally with a blocked gethostbyaddr:
+    the child hangs after socket-created, a raw socket binds, and
+    skipping getfqdn reaches READY); WHY the macOS 26 runner's
+    resolver hangs is still unproven. If a future CI failure
+    still stalls here, its last marker names the exact step
+    (setsockopt / socket-bound / getsockname / getfqdn) instead
+    of just 'inside server_bind()'."""
     return (
         f"srv = http.server.HTTPServer(('127.0.0.1', {port}), {handler_expr}, "
         "bind_and_activate=False)\n"
         "print('STARTUP socket-created', flush=True)\n"
-        "srv.server_bind()\n"
+        "import socket as _socket\n"
+        "if srv.allow_reuse_address and hasattr(_socket, 'SO_REUSEADDR'):\n"
+        "    srv.socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)\n"
+        "if srv.allow_reuse_port and hasattr(_socket, 'SO_REUSEPORT'):\n"
+        "    srv.socket.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEPORT, 1)\n"
+        "print('STARTUP setsockopt', flush=True)\n"
+        "srv.socket.bind(srv.server_address)\n"
+        "print('STARTUP socket-bound', flush=True)\n"
+        "srv.server_address = srv.socket.getsockname()\n"
+        "print('STARTUP getsockname', flush=True)\n"
+        "_host, _port = srv.server_address[:2]\n"
+        "srv.server_name = _socket.getfqdn(_host)\n"
+        "srv.server_port = _port\n"
+        "print('STARTUP getfqdn', flush=True)\n"
         "print('STARTUP bound', flush=True)\n"
         "srv.server_activate()\n"
         "print('STARTUP listening', flush=True)\n"
@@ -988,10 +1025,13 @@ def _raw_socket_after_import_script(port):
 def test_startup_markers_appear_in_order(tmp_path):
     """The test servers report each startup step with a flushed
     STARTUP marker — after the import, after the HTTPServer socket
-    is created, after bind, after listen — so the next macOS CI
-    failure names the exact step it stuck on instead of repeating
-    'stuck before listen' (CI 0.9.6: 11 tests, process alive, empty
-    stderr, READY never printed)."""
+    is created, after each step inside server_bind() (setsockopt,
+    socket bind, getsockname, getfqdn), after bind, after listen —
+    so the next macOS CI failure names the exact step it stuck on
+    instead of repeating 'stuck before listen' (CI 0.9.6: 11 tests,
+    process alive, empty stderr, READY never printed) or even
+    'inside server_bind()' (CI 0.9.7: 12 tests, socket-created
+    printed, bound never reached)."""
     port = free_port()
     proc, err_file, out_file = _start_server(tmp_path, "marked.py", http_server_script(port))
     try:
@@ -1002,6 +1042,10 @@ def test_startup_markers_appear_in_order(tmp_path):
         markers = [
             "STARTUP after-import",
             "STARTUP socket-created",
+            "STARTUP setsockopt",
+            "STARTUP socket-bound",
+            "STARTUP getsockname",
+            "STARTUP getfqdn",
             "STARTUP bound",
             "STARTUP listening",
             f"READY {port}",
