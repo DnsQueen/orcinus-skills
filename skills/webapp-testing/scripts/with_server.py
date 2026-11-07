@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — stdout/stderr are drained in background threads, readiness is an HTTP check with a liveness check, cleanup signals the whole process group, and the test command has a timeout. Round 6 (2026-11-07): readiness requires a 2xx response (any status used to count, so a 500/503 counted as ready); --ready-path is repeatable per server; a port already held by another service is rejected before starting; cleanup SIGKILLs the process group even when the leader exits promptly (a SIGTERM-ignoring child used to survive). Round-6 follow-up (2026-11-07): on Windows cleanup killed only the cmd.exe shell (no process groups there), so the server kept listening and the next run found the port held; cleanup now kills the whole tree with taskkill /PID <pid> /T /F. The rest is verbatim; see ATTRIBUTION.md.
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — stdout/stderr are drained in background threads, readiness is an HTTP check with a liveness check, cleanup signals the whole process group, and the test command has a timeout. Round 6 (2026-11-07): readiness requires a 2xx response (any status used to count, so a 500/503 counted as ready); --ready-path is repeatable per server; a port already held by another service is rejected before starting; cleanup SIGKILLs the process group even when the leader exits promptly (a SIGTERM-ignoring child used to survive). Round-6 follow-up (2026-11-07): on Windows cleanup killed only the cmd.exe shell (no process groups there), so the server kept listening and the next run found the port held; cleanup now kills the whole tree with taskkill /PID <pid> /T /F. Round-6 follow-up (2026-11-07): on macOS CI the servers never became ready with no output anywhere (8 tests, 'failed to start within 30s', process alive, empty stderr) — a server stuck before listen looked exactly like a slow one; a readiness failure now prints the server's recent output, so the next failure names whether the server printed anything at all. The rest is verbatim; see ATTRIBUTION.md.
 """
 Start one or more servers, wait for them to be ready, run a command, then clean up.
 
@@ -36,7 +36,11 @@ Rules this script follows (each one is a defect that was found and fixed):
   --ready-path is repeatable, one path per server (a single value
   applies to every server). While waiting, the script also checks
   that the server process is still alive — a server that exited
-  is a failure, not a reason to wait out the timeout.
+  is a failure, not a reason to wait out the timeout. When a server
+  never becomes ready, the failure prints the server's recent
+  output, so a server stuck before listen does not look like a
+  slow one (on macOS CI the servers never became ready with no
+  output anywhere, and the bare 'failed to start' named no cause).
 - Cleanup kills the whole process group, not just the shell. The server
   is started with shell=True (so commands with cd and && work), and
   terminating the shell leaves the real server running. Each server is
@@ -57,6 +61,7 @@ Rules this script follows (each one is a defect that was found and fixed):
   300s). A hung test cannot hang this script forever.
 """
 
+import collections
 import http.client
 import os
 import signal
@@ -68,14 +73,19 @@ import time
 import argparse
 
 
-def _drain(pipe, label, stream):
+def _drain(pipe, label, stream, tail=None):
     """Forward a server's output stream to this script's stream, line
     by line, in a background thread. This is what keeps the pipe from
-    filling up and blocking the server."""
+    filling up and blocking the server. Each line is also kept in
+    `tail` (a deque with a bound) when given, so a readiness failure
+    can report what the server actually printed instead of only
+    'failed to start'."""
     try:
         for line in pipe:
             stream.write(f"[{label}] {line}")
             stream.flush()
+            if tail is not None:
+                tail.append(f"[{label}] {line.rstrip()}")
     except (OSError, ValueError):
         pass
     finally:
@@ -336,11 +346,15 @@ def main():
                 start_new_session=(os.name == "posix"),
             )
             server_processes.append(process)
+            # Keep the server's recent output, so a readiness failure
+            # can report what the server printed (or that it printed
+            # nothing) instead of only 'failed to start'.
+            tail = collections.deque(maxlen=10)
             # Drain both pipes in background threads, so a log-heavy
             # server can never block on a full pipe.
-            threading.Thread(target=_drain, args=(process.stdout, label, sys.stdout),
+            threading.Thread(target=_drain, args=(process.stdout, label, sys.stdout, tail),
                              daemon=True).start()
-            threading.Thread(target=_drain, args=(process.stderr, label, sys.stderr),
+            threading.Thread(target=_drain, args=(process.stderr, label, sys.stderr, tail),
                              daemon=True).start()
 
             # Wait for this server to be ready
@@ -355,6 +369,12 @@ def main():
                 else:
                     print(f"Error: server failed to start on port {server['port']} "
                           f"within {args.timeout}s", file=sys.stderr)
+                if tail:
+                    print(f"Last output from {label}:", file=sys.stderr)
+                    for line in tail:
+                        print(f"  {line}", file=sys.stderr)
+                else:
+                    print(f"No output from {label}.", file=sys.stderr)
                 return 1
 
             print(f"Server ready on port {server['port']}")

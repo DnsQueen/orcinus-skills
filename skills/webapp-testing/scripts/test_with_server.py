@@ -55,13 +55,21 @@ def port_is_open(port):
 
 
 def http_server_script(port, log_lines=0):
-    """A small HTTP server that optionally prints many lines on startup."""
+    """A small HTTP server that optionally prints many lines on startup.
+
+    It prints READY once the HTTPServer constructor returns — bind
+    and listen are done by then — and before serve_forever: on macOS
+    CI the servers never listened with no output anywhere (CI 0.9.5,
+    8 tests), so the marker is what separates 'stuck before listen'
+    from 'listening but the port check fails'."""
     return (
         "import http.server, sys\n"
         f"for _ in range({log_lines}):\n"
         "    print('log line ' + 'x' * 60, flush=True)\n"
-        f"http.server.HTTPServer(('127.0.0.1', {port}), "
-        "http.server.SimpleHTTPRequestHandler).serve_forever()\n"
+        f"srv = http.server.HTTPServer(('127.0.0.1', {port}), "
+        "http.server.SimpleHTTPRequestHandler)\n"
+        f"print('READY {port}', flush=True)\n"
+        "srv.serve_forever()\n"
     )
 
 
@@ -238,37 +246,62 @@ def _status_server_script(port, status, healthy_path=None):
     return (
         "import http.server\n"
         + body
-        + f"http.server.HTTPServer(('127.0.0.1', {port}), H).serve_forever()\n"
+        + f"srv = http.server.HTTPServer(('127.0.0.1', {port}), H)\n"
+        + f"print('READY {port}', flush=True)\n"
+        + "srv.serve_forever()\n"
     )
 
 
 def _start_server(tmp_path, name, code):
     """Start a server script as a subprocess. Returns (proc,
-    err_file): the server's stderr goes to err_file, not DEVNULL —
-    a server that crashes on startup used to be indistinguishable
-    from a slow one, because its traceback was discarded (which is
-    what the macOS CI failures looked like: 'never listened' with
-    no server output anywhere in the log)."""
+    err_file, out_file): the server's stdout goes to out_file, not
+    DEVNULL, and its stderr to err_file — a server that crashes on
+    startup used to be indistinguishable from a slow one, because
+    its traceback was discarded (which is what the macOS CI failures
+    looked like: 'never listened' with no server output anywhere in
+    the log). The test servers also print READY after binding (see
+    http_server_script), so out_file is what separates 'stuck before
+    listen' from 'listening but the port check fails'."""
     script = tmp_path / name
     script.write_text(code, encoding="utf-8")
     err_file = tmp_path / (name + ".stderr")
-    with open(err_file, "w", encoding="utf-8") as err_handle:
+    out_file = tmp_path / (name + ".stdout")
+    with (
+        open(err_file, "w", encoding="utf-8") as err_handle,
+        open(out_file, "w", encoding="utf-8") as out_handle,
+    ):
         proc = subprocess.Popen(
             [sys.executable, str(script)],
-            stdout=subprocess.DEVNULL,
+            stdout=out_handle,
             stderr=err_handle,
         )
-    return proc, err_file
+    return proc, err_file, out_file
 
 
-def _server_detail(proc, err_file):
+def _server_detail(proc, err_file, out_file=None):
     """One line on why a server never listened: whether the process
-    is still alive or exited (with its code), plus the tail of its
-    stderr. A crash and a slow start must not look the same."""
+    is still alive or exited (with its code), whether it printed
+    READY after binding — READY means it was listening, so the port
+    check itself failed; no READY means it never reached listen —
+    plus the tails of its stdout and stderr. A crash and a slow
+    start must not look the same."""
     if proc.poll() is None:
         state = "process still alive"
     else:
         state = f"process exited with code {proc.returncode}"
+    if out_file is not None:
+        try:
+            out = out_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            out = ""
+        out_lines = [line for line in out.splitlines() if line.strip()]
+        if any(line.startswith("READY") for line in out_lines):
+            state += "; server printed READY (it was listening)"
+        else:
+            state += "; server never printed READY (stuck before listen)"
+        tail = out_lines[-2:]
+        if tail:
+            state += "; stdout: " + " | ".join(tail)
     try:
         err = err_file.read_text(encoding="utf-8", errors="replace")
     except OSError:
@@ -306,12 +339,12 @@ def test_http_ready_requires_2xx(tmp_path):
         (503, False),
     ):
         port = free_port()
-        proc, err_file = _start_server(
+        proc, err_file, out_file = _start_server(
             tmp_path, f"s{status}.py", _status_server_script(port, status)
         )
         try:
             assert _wait_port_open(port), (
-                f"server on {port} never listened ({_server_detail(proc, err_file)})"
+                f"server on {port} never listened ({_server_detail(proc, err_file, out_file)})"
             )
             assert with_server._http_ready(port, "/health") is expected, f"status {status}"
         finally:
@@ -324,10 +357,10 @@ def test_ready_status_range_is_configurable(tmp_path):
     whose health endpoint answers 503 while warming up can say so
     explicitly instead of the gate silently accepting every status."""
     port = free_port()
-    proc, err_file = _start_server(tmp_path, "s503.py", _status_server_script(port, 503))
+    proc, err_file, out_file = _start_server(tmp_path, "s503.py", _status_server_script(port, 503))
     try:
         assert _wait_port_open(port), (
-            f"server on {port} never listened ({_server_detail(proc, err_file)})"
+            f"server on {port} never listened ({_server_detail(proc, err_file, out_file)})"
         )
         assert with_server._http_ready(port, "/health", ok_statuses={503}) is True
         assert with_server._http_ready(port, "/health", ok_statuses={200}) is False
@@ -345,13 +378,13 @@ def test_busy_port_is_rejected_before_starting(tmp_path):
     The run must fail before starting, and the test command must
     never run against the wrong service."""
     port = free_port()
-    proc, err_file = _start_server(
+    proc, err_file, out_file = _start_server(
         tmp_path, "other.py", _status_server_script(port, 503, healthy_path="/health")
     )
     marker = tmp_path / "ran.txt"
     try:
         assert _wait_port_open(port), (
-            f"server on {port} never listened ({_server_detail(proc, err_file)})"
+            f"server on {port} never listened ({_server_detail(proc, err_file, out_file)})"
         )
         rc, out, err = run_with_server(
             "sleep 10",
@@ -492,8 +525,10 @@ def _termination_resistant_child_script(port, pidfile, os_name=os.name):
         imports
         + spawn
         + f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
-        + f"http.server.HTTPServer(('127.0.0.1', {port}), "
-        "http.server.SimpleHTTPRequestHandler).serve_forever()\n"
+        + f"srv = http.server.HTTPServer(('127.0.0.1', {port}), "
+        "http.server.SimpleHTTPRequestHandler)\n"
+        + f"print('READY {port}', flush=True)\n"
+        + "srv.serve_forever()\n"
     )
 
 
@@ -545,16 +580,74 @@ def test_crashing_server_reports_its_stderr(tmp_path):
     (8 tests, 'server failed to start within 15s', no server output
     anywhere in the log)."""
     port = free_port()
-    proc, err_file = _start_server(tmp_path, "crash.py", "raise RuntimeError('boom')\n")
+    proc, err_file, out_file = _start_server(tmp_path, "crash.py", "raise RuntimeError('boom')\n")
     try:
         assert not _wait_port_open(port, timeout=5)
-        detail = _server_detail(proc, err_file)
+        detail = _server_detail(proc, err_file, out_file)
         assert "exited" in detail
         assert "boom" in detail
     finally:
         if proc.poll() is None:
             proc.terminate()
         proc.wait(timeout=10)
+
+
+def test_server_detail_reports_ready_marker(tmp_path):
+    """A server that bound and printed READY must say so in the
+    detail: READY separates 'stuck before listen' from 'listening
+    but the port check fails' — on macOS CI the two looked
+    identical ('never listened', process alive, empty stderr;
+    CI 0.9.5, macos job, 8 tests)."""
+    port = free_port()
+    proc, err_file, out_file = _start_server(tmp_path, "ready.py", _status_server_script(port, 200))
+    try:
+        assert _wait_port_open(port), (
+            f"server on {port} never listened ({_server_detail(proc, err_file, out_file)})"
+        )
+        assert "printed READY" in _server_detail(proc, err_file, out_file)
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_server_detail_reports_missing_ready_marker(tmp_path):
+    """A process that is alive but never printed READY never reached
+    listen — the detail must say so, instead of the bare 'process
+    still alive' that hid this on macOS CI."""
+    port = free_port()
+    proc, err_file, out_file = _start_server(tmp_path, "stuck.py", "import time; time.sleep(30)\n")
+    try:
+        assert not _wait_port_open(port, timeout=5)
+        detail = _server_detail(proc, err_file, out_file)
+        assert "still alive" in detail
+        assert "never printed READY" in detail
+    finally:
+        if proc.poll() is None:
+            proc.terminate()
+        proc.wait(timeout=10)
+
+
+def test_with_server_failure_reports_server_output(tmp_path):
+    """When a server never becomes ready, the failure must name what
+    the server actually did: with_server.py used to report only
+    'failed to start within Ns', so a server stuck before listen
+    looked exactly like a slow one (CI 0.9.5, macos job). The
+    server's recent output is now printed with the failure."""
+    port = free_port()
+    server = tmp_path / "server.py"
+    server.write_text(
+        "print('marker-output-before-stall', flush=True)\nimport time; time.sleep(60)\n",
+        encoding="utf-8",
+    )
+    rc, out, err = run_with_server(
+        f"{sys.executable} {server}",
+        port,
+        [sys.executable, "-c", "print('ran')"],
+        timeout=3,
+    )
+    assert rc == 1, out
+    assert "failed to start" in err
+    assert "marker-output-before-stall" in err
 
 
 def test_sigterm_child_script_is_windows_compatible(tmp_path):
@@ -569,10 +662,10 @@ def test_sigterm_child_script_is_windows_compatible(tmp_path):
     assert "preexec_fn" not in script
     assert "['sleep'" not in script
     assert "time.sleep(120)" in script
-    proc, err_file = _start_server(tmp_path, "win-server.py", script)
+    proc, err_file, out_file = _start_server(tmp_path, "win-server.py", script)
     try:
         assert _wait_port_open(port), (
-            f"server on {port} never listened ({_server_detail(proc, err_file)})"
+            f"server on {port} never listened ({_server_detail(proc, err_file, out_file)})"
         )
         assert int(pidfile.read_text(encoding="utf-8")) > 0
     finally:
@@ -602,8 +695,10 @@ def _tree_server_script(port, pidfile):
         "child = subprocess.Popen([sys.executable, '-c', "
         "'import time; time.sleep(120)'])\n"
         f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
-        f"http.server.HTTPServer(('127.0.0.1', {port}), "
-        "http.server.SimpleHTTPRequestHandler).serve_forever()\n"
+        f"srv = http.server.HTTPServer(('127.0.0.1', {port}), "
+        "http.server.SimpleHTTPRequestHandler)\n"
+        f"print('READY {port}', flush=True)\n"
+        "srv.serve_forever()\n"
     )
 
 
