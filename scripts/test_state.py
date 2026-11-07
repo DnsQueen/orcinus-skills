@@ -461,6 +461,152 @@ def test_dirty_check_skipped_for_older_revision(tmp_path):
     assert data["stage"] == "VERIFIED"
 
 
+def _incomplete_bundle_dict():
+    """A valid INCOMPLETE bundle (no plan, with a stop_reason):
+    the validator accepts it, but it is not evidence for VERIFIED
+    — only a PASS bundle is."""
+    bundle = _pass_bundle_dict()
+    bundle["verdict"] = "INCOMPLETE"
+    bundle.pop("verification_plan")
+    bundle["stop_reason"] = "Verification stopped: the test runner was unavailable."
+    return bundle
+
+
+def test_verified_refuses_missing_bundle_file(tmp_path):
+    """F-07: the old repro (VERIFIED with ./bundle.json
+    nonexistent, exit 0) is now refused — the bundle path must
+    name an existing file."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    with pytest.raises(ValueError, match="does not exist"):
+        st.transition(
+            data, "VERIFIED", revision, repo=repo, evidence_bundle="docs/verification/nope.json"
+        )
+
+
+def test_verified_refuses_incomplete_bundle(tmp_path):
+    """A bundle whose verdict is INCOMPLETE is a valid bundle —
+    and not evidence for VERIFIED. Only a PASS bundle satisfies
+    the gate."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    bundle = _write_bundle(repo, "incomplete.json", _incomplete_bundle_dict())
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    with pytest.raises(ValueError, match="not PASS"):
+        st.transition(data, "VERIFIED", revision, repo=repo, evidence_bundle=bundle)
+
+
+def test_whitespace_only_evidence_rejected(tmp_path):
+    """N2: a whitespace-only evidence value passes a truthiness
+    test and names no file — it is rejected, whether passed with
+    the flag or stored in the state."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    with pytest.raises(ValueError, match="evidence_bundle"):
+        st.transition(data, "VERIFIED", revision, repo=repo, evidence_bundle=" ")
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    data["evidence_bundle"] = "   "
+    with pytest.raises(ValueError, match="evidence_bundle"):
+        st.transition(data, "VERIFIED", revision, repo=repo)
+
+
+def test_stored_evidence_bundle_rule(tmp_path):
+    """N2, the stored-bundle rule: a stored evidence_bundle may
+    satisfy the VERIFIED gate with no --evidence flag — but only
+    if it names an existing file that validates with verdict PASS.
+    A stale stored path (missing file, non-PASS bundle) refuses
+    the transition; it never silently satisfies the gate. The flag
+    is required only when the stored value is absent or blank."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    # (a) Stored valid PASS bundle, no flag: accepted.
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    data["evidence_bundle"] = _write_bundle(repo)
+    data = st.transition(data, "VERIFIED", revision, repo=repo)
+    assert data["stage"] == "VERIFIED"
+    # (b) Stored path names no file: refused.
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    data["evidence_bundle"] = "docs/verification/nope.json"
+    with pytest.raises(ValueError, match="does not exist"):
+        st.transition(data, "VERIFIED", revision, repo=repo)
+    # (c) Stored bundle is INCOMPLETE, not PASS: refused.
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    data["evidence_bundle"] = _write_bundle(repo, "incomplete.json", _incomplete_bundle_dict())
+    with pytest.raises(ValueError, match="not PASS"):
+        st.transition(data, "VERIFIED", revision, repo=repo)
+    # The flag still wins when given: a valid flag bundle accepts
+    # even when the stored value is stale.
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    data["evidence_bundle"] = "docs/verification/nope.json"
+    data = st.transition(data, "VERIFIED", revision, repo=repo, evidence_bundle=_write_bundle(repo))
+    assert data["stage"] == "VERIFIED"
+    assert data["evidence_bundle"] == "docs/verification/x.json"
+
+
+def test_validate_flags_evidence_problems(tmp_path):
+    """N2: `validate` shares the fix — evidence referenced by the
+    state must exist, and a VERIFIED state must point at a bundle
+    that validates with verdict PASS."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _at_stage(repo, "VERIFIED", revision, digest)
+    assert st.validate_state(data, repo=repo) == []
+    data = _at_stage(repo, "VERIFIED", revision, digest)
+    data["evidence_bundle"] = "docs/verification/nope.json"
+    assert any("does not exist" in p for p in st.validate_state(data, repo=repo))
+    data = _at_stage(repo, "VERIFIED", revision, digest)
+    data["evidence_bundle"] = _write_bundle(repo, "incomplete.json", _incomplete_bundle_dict())
+    assert any("not PASS" in p for p in st.validate_state(data, repo=repo))
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    data["evidence_bundle"] = "docs/verification/nope.json"
+    assert any("does not exist" in p for p in st.validate_state(data, repo=repo))
+    data = _building(digest=digest, revision=revision)
+    data["evidence_bundle"] = "   "
+    assert any("blank" in p for p in st.validate_state(data, repo=repo))
+
+
+def test_release_ready_uses_computed_digest(tmp_path):
+    """F-07: RELEASE_READY keeps the approval check, now against
+    the COMPUTED digest — an approval bound to any other digest
+    does not release, and an approval does not survive a content
+    change."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _at_stage(repo, "AWAITING_APPROVAL", revision, digest)
+    data["approval"] = {
+        "approved_by": "x",
+        "revision": revision,
+        "content_digest": "sha256:" + "c" * 64,  # well-formed, not this tree
+        "artifact": "a.tgz",
+        "at": "2026-11-07T00:00:00+00:00",
+    }
+    with pytest.raises(ValueError, match="approval"):
+        st.transition(data, "RELEASE_READY", revision, repo=repo)
+    data["approval"]["content_digest"] = digest
+    new_revision = _commit_change(repo)
+    with pytest.raises(ValueError, match="BUILDING"):
+        st.transition(data, "RELEASE_READY", new_revision, repo=repo)
+    data = st.transition(data, "RELEASE_READY", revision, repo=repo)
+    assert data["stage"] == "RELEASE_READY"
+
+
 def test_cli_validate_and_transition(tmp_path, capsys):
     repo = _repo(tmp_path)
     revision = _head(repo)

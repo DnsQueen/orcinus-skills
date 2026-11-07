@@ -42,6 +42,7 @@ import json
 import re
 import subprocess
 import sys
+import types
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,6 +57,23 @@ SCHEMA_PATH = ROOT / "scripts" / "state_schema.json"
 # taken from the caller or the state file.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from content_digest import ContentDigestError, content_digest  # noqa: E402
+
+# The evidence validator lives in the orcinus-verify skill folder.
+# It is imported, like the digest — but note the asymmetry: the
+# digest is the trusted value (computed from git in this process),
+# while the validator is only a checker (it judges whether a
+# bundle file is a valid, consistent PASS bundle). A validator bug
+# can refuse a good bundle, never mint a digest. The import is
+# guarded so state.py still imports when the skill folder is
+# absent (a lone copy), mirroring validate_evidence.py's own
+# guarded record_check import; with no validator available,
+# VERIFIED is refused instead of passed.
+sys.path.insert(0, str(ROOT / "skills" / "orcinus-verify" / "scripts"))
+_validate_evidence: types.ModuleType | None = None
+try:
+    import validate_evidence as _validate_evidence  # type: ignore[import-not-found]  # noqa: E402
+except ImportError:
+    pass
 
 STAGES = ("BUILDING", "VERIFYING", "BLOCKED", "VERIFIED", "AWAITING_APPROVAL", "RELEASE_READY")
 
@@ -162,6 +180,15 @@ def validate_state(data, repo=None):
                 ):
                     problems.append(f"history[{i}].content_digest must be a sha256 digest")
     if repo is not None:
+        # Evidence referenced by the state must exist; a VERIFIED
+        # state must point at a bundle that validates with verdict
+        # PASS (Rule 1: a state that says VERIFIED without an
+        # evidence_bundle that validates is corrupt, not verified).
+        problems.extend(
+            _evidence_problems(
+                data.get("evidence_bundle"), repo, require_valid=(stage == "VERIFIED")
+            )
+        )
         # Recompute, never trust: the stored digest is compared
         # with the digest of the revision's tree. A mismatch means
         # the file was edited by hand or history was rewritten —
@@ -186,6 +213,44 @@ def validate_state(data, repo=None):
                         "the state file was edited by hand, or history was rewritten"
                     )
     return problems
+
+
+def _evidence_problems(value, repo, require_valid):
+    """Problems with an evidence_bundle value. [] when the value
+    is None (no bundle recorded). A blank value, a path that names
+    no file, an unreadable bundle, or — when `require_valid` — a
+    bundle the validator rejects or one whose verdict is not PASS,
+    is a problem. Paths resolve against `repo`, never the working
+    directory."""
+    if value is None:
+        return []
+    if not isinstance(value, str) or not value.strip():
+        return ["evidence_bundle must not be blank"]
+    path = Path(value)
+    if not path.is_absolute():
+        path = repo / path
+    if not path.is_file():
+        return [f"evidence_bundle {value!r} does not exist"]
+    if not require_valid:
+        return []
+    if _validate_evidence is None:
+        return ["evidence_bundle: validator unavailable, cannot verify the bundle"]
+    try:
+        bundle = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+        return [f"evidence_bundle {value!r} could not be read as JSON: {e}"]
+    if not isinstance(bundle, dict):
+        return [f"evidence_bundle {value!r} is not a JSON object"]
+    try:
+        schema = _validate_evidence.load_schema(_validate_evidence.SCHEMA_PATH)
+        problems = _validate_evidence.validate_bundle(bundle, schema, bundle_dir=path.parent)
+    except (ValueError, OSError, RecursionError) as e:
+        return [f"evidence_bundle {value!r}: validator error: {e}"]
+    if problems:
+        return [f"evidence_bundle {value!r} does not validate: {'; '.join(problems)}"]
+    if bundle.get("verdict") != "PASS":
+        return [f"evidence_bundle {value!r} has verdict {bundle.get('verdict')!r}, not PASS"]
+    return []
 
 
 def _tree_is_dirty(repo, revision):
@@ -249,12 +314,28 @@ def transition(
     bundle, or RELEASE_READY without an approval bound to the
     recomputed digest. `expect_digest`, when given, only asserts
     against the recomputed digest — it is never stored. VERIFIED
-    and RELEASE_READY also refuse on a dirty tree at HEAD: the
-    digest describes committed content only, and `ls-tree` cannot
-    see untracked files, so the tree is checked separately. The history
+    requires an evidence bundle that exists and validates with
+    verdict PASS (the --evidence flag, or the stored value when
+    it names an existing validating file — a stale stored path
+    never silently satisfies the gate). An --evidence flag
+    replaces the stored bundle, so a stale stored path does not
+    block a transition that supplies a fresh one; the flag's own
+    bundle is checked in the VERIFIED gate. VERIFIED and
+    RELEASE_READY also refuse on a dirty tree at HEAD: the digest
+    describes committed content only, and `ls-tree` cannot see
+    untracked files, so the tree is checked separately. The history
     is append-only: the old entries are kept verbatim and one entry
     is added."""
     problems = validate_state(data, repo=repo)
+    if evidence_bundle is not None:
+        # The flag replaces the stored bundle: a stale stored path
+        # must not block a transition that supplies a fresh bundle
+        # (re-verifying after the old bundle was deleted is the
+        # repair path, and the new state records the flag's value).
+        # Every _evidence_problems message starts with
+        # "evidence_bundle", so this drops exactly those — the
+        # flag's own bundle is checked in the VERIFIED gate below.
+        problems = [p for p in problems if not p.startswith("evidence_bundle")]
     if problems:
         raise ValueError(f"invalid state: {'; '.join(problems)}")
     if to_stage not in STAGES:
@@ -288,8 +369,31 @@ def transition(
             "(uncommitted changes outside .orcinus/ and docs/verification/) — "
             "commit or stash first, the digest describes committed content only"
         )
-    if to_stage == "VERIFIED" and not (evidence_bundle or data.get("evidence_bundle")):
-        raise ValueError("VERIFIED requires evidence_bundle")
+    if to_stage == "VERIFIED":
+        # The stored-bundle rule (N2): a stored evidence_bundle
+        # may satisfy the gate with no --evidence flag — but only
+        # if it names an existing file that validates with verdict
+        # PASS. A stale stored path (missing file, invalid bundle,
+        # non-PASS verdict) refuses the transition; it never
+        # silently satisfies the gate. The flag is required only
+        # when the stored value is absent or blank.
+        if evidence_bundle is not None:
+            candidate = evidence_bundle
+            source = "--evidence"
+        else:
+            candidate = data.get("evidence_bundle")
+            source = "the stored evidence_bundle"
+        if candidate is None or (isinstance(candidate, str) and not candidate.strip()):
+            raise ValueError(
+                "VERIFIED requires evidence_bundle (--evidence <bundle path>; "
+                "no bundle is recorded in the state)"
+            )
+        problems = _evidence_problems(candidate, repo, require_valid=True)
+        if problems:
+            raise ValueError(
+                f"VERIFIED requires a valid evidence bundle ({source} {candidate!r}): "
+                f"{'; '.join(problems)}"
+            )
     if to_stage == "RELEASE_READY":
         approval = data.get("approval")
         if not approval or approval.get("content_digest") != computed:
