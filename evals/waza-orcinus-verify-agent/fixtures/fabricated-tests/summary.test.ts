@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { weeklySummary } from "../src/summary.js";
+import { weeklySummary } from "./summary.js";
 
 test("weekly summary for [20, 30, 30] of 100", () => {
   assert.deepEqual(weeklySummary([20, 30, 30], 100), { total: 80, remaining: 20, warned: true, percent: 80 });

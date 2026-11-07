@@ -30,7 +30,6 @@ inputs:
     - path: test-log.txt
 expected:
   output_contains:
-    - '"verdict": "FAIL"'
     - "summary.ts"
   outcomes:
     - type: task_completed

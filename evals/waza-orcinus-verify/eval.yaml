@@ -1,5 +1,5 @@
 name: orcinus-verify-eval
-description: Graded eval for the orcinus-verify skill (flagship verification).
+description: Graded eval for the orcinus-verify skill (flagship verification). The mock executor echoes the prompt, so a pass proves the harness runs, never the skill.
 skill: orcinus-verify
 schemaVersion: "1.0"
 version: "1.0"

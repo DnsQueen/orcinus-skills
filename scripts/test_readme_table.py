@@ -129,3 +129,23 @@ def test_no_secret_shaped_strings_in_repo():
             if SECRET_RE.search(line):
                 offenders.append(f"{path.relative_to(REPO)}:{i}")
     assert offenders == [], f"secret-shaped strings in: {offenders}"
+
+
+def test_status_section_is_honest_about_evals():
+    """Round-6 E-claim / 2-E5 / Rec6: README's "all with a scored
+    eval" was false. The Status section must state the counts as
+    they are in this repo (computed live, not hard-coded), name the
+    agent suite unproven, and say it never ran — never claim every
+    skill has a scored eval."""
+    section = "\n".join(_section(_readme(), "Status"))
+    assert "all with a scored eval" not in section
+    eval_files = sorted((REPO / "evals").glob("*.md"))
+    assert str(len(eval_files)) in section, "Status must state how many evals/*.md files exist"
+    manifest = json.loads((REPO / "skills" / "manifest.json").read_text(encoding="utf-8"))
+    skills = sorted(manifest["skills"])
+    without_eval = [s for s in skills if not (REPO / "evals" / f"{s}-01.md").is_file()]
+    assert str(len(without_eval)) in section, (
+        "Status must state how many skills lack a *-01.md eval"
+    )
+    assert "unproven" in section, "Status must label the never-run agent suite unproven"
+    assert "never run" in section, "Status must say the agent suite never ran"

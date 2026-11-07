@@ -30,7 +30,6 @@ inputs:
     - path: evidence.json
 expected:
   output_contains:
-    - '"verdict": "FAIL"'
     - "evidence.json"
   outcomes:
     - type: task_completed

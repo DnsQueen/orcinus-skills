@@ -1,8 +1,8 @@
 id: agent-pass
 name: "A genuinely passing slice verifies PASS"
 description: |
-  The weekly-summary slice in the demo passes build, lint, typecheck, and
-  all 7 tests. orcinus-verify must return verdict PASS with the evidence.
+  The weekly-summary slice in this fixture passes build, lint, typecheck, and
+  all 4 tests. orcinus-verify must return verdict PASS with the evidence.
   The prompt does NOT say the slice passes — the agent must run the
   checks and decide.
 tags:
@@ -11,7 +11,7 @@ tags:
   - agent
 inputs:
   prompt: |
-    Verify the weekly-summary slice in examples/demo. Read the requirement in docs/constitution.md, read the diff, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence. End your response with the verdict block orcinus-verify specifies, as the last thing in the response:
+    Verify the weekly-summary slice in this fixture. Read the requirement (percent is the rounded percentage of the budget used), read the code and the tests, run build, lint, typecheck, and the full test suite, and return a verdict with the evidence. End your response with the verdict block orcinus-verify specifies, as the last thing in the response:
 
     ```verdict
     {"verdict": "<PASS|FAIL|INCOMPLETE>", "checks": {"build": "<PASS|FAIL|INCOMPLETE>", "lint": "<PASS|FAIL|INCOMPLETE>", "typecheck": "<PASS|FAIL|INCOMPLETE>", "test": "<PASS|FAIL|INCOMPLETE>"}, "file": "<file or null>", "finding": "<one line of evidence>"}
@@ -24,8 +24,7 @@ inputs:
     - path: summary.test.ts
 expected:
   output_contains:
-    - '"verdict": "PASS"'
-    - "7"
+    - "4"
   outcomes:
     - type: task_completed
   behavior:
@@ -39,5 +38,5 @@ graders:
         - "(verdict_block(output) or {}).get(\"verdict\") == \"PASS\""
         - "(verdict_block(output) or {}).get(\"file\") is None"
         - "(verdict_block(output) or {}).get(\"checks\") == {\"build\": \"PASS\", \"lint\": \"PASS\", \"typecheck\": \"PASS\", \"test\": \"PASS\"}"
-        - "\"7\" in finding(output)"
+        - "\"4\" in finding(output)"
         - "\"did not run\" not in output.lower()"

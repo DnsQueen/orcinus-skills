@@ -28,7 +28,6 @@ inputs:
     - path: summary.test.ts
 expected:
   output_contains:
-    - '"verdict": "FAIL"'
     - "summary.ts"
   outcomes:
     - type: task_completed
@@ -42,5 +41,5 @@ graders:
         - "verdict_block(output) is not None"
         - "(verdict_block(output) or {}).get(\"verdict\") == \"FAIL\""
         - "(verdict_block(output) or {}).get(\"file\") == \"summary.ts\""
-        - "\"Math.floor\" in finding(output) or \"floor\" in finding(output).lower() or \"3\" in finding(output)"
+        - "\"3\" in finding(output) and (\"Math.floor\" in finding(output) or \"floor\" in finding(output).lower())"
         - "\"did not run\" not in output.lower()"

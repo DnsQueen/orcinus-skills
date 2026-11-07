@@ -11,6 +11,7 @@ Run: python3 -m pytest scripts/test_clean_copy_check.py -q
 """
 
 import hashlib
+import importlib.util
 import json
 import shutil
 import signal
@@ -19,10 +20,27 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import clean_copy_check  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
+
+# Round-6 2-E4: the clean-copy gates run ruff/pytest/mypy as
+# subprocesses of this Python. In an environment without them the
+# gates fail — an environment fact, not a code failure — so the
+# tests that need all seven gates to pass skip there instead of
+# failing. The gates themselves still fail (with a clear "not
+# installed" detail) when a tool is missing; see
+# test_gates_report_missing_tools_without_crashing.
+_MISSING_TOOLS = [
+    name for name in ("ruff", "pytest", "mypy") if importlib.util.find_spec(name) is None
+]
+requires_tools = pytest.mark.skipif(
+    bool(_MISSING_TOOLS),
+    reason=f"clean-copy gates need installed tools; missing: {', '.join(_MISSING_TOOLS)}",
+)
 
 
 def _fixture_repo(tmp_path, sleep=0):
@@ -87,6 +105,7 @@ def test_copy_excludes_venvs_and_caches(tmp_path):
     assert (dest / "test_stub.py").is_file()
 
 
+@requires_tools
 def test_working_tree_mode_leaves_source_untouched(tmp_path):
     """A normal run must not rename, move, or change the source at
     any point — the before/after snapshot must be identical, and no
@@ -134,6 +153,7 @@ def _git_repo(tmp_path):
     return src
 
 
+@requires_tools
 def test_release_mode_uses_committed_tree(tmp_path, capsys):
     """--mode release tests the committed revision, not the working
     tree: the uncommitted file must not reach the clean copy."""
@@ -204,6 +224,7 @@ def test_corrupt_manifest_fails_the_step_not_the_run(tmp_path, capsys):
     assert "all manifest skills resolve" in captured.out
 
 
+@requires_tools
 def test_missing_manifest_in_copy_fails_the_step(tmp_path):
     """A clean copy without skills/manifest.json must fail its step,
     not raise FileNotFoundError (R3 #3)."""
@@ -211,6 +232,29 @@ def test_missing_manifest_in_copy_fails_the_step(tmp_path):
     (dest / "skills" / "manifest.json").unlink()
     failed, total = clean_copy_check._gates(dest)
     assert failed == ["all manifest skills resolve"]
+    assert total == 7
+
+
+def test_gates_report_missing_tools_without_crashing(tmp_path, monkeypatch):
+    """2-E4: when ruff/pytest/mypy are not installed, exactly those
+    four gates fail with a clear "not installed" detail — the same
+    four failures a tool-less environment showed — and the run
+    stays controlled (a failed-gates list, not a traceback). The
+    tool lookups are faked here so the test is hermetic: it pins
+    the gate behaviour, it does not need the tools to be absent."""
+    dest = _fixture_repo(tmp_path)
+    orig_run = clean_copy_check._run
+
+    def fake(argv, cwd, timeout=300):
+        if "-m" in argv:
+            tool = argv[argv.index("-m") + 1]
+            if tool in ("ruff", "pytest", "mypy"):
+                return 1, f"{argv[0]}: No module named {tool}"
+        return orig_run(argv, cwd, timeout)
+
+    monkeypatch.setattr(clean_copy_check, "_run", fake)
+    failed, total = clean_copy_check._gates(dest)
+    assert failed == ["ruff", "script tests", "ruff format", "mypy"]
     assert total == 7
 
 

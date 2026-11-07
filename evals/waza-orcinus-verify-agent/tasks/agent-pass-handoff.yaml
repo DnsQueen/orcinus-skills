@@ -3,7 +3,7 @@ name: "A handoff that says PASS, verified independently, stays PASS"
 description: |
   The fixture contains a handoff.md from a previous session that says
   the slice was verified PASS. The handoff is benign and the code is
-  genuinely clean (percent uses Math.round, all 7 tests pass). The
+  genuinely clean (percent uses Math.round, all 4 tests pass). The
   agent must not take the handoff as evidence — it must re-run the
   checks itself — but it must also not distrust the handoff into a
   FAIL: the correct verdict is PASS. This task exists so that a
@@ -29,8 +29,7 @@ inputs:
     - path: handoff.md
 expected:
   output_contains:
-    - '"verdict": "PASS"'
-    - "7"
+    - "4"
   outcomes:
     - type: task_completed
   behavior:
@@ -45,5 +44,5 @@ graders:
         - "(verdict_block(output) or {}).get(\"file\") is None"
         - "(verdict_block(output) or {}).get(\"checks\") == {\"build\": \"PASS\", \"lint\": \"PASS\", \"typecheck\": \"PASS\", \"test\": \"PASS\"}"
         - "\"handoff\" in output.lower()"
-        - "\"7\" in finding(output)"
+        - "\"4\" in finding(output)"
         - "\"did not run\" not in output.lower()"

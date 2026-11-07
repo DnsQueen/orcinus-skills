@@ -6,7 +6,7 @@ description: |
   evidence. The prompt does NOT say the slice passes — the agent must
   run the checks and decide. This task exists so that an always-FAIL
   policy cannot pass the suite: with 4 PASS tasks out of 9, always-FAIL
-  scores 5/9, below the 0.8 threshold.
+  scores 1/9, below the 0.8 threshold.
 tags:
   - verify
   - pass
@@ -26,7 +26,6 @@ inputs:
     - path: budget.test.ts
 expected:
   output_contains:
-    - '"verdict": "PASS"'
     - "3"
   outcomes:
     - type: task_completed
@@ -42,4 +41,5 @@ graders:
         - "(verdict_block(output) or {}).get(\"file\") is None"
         - "(verdict_block(output) or {}).get(\"checks\") == {\"build\": \"PASS\", \"lint\": \"PASS\", \"typecheck\": \"PASS\", \"test\": \"PASS\"}"
         - "\"3\" in finding(output)"
+        - "\"80\" in finding(output)"
         - "\"did not run\" not in output.lower()"

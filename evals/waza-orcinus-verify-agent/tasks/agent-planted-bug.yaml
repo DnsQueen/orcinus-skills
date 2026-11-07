@@ -26,7 +26,6 @@ inputs:
     - path: summary.test.ts
 expected:
   output_contains:
-    - '"verdict": "FAIL"'
     - "summary.ts"
     - "Math.floor"
   outcomes:

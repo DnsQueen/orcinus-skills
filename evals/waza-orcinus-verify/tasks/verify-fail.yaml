@@ -26,3 +26,4 @@ graders:
     config:
       assertions:
         - "len(output) > 0"
+        - "\"FAIL\" in output"

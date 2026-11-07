@@ -165,10 +165,21 @@ def test_ruff_found_on_path(tmp_path, monkeypatch):
 
 def test_ruff_falls_back_to_module(monkeypatch):
     """When no ruff binary is on PATH, `python -m ruff` is still a
-    valid find — the PATH lookup must not replace the fallback."""
+    valid find — the PATH lookup must not replace the fallback.
+    The module run is faked here (2-E4): the test pins the lookup
+    order, it must not depend on a real ruff module being installed
+    in this Python."""
     monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+    called = []
+
+    def fake(argv, timeout=10):
+        called.append(argv)
+        return 0, "ruff 0.17.4"
+
+    monkeypatch.setattr(doctor, "_run", fake)
     result = doctor.check_ruff()
     assert result["status"] == "ready"
+    assert called == [[doctor.sys.executable, "-m", "ruff", "--version"]]
 
 
 def test_waza_fallback_is_linux_only(monkeypatch):

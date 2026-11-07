@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { budgetWarning } from "../src/budget.js";
+import { budgetWarning } from "./budget.js";
 
 test("no warning below 80% of budget", () => {
   assert.equal(budgetWarning(79, 100), false);

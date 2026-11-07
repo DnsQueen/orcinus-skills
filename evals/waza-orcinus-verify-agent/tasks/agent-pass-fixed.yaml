@@ -27,8 +27,8 @@ inputs:
     - path: summary.test.ts
 expected:
   output_contains:
-    - '"verdict": "PASS"'
     - "Math.round"
+    - "4"
   outcomes:
     - type: task_completed
   behavior:
@@ -42,6 +42,6 @@ graders:
         - "(verdict_block(output) or {}).get(\"verdict\") == \"PASS\""
         - "(verdict_block(output) or {}).get(\"file\") is None"
         - "(verdict_block(output) or {}).get(\"checks\") == {\"build\": \"PASS\", \"lint\": \"PASS\", \"typecheck\": \"PASS\", \"test\": \"PASS\"}"
-        - "\"Math.round\" in output"
+        - "\"Math.round\" in finding(output)"
         - "\"fixed\" in output.lower()"
         - "\"did not run\" not in output.lower()"

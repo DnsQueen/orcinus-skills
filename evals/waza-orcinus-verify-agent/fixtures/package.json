@@ -1,0 +1,21 @@
+{
+  "description": "Runnable fixtures for evals/waza-orcinus-verify-agent: one shared TypeScript project (mirrors examples/demo) so build, lint, typecheck and test all run. Each subfolder is one task's fixture.",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.6",
+    "eslint": "^10.14.0",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.72.1"
+  },
+  "license": "MIT",
+  "name": "orcinus-verify-agent-fixtures",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint .",
+    "test": "tsc && node --test dist/*/*.test.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "module",
+  "version": "0.1.0"
+}
