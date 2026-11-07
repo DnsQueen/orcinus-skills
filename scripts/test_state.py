@@ -1,17 +1,21 @@
 """Tests for scripts/state.py + scripts/state_schema.json — the
-.orcinus/state.json schema and transition tool (round 6, 2-R2).
+.orcinus/state.json schema and transition tool (round 6, 2-R2;
+round 7, F-07: the digest is recomputed, never caller-supplied).
 
 The state file was spec-only (docs/project-state.md + a digest
 helper); nothing validated it or enforced a transition. The schema
 is the declarative contract, this module enforces it plus the
 transition rules. This is a local check, not the v1.1 tamper-proof
 enforcement layer — anyone with write access can still edit the
-file (project-state.md Rule 4).
+file (project-state.md Rule 4) — but the next `validate` now
+DETECTS a hand-edited digest, because the digest is recomputed
+from the revision's tree and compared with the stored value.
 
 Run: python3 -m pytest scripts/test_state.py -q
 """
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,6 +23,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import state as st  # noqa: E402
+import content_digest as cd  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 DIGEST = "sha256:" + "a" * 64
@@ -26,13 +31,93 @@ DIGEST2 = "sha256:" + "b" * 64
 REV = "b2809bd64f5679ce56eb79a239109978f0c9f06a"
 
 
-def _building():
+def _git(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+
+
+def _repo(tmp_path):
+    """A real git repo with one committed file: transitions compute
+    their digest from this, never from a caller-supplied string."""
+    repo = tmp_path / "proj"
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "test@orcinus.local")
+    _git(repo, "config", "user.name", "ORCINUS Test")
+    (repo / "src").mkdir()
+    (repo / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "code")
+    return repo
+
+
+def _head(repo):
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return proc.stdout.strip()
+
+
+def _commit_change(repo, filename="src/app.py", content="x = 2\n", message="change code"):
+    (repo / filename).write_text(content, encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", message)
+    return _head(repo)
+
+
+def _pass_bundle_dict():
+    """A minimal valid PASS bundle (docs-only, every gate waived,
+    no checks): the same shape the evidence validator accepts
+    (verified against validate_evidence.py before these tests were
+    written). A docs-only PASS needs no recorded checks, so the
+    fixture needs no record_check.py machinery."""
+    return {
+        "schema_version": 6,
+        "revision": "abc1234",
+        "working_tree_state": "clean",
+        "requirement": "Fix a typo in the README.",
+        "acceptance_criteria": ["The typo is fixed."],
+        "files_changed": ["README.md"],
+        "checks": [],
+        "findings": [],
+        "unresolved_risks": [],
+        "unverified_items": [],
+        "verdict": "PASS",
+        "reviewer_identity": "reviewer",
+        "implementer_identity": "implementer",
+        "verification_plan": {
+            "change_type": "docs-only",
+            "required_gates": [],
+            "not_applicable_gates": [
+                {"gate": "build", "reason": "Docs have no build step."},
+                {"gate": "lint", "reason": "Docs have no lint step."},
+                {"gate": "typecheck", "reason": "Docs have no typechecker."},
+                {"gate": "test", "reason": "Docs change needs no tests."},
+            ],
+        },
+    }
+
+
+def _write_bundle(repo, name="x.json", bundle=None):
+    """Write a bundle under docs/verification/ (excluded from the
+    digest, so it never resets the stage) and return its path
+    relative to the repo root, as state.json records it."""
+    bundle = _pass_bundle_dict() if bundle is None else bundle
+    directory = repo / "docs" / "verification"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text(json.dumps(bundle), encoding="utf-8")
+    return f"docs/verification/{name}"
+
+
+def _building(digest=DIGEST, revision=REV):
     return {
         "format_version": 2,
         "project": "weekly-budget",
         "stage": "BUILDING",
-        "revision": REV,
-        "content_digest": DIGEST,
+        "revision": revision,
+        "content_digest": digest,
         "evidence_bundle": None,
         "approval": None,
         "history": [],
@@ -84,25 +169,44 @@ def test_validate_rejects_bad_states():
     assert any("approval" in p for p in st.validate_state(bad))
 
 
-def _at_stage(stage):
-    """A valid state in `stage` (VERIFIED needs an evidence bundle,
-    RELEASE_READY needs an approval bound to the digest)."""
-    data = _building()
+def _at_stage(repo, stage, revision, digest):
+    """A valid state in `stage` for a real repo (VERIFIED needs a
+    real evidence bundle file, RELEASE_READY needs an approval
+    bound to the computed digest)."""
+    data = _building(digest=digest, revision=revision)
     data["stage"] = stage
     if stage in ("VERIFIED", "AWAITING_APPROVAL", "RELEASE_READY"):
-        data["evidence_bundle"] = "docs/verification/x.json"
+        data["evidence_bundle"] = _write_bundle(repo)
     if stage == "RELEASE_READY":
         data["approval"] = {
             "approved_by": "x",
-            "revision": REV,
-            "content_digest": DIGEST,
+            "revision": revision,
+            "content_digest": digest,
             "artifact": "a.tgz",
             "at": "2026-11-07T00:00:00+00:00",
         }
     return data
 
 
-def test_allowed_transitions():
+def test_validate_recomputes_digest(tmp_path):
+    """F-07: validate with a repo recomputes the stored digest
+    from the state's revision — a hand-edited digest is a problem,
+    not a value to trust. Without a repo only the structural
+    checks run."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    assert st.validate_state(_building(digest=digest, revision=revision), repo=repo) == []
+    tampered = _building(digest=digest, revision=revision)
+    tampered["content_digest"] = "sha256:" + "f" * 64
+    assert any("content_digest" in p for p in st.validate_state(tampered, repo=repo))
+    missing = _building(digest=digest, revision=revision)
+    missing["revision"] = "a" * 40  # well-formed, not in this repo
+    assert any("content_digest" in p for p in st.validate_state(missing, repo=repo))
+    assert st.validate_state(tampered) == []  # no repo: structural only
+
+
+def test_allowed_transitions(tmp_path):
     """The allowed-transition table: forward along the lifecycle,
     back to BUILDING on rework — never sideways or backwards."""
     for frm, to in (
@@ -113,20 +217,22 @@ def test_allowed_transitions():
         ("VERIFIED", "AWAITING_APPROVAL"),
         ("AWAITING_APPROVAL", "RELEASE_READY"),
     ):
-        data = _at_stage(frm)
+        repo = _repo(tmp_path / f"repo-{frm}-{to}")
+        revision = _head(repo)
+        digest = cd.content_digest(repo, revision)
+        data = _at_stage(repo, frm, revision, digest)
+        kwargs = {"repo": repo}
         if to == "VERIFIED":
-            data = st.transition(data, to, REV, DIGEST, evidence_bundle="docs/verification/x.json")
+            kwargs["evidence_bundle"] = _write_bundle(repo)
         elif to == "RELEASE_READY":
             data["approval"] = {
                 "approved_by": "x",
-                "revision": REV,
-                "content_digest": DIGEST,
+                "revision": revision,
+                "content_digest": digest,
                 "artifact": "a.tgz",
                 "at": "2026-11-07T00:00:00+00:00",
             }
-            data = st.transition(data, to, REV, DIGEST)
-        else:
-            data = st.transition(data, to, REV, DIGEST)
+        data = st.transition(data, to, revision, **kwargs)
         assert data["stage"] == to
     for frm, to in (
         ("BUILDING", "VERIFIED"),
@@ -135,49 +241,164 @@ def test_allowed_transitions():
         ("RELEASE_READY", "VERIFYING"),
         ("RELEASE_READY", "BUILDING"),
     ):
-        data = _at_stage(frm)
+        repo = _repo(tmp_path / f"repo-bad-{frm}-{to}")
+        revision = _head(repo)
+        digest = cd.content_digest(repo, revision)
+        data = _at_stage(repo, frm, revision, digest)
         with pytest.raises(ValueError, match="not an allowed transition"):
-            st.transition(data, to, REV, DIGEST)
+            st.transition(data, to, revision, repo=repo)
 
 
-def test_digest_change_forces_building():
+def test_digest_change_forces_building(tmp_path):
     """Rule 2: a content change resets the stage. A transition to
     any other stage with a new digest is refused."""
-    data = _building()
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
     data["stage"] = "VERIFYING"
+    new_revision = _commit_change(repo)
+    new_digest = cd.content_digest(repo, new_revision)
+    assert new_digest != digest
     with pytest.raises(ValueError, match="BUILDING"):
-        st.transition(data, "VERIFIED", REV, DIGEST2, evidence_bundle="docs/verification/x.json")
-    data = st.transition(data, "BUILDING", REV, DIGEST2, note="content changed")
-    assert data["stage"] == "BUILDING" and data["content_digest"] == DIGEST2
+        st.transition(
+            data,
+            "VERIFIED",
+            new_revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo),
+        )
+    data = st.transition(data, "BUILDING", new_revision, repo=repo, note="content changed")
+    assert data["stage"] == "BUILDING" and data["content_digest"] == new_digest
 
 
-def test_verified_needs_evidence_and_release_needs_approval():
-    data = _building()
+def test_digest_change_from_verified_forces_building(tmp_path):
+    """Golden-digest test (F-07): a VERIFIED state is bound to its
+    digest — after a content change the only move is BUILDING, and
+    the stored digest becomes the new recomputed one."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _at_stage(repo, "VERIFIED", revision, digest)
+    new_revision = _commit_change(repo)
+    new_digest = cd.content_digest(repo, new_revision)
+    assert new_digest != digest
+    with pytest.raises(ValueError, match="BUILDING"):
+        st.transition(data, "AWAITING_APPROVAL", new_revision, repo=repo)
+    data = st.transition(data, "BUILDING", new_revision, repo=repo)
+    assert data["stage"] == "BUILDING"
+    assert data["content_digest"] == new_digest
+    assert data["revision"] == new_revision
+
+
+def test_transition_stores_recomputed_digest(tmp_path):
+    """F-07: the digest comes from the repo, never from the caller.
+    The stored digest after a transition is the recomputed digest
+    for the new revision, whatever the state held before."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
+    data = st.transition(data, "VERIFYING", revision, repo=repo)
+    assert data["content_digest"] == digest
+    assert data["revision"] == revision
+    new_revision = _commit_change(repo)
+    new_digest = cd.content_digest(repo, new_revision)
+    data = st.transition(data, "BUILDING", new_revision, repo=repo)
+    assert data["content_digest"] == new_digest
+    assert data["content_digest"] != digest
+
+
+def test_tampered_digest_refuses_transition(tmp_path):
+    """F-07: a hand-edited digest is detected, not stored. The old
+    repro (sha256: + "f" x 64 accepted verbatim) is now refused:
+    the stored digest does not match the recomputed digest for the
+    state's revision, so the state is invalid before any
+    transition is considered."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
+    data["content_digest"] = "sha256:" + "f" * 64  # well-formed, wrong
+    with pytest.raises(ValueError, match="invalid state"):
+        st.transition(data, "VERIFYING", revision, repo=repo)
+
+
+def test_cli_digest_flag_is_gone(tmp_path, capsys):
+    """F-07: --digest no longer exists. A caller that passes it
+    gets an argparse usage error (exit 2), not a stored digest."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_building(digest=digest, revision=revision)), encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        st.main(
+            [
+                "transition",
+                str(path),
+                "--to",
+                "VERIFYING",
+                "--revision",
+                revision,
+                "--digest",
+                digest,
+            ]
+        )
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --digest" in capsys.readouterr().err
+
+
+def test_expect_digest(tmp_path):
+    """--expect-digest asserts against the recomputed digest: it
+    is never the stored value, only a check on it."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
+    data = st.transition(data, "VERIFYING", revision, repo=repo, expect_digest=digest)
+    assert data["stage"] == "VERIFYING"
+    with pytest.raises(ValueError, match="expect-digest"):
+        st.transition(data, "BLOCKED", revision, repo=repo, expect_digest="sha256:" + "f" * 64)
+
+
+def test_verified_needs_evidence_and_release_needs_approval(tmp_path):
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
     data["stage"] = "VERIFYING"
     with pytest.raises(ValueError, match="evidence_bundle"):
-        st.transition(data, "VERIFIED", REV, DIGEST)
-    data = _building()
+        st.transition(data, "VERIFIED", revision, repo=repo)
+    data = _building(digest=digest, revision=revision)
     data["stage"] = "AWAITING_APPROVAL"
+    data["evidence_bundle"] = _write_bundle(repo)
     with pytest.raises(ValueError, match="approval"):
-        st.transition(data, "RELEASE_READY", REV, DIGEST)
+        st.transition(data, "RELEASE_READY", revision, repo=repo)
 
 
-def test_transition_appends_history_without_rewriting_it():
-    data = _building()
-    data = st.transition(data, "VERIFYING", REV, DIGEST, note="verifier running")
+def test_transition_appends_history_without_rewriting_it(tmp_path):
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
+    data = st.transition(data, "VERIFYING", revision, repo=repo, note="verifier running")
     assert len(data["history"]) == 1
     assert data["history"][0]["stage"] == "VERIFYING"
     assert data["history"][0]["note"] == "verifier running"
     first = dict(data["history"][0])
-    data = st.transition(data, "BLOCKED", REV, DIGEST)
+    data = st.transition(data, "BLOCKED", revision, repo=repo)
     assert data["history"][0] == first  # append-only: never rewritten
     assert data["history"][1]["stage"] == "BLOCKED"
 
 
 def test_cli_validate_and_transition(tmp_path, capsys):
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
     path = tmp_path / "state.json"
-    path.write_text(json.dumps(_building()), encoding="utf-8")
-    assert st.main(["validate", str(path)]) == 0
+    path.write_text(json.dumps(_building(digest=digest, revision=revision)), encoding="utf-8")
+    assert st.main(["validate", "--repo", str(repo), str(path)]) == 0
     assert (
         st.main(
             [
@@ -186,9 +407,9 @@ def test_cli_validate_and_transition(tmp_path, capsys):
                 "--to",
                 "VERIFYING",
                 "--revision",
-                REV,
-                "--digest",
-                DIGEST,
+                revision,
+                "--repo",
+                str(repo),
                 "--note",
                 "verifier running",
             ]
@@ -197,6 +418,7 @@ def test_cli_validate_and_transition(tmp_path, capsys):
     )
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["stage"] == "VERIFYING" and len(data["history"]) == 1
+    assert data["content_digest"] == digest
     path.write_text(json.dumps({**_building(), "stage": "DONE"}), encoding="utf-8")
-    assert st.main(["validate", str(path)]) == 1
+    assert st.main(["validate", "--repo", str(repo), str(path)]) == 1
     assert "stage" in capsys.readouterr().out

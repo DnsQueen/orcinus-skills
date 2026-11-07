@@ -7,17 +7,32 @@ enforced which stage could follow which. The schema lives in
 scripts/state_schema.json; this module enforces it plus the
 transition rules from docs/project-state.md.
 
+The content digest is recomputed here, never supplied by the
+caller (round 7, F-07): `transition()` computes it from the
+revision's tree in the repo (scripts/content_digest.py, imported
+— never inlined, so the algorithm has exactly one definition),
+and `validate_state(..., repo=...)` recomputes the stored digest
+for the state's revision and compares. A caller-supplied digest
+was trusted input: any well-formed string was stored verbatim,
+so Rule 2 only fired when the caller volunteered a change and a
+hand-written approval reached RELEASE_READY. The old required
+`--digest` flag is gone; `--expect-digest` only asserts against
+the recomputed digest and is never stored.
+
 This is a local check, not the v1.1 tamper-proof enforcement layer:
 any agent (or human) with write access can still edit the file
 (project-state.md Rule 4). What this adds is a machine that refuses
 an invalid file or an impossible transition instead of silently
-recording it.
+recording it — and the next `validate` now DETECTS a hand-edited
+digest, because the stored value is compared with the recomputed
+one. Rewritten history yields a new revision (and digest), which
+correctly fires Rule 2 rather than bypassing it.
 
 Usage:
-    python3 scripts/state.py validate <state.json>
+    python3 scripts/state.py validate <state.json> [--repo <repo>]
     python3 scripts/state.py transition <state.json> --to STAGE
-        --revision <sha> --digest sha256:<hex>
-        [--evidence <bundle path>] [--note <text>]
+        --revision <sha> [--expect-digest sha256:<hex>]
+        [--evidence <bundle path>] [--note <text>] [--repo <repo>]
 
 Stdlib only.
 """
@@ -31,6 +46,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_PATH = ROOT / "scripts" / "state_schema.json"
+
+# content_digest.py lives beside this file; state.py runs both as a
+# script and imported by the tests, so the import is by path, not by
+# package. The digest is the trusted value: it is computed in this
+# process from git (import, not a subprocess — the algorithm is
+# small, stdlib-only, and importing keeps one definition), never
+# taken from the caller or the state file.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from content_digest import ContentDigestError, content_digest  # noqa: E402
 
 STAGES = ("BUILDING", "VERIFYING", "BLOCKED", "VERIFIED", "AWAITING_APPROVAL", "RELEASE_READY")
 
@@ -75,10 +99,15 @@ def load_state(path):
     return data
 
 
-def validate_state(data):
+def validate_state(data, repo=None):
     """Problems with a state dict, [] when valid. Mirrors
     scripts/state_schema.json (hand-rolled, stdlib only — the repo
-    has no jsonschema dependency)."""
+    has no jsonschema dependency). With `repo` given, the stored
+    digest is also recomputed from the state's revision and
+    compared: a stored digest that does not match the tree it
+    claims to describe is corrupt, not verified (F-07) — this is
+    what detects a hand-edited state file. With `repo` None only
+    the structural checks run."""
     problems = []
     if not isinstance(data, dict):
         return ["state is not an object"]
@@ -131,24 +160,65 @@ def validate_state(data):
                     entry.get("content_digest") or ""
                 ):
                     problems.append(f"history[{i}].content_digest must be a sha256 digest")
+    if repo is not None:
+        # Recompute, never trust: the stored digest is compared
+        # with the digest of the revision's tree. A mismatch means
+        # the file was edited by hand or history was rewritten —
+        # either way the stage it claims is not verified. Only a
+        # well-formed revision/digest pair is recomputed; a
+        # malformed one is already a problem above.
+        if (
+            isinstance(revision, str)
+            and _SHA_RE.match(revision)
+            and isinstance(digest, str)
+            and _DIGEST_RE.match(digest)
+        ):
+            try:
+                recomputed = content_digest(repo, revision)
+            except ContentDigestError as e:
+                problems.append(f"cannot recompute content_digest for revision {revision!r}: {e}")
+            else:
+                if recomputed != digest:
+                    problems.append(
+                        "content_digest does not match the recomputed digest "
+                        f"for revision {revision!r} (recomputed {recomputed}): "
+                        "the state file was edited by hand, or history was rewritten"
+                    )
     return problems
 
 
-def transition(data, to_stage, revision, content_digest, evidence_bundle=None, note=""):
+def transition(
+    data, to_stage, revision, evidence_bundle=None, note="", repo=ROOT, expect_digest=None
+):
     """Move a state dict to `to_stage`, returning a new dict (the
-    input is not mutated). Raises ValueError on an invalid current
+    input is not mutated). The content digest is recomputed here,
+    from `revision`'s tree in `repo` — it is never a caller-supplied
+    value (F-07): a caller cannot volunteer a digest, so the old
+    `sha256:` + `"f" x 64` repro is impossible, and Rule 2 fires on
+    the recomputed value. Raises ValueError on an invalid current
     state, a transition the table does not allow, a content-digest
     change to any stage but BUILDING, VERIFIED without an evidence
-    bundle, or RELEASE_READY without an approval bound to the same
-    digest. The history is append-only: the old entries are kept
-    verbatim and one entry is added."""
-    problems = validate_state(data)
+    bundle, or RELEASE_READY without an approval bound to the
+    recomputed digest. `expect_digest`, when given, only asserts
+    against the recomputed digest — it is never stored. The history
+    is append-only: the old entries are kept verbatim and one entry
+    is added."""
+    problems = validate_state(data, repo=repo)
     if problems:
         raise ValueError(f"invalid state: {'; '.join(problems)}")
     if to_stage not in STAGES:
         raise ValueError(f"unknown stage: {to_stage!r}")
+    try:
+        computed = content_digest(repo, revision)
+    except ContentDigestError as e:
+        raise ValueError(f"cannot compute content_digest for revision {revision!r}: {e}") from e
+    if expect_digest is not None and expect_digest != computed:
+        raise ValueError(
+            f"--expect-digest {expect_digest} does not match the recomputed digest "
+            f"{computed} for revision {revision!r}"
+        )
     current = data["stage"]
-    digest_changed = content_digest != data["content_digest"]
+    digest_changed = computed != data["content_digest"]
     if digest_changed and to_stage != "BUILDING":
         raise ValueError(
             "content digest changed: the stage must go back to BUILDING first "
@@ -165,18 +235,18 @@ def transition(data, to_stage, revision, content_digest, evidence_bundle=None, n
         raise ValueError("VERIFIED requires evidence_bundle")
     if to_stage == "RELEASE_READY":
         approval = data.get("approval")
-        if not approval or approval.get("content_digest") != content_digest:
+        if not approval or approval.get("content_digest") != computed:
             raise ValueError("RELEASE_READY requires approval bound to this content_digest")
     new = dict(data)
     new["stage"] = to_stage
     new["revision"] = revision
-    new["content_digest"] = content_digest
+    new["content_digest"] = computed
     if evidence_bundle is not None:
         new["evidence_bundle"] = evidence_bundle
     entry = {
         "stage": to_stage,
         "revision": revision,
-        "content_digest": content_digest,
+        "content_digest": computed,
         "at": datetime.now(timezone.utc).isoformat(),
         "note": note,
     }
@@ -189,21 +259,36 @@ def main(argv):
     sub = parser.add_subparsers(dest="command", required=True)
     validate = sub.add_parser("validate", help="check a state file against the schema")
     validate.add_argument("path")
+    validate.add_argument(
+        "--repo",
+        default=None,
+        help="the repo the digest is recomputed in (default: this repo)",
+    )
     move = sub.add_parser("transition", help="move a state file to a new stage")
     move.add_argument("path")
     move.add_argument("--to", required=True, choices=list(STAGES))
     move.add_argument("--revision", required=True)
-    move.add_argument("--digest", required=True)
+    move.add_argument(
+        "--expect-digest",
+        default=None,
+        help="assert the recomputed digest equals this (never stored)",
+    )
     move.add_argument("--evidence")
     move.add_argument("--note", default="")
+    move.add_argument(
+        "--repo",
+        default=None,
+        help="the repo the digest is recomputed in (default: this repo)",
+    )
     args = parser.parse_args(argv)
+    repo = Path(args.repo) if args.repo else ROOT
     try:
         data = load_state(args.path)
     except ValueError as e:
         print(f"invalid: {e}")
         return 1
     if args.command == "validate":
-        problems = validate_state(data)
+        problems = validate_state(data, repo=repo)
         if problems:
             for problem in problems:
                 print(f"invalid: {problem}")
@@ -211,7 +296,15 @@ def main(argv):
         print("OK: state is valid")
         return 0
     try:
-        new = transition(data, args.to, args.revision, args.digest, args.evidence, args.note)
+        new = transition(
+            data,
+            args.to,
+            args.revision,
+            args.evidence,
+            args.note,
+            repo=repo,
+            expect_digest=args.expect_digest,
+        )
     except ValueError as e:
         print(f"refused: {e}")
         return 1
