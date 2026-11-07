@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — the name and description must be non-empty after strip (an empty value used to pass), and the name must match the skill directory name. The rest is verbatim; see ATTRIBUTION.md.
+# ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — the name and description must be non-empty after strip (an empty value used to pass), the name must match the skill directory name, and user-invocable is an allowed frontmatter key (the repo validator requires user-invocable: false on every sub-skill; the upstream allowlist rejected it, so 35 of 36 skills failed validation). The rest is verbatim; see ATTRIBUTION.md.
 """
 Quick validation script for skills - minimal version
 """
@@ -40,7 +40,10 @@ def validate_skill(skill_path):
         return False, f"Invalid YAML in frontmatter: {e}"
 
     # Define allowed properties
-    ALLOWED_PROPERTIES = {'name', 'description', 'license', 'allowed-tools', 'metadata', 'compatibility'}
+    # user-invocable is an ORCINUS frontmatter field (the repo validator
+    # requires user-invocable: false on every sub-skill); the upstream
+    # allowlist did not know it, so 35 of 36 skills failed validation.
+    ALLOWED_PROPERTIES = {'name', 'description', 'license', 'allowed-tools', 'metadata', 'compatibility', 'user-invocable'}
 
     # Check for unexpected properties (excluding nested keys under metadata)
     unexpected_keys = set(frontmatter.keys()) - ALLOWED_PROPERTIES
