@@ -8,6 +8,7 @@ test command hung the script forever. Run:
     python3 -m pytest skills/webapp-testing/scripts/test_with_server.py -q
 """
 
+import ctypes
 import os
 import signal
 import socket
@@ -532,6 +533,21 @@ def _termination_resistant_child_script(port, pidfile, os_name=os.name):
     )
 
 
+def _wait_pid_dead(pid, timeout=10):
+    """Wait until the process is gone. Returns True when it died
+    within the timeout, False when it is still alive afterwards.
+    The probe is _pid_is_alive, not os.kill(pid, 0): signal 0 is
+    an invalid parameter on Windows (WinError 87), so a direct
+    os.kill probe fails the test there instead of reporting the
+    child's state (CI 0.9.6, Windows)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not _pid_is_alive(pid):
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def test_sigterm_ignoring_child_does_not_survive_cleanup(tmp_path):
     """F2-03: cleanup SIGTERMed the group, then waited for the LEADER
     only — when the leader died promptly, a SIGTERM-ignoring child
@@ -555,21 +571,95 @@ def test_sigterm_ignoring_child_does_not_survive_cleanup(tmp_path):
     assert "ran" in out
     child_pid = int(pidfile.read_text(encoding="utf-8"))
     try:
-        deadline = time.time() + 10
-        alive = True
-        while time.time() < deadline:
-            try:
-                os.kill(child_pid, 0)
-            except ProcessLookupError:
-                alive = False
-                break
-            time.sleep(0.2)
-        assert not alive, "the SIGTERM-ignoring child survived cleanup"
+        assert _wait_pid_dead(child_pid, timeout=10), "the SIGTERM-ignoring child survived cleanup"
     finally:
-        try:
-            os.kill(child_pid, 9)
-        except OSError:
-            pass
+        if _pid_is_alive(child_pid):
+            try:
+                # signal.SIGKILL does not exist on Windows; SIGTERM
+                # terminates the process there (see the cleanup in
+                # test_sigterm_child_script_is_windows_compatible).
+                # Never name signal.SIGKILL — or a literal 9 —
+                # unconditionally: on Windows that is an invalid
+                # parameter (WinError 87), the same failure as the
+                # os.kill(pid, 0) probe this test used to use.
+                os.kill(child_pid, getattr(signal, "SIGKILL", signal.SIGTERM))
+            except OSError:
+                pass
+
+
+def test_wait_pid_dead_does_not_use_signal_zero_on_windows(monkeypatch):
+    """Regression for CI 0.9.6, Windows: the sigterm test's aliveness
+    loop called os.kill(pid, 0) directly, and on Windows signal 0 is
+    an invalid parameter (WinError 87) — os.kill there only supports
+    SIGTERM. The wait must go through _pid_is_alive, whose Windows
+    probe is OpenProcess/GetExitCodeProcess. Simulated on Linux:
+    os.name is 'nt', os.kill raises OSError(87) for signal 0 (the
+    Windows behaviour), and ctypes.windll is a fake kernel32 backed
+    by the real os.kill."""
+    real_kill = os.kill
+
+    def windows_kill(pid, sig):
+        if sig == 0:
+            raise OSError(87, "The parameter is incorrect")
+        return real_kill(pid, sig)
+
+    class _FakeKernel32:
+        """Minimal kernel32 stand-in: OpenProcess/GetExitCodeProcess
+        with the Windows contract, backed by the real os.kill."""
+
+        def __init__(self):
+            self._last_error = 0
+
+        def OpenProcess(self, access, inherit, pid):
+            try:
+                real_kill(pid, 0)
+            except ProcessLookupError:
+                self._last_error = 87
+                return 0
+            except OSError:
+                self._last_error = 5
+                return 0
+            return pid  # any non-zero value is a handle
+
+        def GetExitCodeProcess(self, handle, exit_code):
+            # handle is the pid. A zombie has exited: on real Windows
+            # there are no zombies, and the exit code is readable as
+            # soon as the process dies — so a zombie's code is its
+            # real exit code (0 here), not STILL_ACTIVE. Without this
+            # the fake reports every unreaped child alive forever.
+            code = 259
+            try:
+                with open(f"/proc/{handle}/stat", encoding="utf-8") as f:
+                    state = f.read().rsplit(") ", 1)[1].split()[0]
+                if state == "Z":
+                    code = 0
+            except OSError:
+                code = 0  # /proc entry gone: the process is dead
+            ctypes.cast(exit_code, ctypes.POINTER(ctypes.c_ulong)).contents.value = code
+            return 1
+
+        def GetLastError(self):
+            return self._last_error
+
+        def CloseHandle(self, handle):
+            return 1
+
+    class _FakeWindll:
+        kernel32 = _FakeKernel32()
+
+    monkeypatch.setattr(os, "name", "nt")
+    monkeypatch.setattr(os, "kill", windows_kill)
+    monkeypatch.setattr(ctypes, "windll", _FakeWindll(), raising=False)
+
+    # Already dead: the wait must return True promptly, not raise.
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait(timeout=10)
+    assert _wait_pid_dead(proc.pid, timeout=10) is True
+
+    # Alive, then exits on its own: the wait must see it die.
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1)"])
+    assert _wait_pid_dead(proc.pid, timeout=10) is True
+    proc.wait(timeout=10)
 
 
 def test_crashing_server_reports_its_stderr(tmp_path):
