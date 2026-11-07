@@ -6,7 +6,7 @@ This is the proof artifact for ORCINUS v1 — the demo the README, SCOPE.md and 
 
 Run `npm run build`, `npm run lint`, `npm run typecheck`, `npm test`.
 
-Requires Node 22 or newer (`engines` in `package.json`): the Stryker packages require Node ≥22. CI runs the four gates on Node 22 and 24.
+Requires Node 22 or newer (`engines` in `package.json`): the Stryker packages require Node ≥22. CI runs the five gates on Node 22 and 24.
 
 ## Known advisories (dev dependencies only, triaged 2026-11-07, round 6)
 

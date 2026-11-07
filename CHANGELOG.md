@@ -69,8 +69,10 @@ change (see Changed below).
 - Demo: a non-divisible percent test (79.6 of 100 rounds to 80, not
   79) closes the rounding hole the demo tests missed (F-16); the
   Stryker break threshold moves from 0 to 80, so the mutation gate
-  can now fail on score (F-17). The threshold is enforced when
-  `npm run mutation` runs.
+  can now fail on score (F-17). The threshold is enforced in CI:
+  the demo job runs `npm run mutation` on Node 22 and 24 (about
+  3 minutes per run; verified locally: 30 mutants, 26 killed,
+  0 survived, score 100.00).
 - The "done when the evidence says so" claim is narrowed to what
   the bundle proves (F-01, Option A): the headline no longer claims
   more than the validator mechanism delivers.

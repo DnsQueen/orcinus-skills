@@ -117,10 +117,12 @@ jobs:
   demo:
     # Round 6 (2-S5 / 3-R3-07): the demo had zero CI coverage — no
     # job referenced examples/demo at all, so a broken demo shipped
-    # silently. Runs the four gates (build, lint, typecheck, test)
-    # on the minimum supported Node (22 — the Stryker packages
-    # require >=22, see examples/demo/package.json engines) and on
-    # the release Node (24).
+    # silently. Runs the five gates (build, lint, typecheck, test,
+    # mutation) on the minimum supported Node (22 — the Stryker
+    # packages require >=22, see examples/demo/package.json engines)
+    # and on the release Node (24). Mutation takes ~3 minutes
+    # (30 mutants, whole-suite re-run per mutant); the break
+    # threshold is 80 (examples/demo/stryker.config.mjs).
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -137,6 +139,9 @@ jobs:
         working-directory: examples/demo
       - name: Build, lint, typecheck, and test the demo
         run: npm run build && npm run lint && npm run typecheck && npm test
+        working-directory: examples/demo
+      - name: Run mutation testing (Stryker, break 80)
+        run: npm run mutation
         working-directory: examples/demo
 
   waza-fixtures:
