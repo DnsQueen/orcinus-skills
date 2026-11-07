@@ -130,3 +130,15 @@ verified. Record VERIFIED only when the tree is clean.
    verifier's signature, the evidence bundle's hash, the approval's
    binding. Until then, the state file is a record the human can
    audit, not a lock.
+
+## Schema and transitions
+
+The machine-readable form of this spec is `scripts/state_schema.json`,
+enforced by `scripts/state.py` (standard library only):
+
+- `python3 scripts/state.py validate <state.json>` — checks the file against the schema (exit 0 when valid).
+- `python3 scripts/state.py transition <state.json> --to <stage> --revision <sha> --digest sha256:<hex> [--evidence <bundle>] [--note <text>]` — moves the file to a new stage, appending one history entry.
+
+Allowed transitions: BUILDING → VERIFYING → BLOCKED / VERIFIED → AWAITING_APPROVAL → RELEASE_READY; any stage returns to BUILDING on rework, and a content-digest change forces BUILDING from any stage (Rule 2). VERIFIED requires an evidence bundle; RELEASE_READY requires an approval bound to the same content digest. A transition from an invalid state, or to a stage the table does not allow, is refused.
+
+This is a local check, not the v1.1 enforcement layer (Rule 4): it refuses an impossible transition instead of silently recording it, but anyone with write access can still edit the file.

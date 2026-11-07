@@ -108,6 +108,13 @@ And `${CLAUDE_PLUGIN_ROOT}` paths in skill text (one place:
 the installed skill folder, or `${HERMES_SKILL_DIR}` inside a skill
 body.
 
+The same applies to any install other than the Claude Code plugin:
+only the plugin install gets the plugin-root `agents/` and
+`commands/` and the repo-root `scripts/` — an npx-skills, Cursor, or
+Codex install gets the skill folders only, so a step that needs a
+registered reviewer agent or a repo script files INCOMPLETE and
+follows the skill's procedure inline instead.
+
 `metadata.hermes` is deliberately not embedded in the skill
 frontmatter: Hermes documents `metadata.hermes.tags` / `category` /
 `config`, but the Agent Skills spec requires metadata values to be
@@ -148,6 +155,15 @@ prefix is not:
 Only the router is invocable by the user: every sub-skill carries
 `user-invocable: false`, so no sub-skill appears in the `/` menu.
 (A Claude Code field; other hosts ignore it.)
+
+That hides a sub-skill from the `/` menu; it does not stop the model
+invoking it directly, and `disable-model-invocation` cannot be set on
+a sub-skill — the router itself invokes sub-skills, so the validator
+forbids it. "Only invoke via the orcinus router" in a description is
+an instruction to the model, not an enforcement: a model that reads a
+sub-skill description can still invoke that sub-skill directly.
+Descriptions are therefore kept short — every one of the 36 is loaded
+into context for discovery.
 
 After that, keep working. ORCINUS detects the stage; you confirm each major gate.
 
@@ -203,7 +219,7 @@ After that, keep working. ORCINUS detects the stage; you confirm each major gate
 - `scripts/clean_copy_check.py` — prove the repo works from a clean copy, in two modes: working-tree (copy the working tree) and release (`git archive` of a committed revision, so an uncommitted fix cannot make a broken release look green). It never renames or writes to the source: an earlier design hid the source by renaming it and could strand it hidden if the process was killed (demonstrated with a SIGKILL, removed 2026-11-06). The price is stated in the script's docstring — an absolute-path leak back to the live checkout is no longer caught. It is a copy check, not an install check: it runs the repo's own gates inside the copy (also run in CI).
 - `docs/adr/` — architecture decision records for ORCINUS's own decisions (one install, verification-first, verbatim-with-attribution, no Trust Score in v0.9).
 - `docs/report-format.md` — the unified machine-readable report format all checkers converge to.
-- `docs/project-state.md` — the persistent project state spec (`.orcinus/state.json`): BUILDING / VERIFYING / BLOCKED / VERIFIED / AWAITING_APPROVAL / RELEASE_READY, each bound to a revision and an evidence bundle.
+- `docs/project-state.md` — the persistent project state spec (`.orcinus/state.json`): BUILDING / VERIFYING / BLOCKED / VERIFIED / AWAITING_APPROVAL / RELEASE_READY, each bound to a revision and an evidence bundle; the schema is `scripts/state_schema.json` and transitions are enforced by `scripts/state.py`.
 - `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v0.9 does and does not do.
 
 Later sub-skills (idea, architecture, coding, security, eval) are listed in `docs/MAP.md` with their source and status. They are added one at a time, each proven on a demo repo before it ships. No stage is empty in the map, but not every sub-skill is fully built in v0.9.

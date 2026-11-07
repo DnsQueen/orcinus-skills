@@ -59,7 +59,7 @@ For each new capability: who can call it, is auth checked before the action, wha
 Give one verdict only:
 
 - **PASS** — no blocking findings, and every check the project requires ran (with tool and version).
-- **PASS WITH LIMITATIONS** — no blocking findings, but a check that is not required for this project could not run (a deeper scanner not installed, an audit endpoint blocked). The report lists exactly which checks are unverified. This is not a PASS.
+- **PASS WITH LIMITATIONS** — no blocking findings, but a check that is not required for this project could not run (a deeper scanner not installed, an audit endpoint blocked). The report lists exactly which checks are unverified. This is not a PASS. When this verdict is recorded in an orcinus-verify evidence bundle, it maps to the bundle's verdict vocabulary (PASS / FAIL / INCOMPLETE — the schema has no fourth verdict): a check that is not required for this project is waived with a reason in `not_applicable_gates` and the bundle can still be PASS; any other unrun check goes in `unverified_items` and the bundle is INCOMPLETE.
 - **FAIL** — list each blocking finding with file, line, and evidence, and what must change. Do not fix the code yourself in this skill; hand the findings back.
 - **INCOMPLETE** — a check the project REQUIRES could not run (for example the secrets scan itself, or a scanner the project's policy mandates). List what is unverified and do not claim PASS.
 

@@ -59,6 +59,35 @@ def test_parse_map_external_optional_names():
     assert todo == ["SWE-bench", "SWE-agent/swe-rex", "openai/plugins: plugin-eval"]
 
 
+def test_implemented_in_covers_all_map_rows():
+    """R4 / 2-R4: every MAP row names the ORCINUS skill folder(s) that
+    cover the need — derived from the MAP's own Integration / Best
+    source text, with an explicit fallback only for the two rows the
+    text never names. A `built` row that names no real folder is the
+    defect (e.g. 'stack-selector: built' with no such folder)."""
+    skill_names = {p.name for p in (REPO / "skills").iterdir() if p.is_dir()}
+    sections = grr.parse_map_tables(_map_text())
+    rows = [r for s in sections.values() for r in s["rows"]]
+    assert len(rows) == 55
+    for need, source, _licence, integration, status in rows:
+        found = grr.implemented_in(need, source, integration, status, skill_names)
+        if status == "todo":
+            assert found == [], need
+        else:
+            assert found, need
+            for name in found:
+                assert name in skill_names, (need, name)
+    by_need = {(r[0]): grr.implemented_in(r[0], r[1], r[3], r[4], skill_names) for r in rows}
+    assert by_need["Stack choice"] == ["architecture"]
+    assert by_need["Scope v1 / non-goals"] == ["idea-calibrate"]
+    assert by_need["Health / monitoring"] == ["monitoring"]
+    assert by_need["Monitoring after publish"] == ["monitoring-observability"]
+    assert by_need["Mutation (JS/TS)"] == ["mutation-testing"]
+    assert by_need["Mutation beyond JS/TS"] == ["mutation-testing-python"]
+    assert by_need["State"] == ["frontend-architecture", "frontend-optimistic-mutations"]
+    assert by_need["Benchmark"] == []
+
+
 def test_generate_skill_status_matches_committed():
     # The committed copy is exactly what the generator produces from
     # the current MAP — a stale copy must fail this test.

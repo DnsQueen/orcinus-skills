@@ -1,6 +1,6 @@
 ---
 name: issue-triage
-description: "3-phase issue backlog management with audit, deep analysis, and validated triage actions. Use when triaging GitHub issues, sorting bug reports, cleaning up stale tickets, or detecting duplicate issues. Args: 'all' to analyze all, issue numbers to focus (e.g. '42 57'), 'en'/'fr' for language, no arg = audit only. Only invoke via the orcinus router."
+description: "3-phase issue backlog management with audit, deep analysis, and validated triage actions. Use when triaging GitHub issues, sorting bug reports, cleaning up stale tickets, or detecting duplicate issues. Args: 'all' to analyze all, issue numbers to focus (e.g. '42 57'), 'en'/'fa'/'fr' for language, no arg = audit only. Only invoke via the orcinus router."
 license: MIT
 user-invocable: false
 ---
@@ -26,6 +26,7 @@ user-invocable: false
 
 - Check the argument passed to the skill
 - If `en` or `english` → tables and summary in English
+- If `fa`, `farsi`, or `persian` → tables and summary in Persian (GitHub comments and labels stay in English, per Phase 3)
 - If `fr`, `french`, or no argument → French (default)
 - Note: GitHub comments and labels (Phase 3) are ALWAYS in English (international audience)
 
@@ -241,7 +242,7 @@ elif command -v clip.exe &>/dev/null; then
 fi
 ```
 
-Confirm: `Triage tables copied to clipboard.` (EN) / `Tableaux copiés dans le presse-papier.` (FR)
+Confirm: `Triage tables copied to clipboard.` (EN) / `Tableaux copiés dans le presse-papier.` (FR) / `جدول‌های تریاژ در کلیپ‌بورد کپی شدند.` (FA)
 
 ---
 

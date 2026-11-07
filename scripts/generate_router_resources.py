@@ -22,6 +22,7 @@ produces identical bytes, so the repo validator can compare the
 committed files against a fresh generation.
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -37,11 +38,85 @@ router skill so a standalone install — which has no `docs/` — still has
 the decision table. Never read the user's own `docs/MAP.md`: that is the
 user's file, not ORCINUS's.
 
-Status: `built` (in this install), `external-optional` (not in this repo;
-the fallback is in `references/rules.md`, "Fallbacks for external-optional
-skills"), `todo` (not built yet: say so plainly, do the closest covered
-step, record the gap).
+Status: `built` (the need is covered in this install), `external-optional`
+(not in this repo; the fallback is in `references/rules.md`, "Fallbacks for
+external-optional skills"), `todo` (not built yet: say so plainly, do the
+closest covered step, record the gap).
+
+`Best source` is the source of inspiration for the need — it may be an
+external tool that is not installed here. `Implemented in` names the
+ORCINUS skill folder(s) that cover the need in this install (for an
+external-optional row, the skill the router falls back to; `—` when
+nothing covers it yet). A `built` row always names a real folder: the
+validator checks it.
 """
+
+# MAP rows whose covering skill the MAP text never names: the
+# Integration and Best source columns name an upstream tool, not the
+# ORCINUS skill that implements the need. Keyed by the MAP Need cell.
+# Two rows only — every other row names its skill in the text.
+_IMPLEMENTED_IN_FALLBACK = {
+    "Mutation (JS/TS)": ["mutation-testing"],
+    "Mutation beyond JS/TS": ["mutation-testing-python"],
+    "Incomplete refactoring": ["incomplete-refactor"],
+}
+
+
+def _skills_named_in(text, skill_names):
+    """Skill-folder names mentioned in `text`, in order of appearance,
+    deduplicated. A name matches only as a whole hyphen-separated
+    token, so `monitoring` does not match inside
+    `monitoring-observability`."""
+    hits = []
+    for name in skill_names:
+        pattern = r"(?<![A-Za-z0-9-])" + re.escape(name) + r"(?![A-Za-z0-9-])"
+        for match in re.finditer(pattern, text):
+            hits.append((match.start(), name))
+    seen = []
+    for _, name in sorted(hits):
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
+def _skill_named_in_need(need, skill_names):
+    """The skill named by the Need cell itself, if any: the need
+    hyphenated equals a skill (`Visual regression`), starts with one
+    at a hyphen boundary (`Breaking-change detection`), or one of its
+    words starts with a skill name (`Generic refactoring` ->
+    `refactor`). Returns the longest match, or [] when nothing
+    matches."""
+    slug = re.sub(r"[^a-z0-9]+", "-", need.lower()).strip("-")
+    candidates = []
+    for name in skill_names:
+        if slug == name or slug.startswith(name + "-"):
+            candidates.append(name)
+        elif any(w.startswith(name) and w != name for w in slug.split("-")):
+            candidates.append(name)
+    return [max(candidates, key=len)] if candidates else []
+
+
+def implemented_in(need, source, integration, status, skill_names):
+    """The ORCINUS skill folder(s) that cover one MAP need, derived
+    from the MAP row itself: the Best source first (its trailing
+    component is usually the skill — `monitoring`, not the
+    `monitoring-observability` mentioned later in Integration), then
+    the Integration column, then the Need cell, then the explicit
+    fallback above. A `todo` row is covered by nothing. An
+    external-optional row resolves to the skill the router falls back
+    to, named in its Integration text."""
+    if status == "todo":
+        return []
+    found = _skills_named_in(source, skill_names)
+    if found:
+        return found
+    found = _skills_named_in(integration, skill_names)
+    if found:
+        return found
+    found = _skill_named_in_need(need, skill_names)
+    if found:
+        return found
+    return list(_IMPLEMENTED_IN_FALLBACK.get(need, []))
 
 
 def parse_map_tables(map_text):
@@ -74,16 +149,19 @@ def parse_map_tables(map_text):
     return sections
 
 
-def generate_skill_status(map_text):
+def generate_skill_status(map_text, skill_names=None):
     """Render references/skill-status.md from the MAP text."""
+    if skill_names is None:
+        skill_names = {p.name for p in (ROOT / "skills").iterdir() if p.is_dir()}
     sections = parse_map_tables(map_text)
     parts = [HEADER]
     for title, section in sections.items():
         parts.append(f"\n## {title}\n\n")
-        parts.append("| Need | Best source | Status |\n")
-        parts.append("|---|---|---|\n")
-        for need, source, _licence, _integration, status in section["rows"]:
-            parts.append(f"| {need} | {source} | {status} |\n")
+        parts.append("| Need | Best source | Implemented in | Status |\n")
+        parts.append("|---|---|---|---|\n")
+        for need, source, _licence, integration, status in section["rows"]:
+            covered = ", ".join(implemented_in(need, source, integration, status, skill_names))
+            parts.append(f"| {need} | {source} | {covered or '—'} | {status} |\n")
     return "".join(parts)
 
 

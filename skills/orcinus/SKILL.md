@@ -59,7 +59,7 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 | Verify: test the tests | mutation-testing (JS/TS) / mutation-testing-python (Python) | No surviving mutant in the changed slice; see build for the fallback when the language has no mutation tool |
 | Independent review | independent-review | Six reviewers read the diff; no critical issue unlisted |
 | Evidence / eval | waza | Graded eval runs; the gate can fail; results are compared |
-| Security | security-review | Secrets, injection, supply-chain, and static checks pass |
+| Security | security-review | Secrets, injection, supply-chain, and static checks pass; a PASS WITH LIMITATIONS maps to PASS only when the unrun check is waived with a reason, otherwise it maps to INCOMPLETE |
 | Performance | performance-optimization | Baseline measured, bottleneck fixed, re-measured the same way |
 | API design | api-and-interface-design | Contract defined before implementation; one error format |
 | API change | breaking-change | oasdiff runs with `--fail-on ERR`; no breaking change unlisted |
@@ -71,6 +71,7 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 | Accessibility | accessibility (audit, fix, re-audit) | No blocking or major findings; manual criteria judged |
 | Clarify (cross-cutting) | ask-questions-if-underspecified | Must-have questions answered, or user authorized stated assumptions |
 | Health / monitoring | monitoring | The service is probed from the outside, alerts page on symptoms, on-call exists |
+| Telemetry / instrumentation | monitoring-observability | Metrics, dashboards, and traces are live; LLM cost and drift are tracked |
 | Finalize | finalize (docs, release, CI, publish) | Release checklist passes, rollback plan exists |
 | Publish | registry-publish | Dry-run file list read, published artifact installs and runs |
 | Onboarding | codebase-knowledge-builder | A new contributor gets a source-cited, revision-specific artifact; every claim is labelled and cited |
@@ -83,14 +84,14 @@ When in doubt, ask the user which stage they are in. Do not auto-advance.
 
 ## When a sub-skill is missing
 
-Check the skill's status in `references/skill-status.md` first — the table is the decision procedure. It travels with this skill (generated from the repo's MAP); never read the user's own MAP file — that is the user's file, not ORCINUS's — and in a skill-only install the repo's docs are not present at all:
+Check the skill's status in `references/skill-status.md` first — the table is the decision procedure. The `Implemented in` column names the ORCINUS skill that covers the need; the `Best source` column is the source of inspiration, not an installed skill — never invoke a Best source name as if it were a folder. It travels with this skill (generated from the repo's MAP); never read the user's own MAP file — that is the user's file, not ORCINUS's — and in a skill-only install the repo's docs are not present at all:
 
 | The skill's status | What to do |
 |---|---|
 | Required and missing (not installed) | Stop, name the missing skill, and say what is blocked. Do not improvise its procedure from memory. |
 | Optional and missing | Use the named fallback in `references/rules.md` (Fallbacks for external-optional skills) and say which fallback you used. |
 | Not built (MAP status `todo`) | Say so plainly, do the closest covered step, and record the gap. Do not invent a sub-skill. |
-| Host-incompatible (for example the plugin-root `agents/` on Hermes) | File INCOMPLETE for that step with the reason, and do the closest covered step the host allows. |
+| Host-incompatible (any install other than the Claude Code plugin: the plugin-root `agents/` and `commands/` do not travel there, and per-skill `scripts/` do not travel on npx-skills or Hermes installs) | File INCOMPLETE for that step with the reason, and do the closest covered step the host allows. |
 
 Before routing, confirm the sub-skill is installed: a host may silently skip a skill that is not present (a Hermes bundle skips missing skills instead of failing), so an absent sub-skill is an absence you must check for, not an error you will see.
 

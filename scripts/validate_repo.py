@@ -75,6 +75,9 @@ Checks:
      scripts/generate_readme_table.py produces from
      skills/manifest.json — a hand-edited table drifts from the
      inventory silently.
+ 19. Every MAP row's `Implemented in` names a real ORCINUS skill
+     folder (or nothing, for a `todo` row): a `built` row must name
+     the folder that covers the need, never an external tool.
 
 A check that cannot run (missing file it needs) is reported as a
 failure, never silently skipped — except where the check itself says
@@ -269,6 +272,14 @@ def _parse_inline_scalar(text):
             key, value = item.split(":", 1)
             out[_parse_inline_scalar(key)] = _parse_inline_scalar(value)
         return out
+    # A plain scalar cannot contain ': ' — real YAML rejects it
+    # (ScannerError: mapping values are not allowed here), so the
+    # subset parser must reject it too instead of silently accepting
+    # a value PyYAML refuses (round 6, 2-R5). Quoted scalars are
+    # handled above, and a colon without a following space (a URL)
+    # is still a plain scalar.
+    if ": " in text:
+        raise ValueError(f"plain scalar contains ': ' (quote the value): {text!r}")
     return _parse_plain_scalar(_strip_comment(text).strip())
 
 
@@ -879,6 +890,56 @@ def check_router_resources():
                 "re-run scripts/generate_router_resources.py after "
                 "changing docs/MAP.md"
             )
+
+
+def check_skill_status_implemented_in():
+    """Every MAP row's `Implemented in` (see
+    scripts/generate_router_resources.py) names a real ORCINUS skill
+    folder — or nothing, for a `todo` row. A `built` row that names no
+    folder, or names a folder that does not exist (an external tool
+    labelled `built`, e.g. `stack-selector` or `improve`), tells the
+    router to invoke something that is not in the install."""
+    map_file = ROOT / "docs" / "MAP.md"
+    if not map_file.is_file():
+        fail("docs/MAP.md is missing")
+        return
+    generator = _load_router_generator()
+    if generator is None:
+        fail(
+            "scripts/generate_router_resources.py is missing — the "
+            "router's bundled resources cannot be checked"
+        )
+        return
+    folders = {d.name for d in (ROOT / "skills").iterdir() if d.is_dir()}
+    sections = generator.parse_map_tables(map_file.read_text(encoding="utf-8"))
+    for title, section in sections.items():
+        for need, source, _licence, integration, status in section["rows"]:
+            covered = generator.implemented_in(need, source, integration, status, folders)
+            if status.startswith("built"):
+                if not covered:
+                    fail(
+                        f"MAP {title} {need!r}: status {status!r} but no "
+                        "ORCINUS skill implements it — a `built` row must "
+                        "name a real folder in `Implemented in`"
+                    )
+                for name in covered:
+                    if name not in folders:
+                        fail(
+                            f"MAP {title} {need!r}: `Implemented in` names "
+                            f"{name!r}, which is not a folder in skills/"
+                        )
+            elif status == "todo":
+                if covered:
+                    fail(
+                        f"MAP {title} {need!r}: status `todo` but `Implemented in` names {covered}"
+                    )
+            else:
+                for name in covered:
+                    if name not in folders:
+                        fail(
+                            f"MAP {title} {need!r}: `Implemented in` names "
+                            f"{name!r}, which is not a folder in skills/"
+                        )
 
 
 def _stage_ranges(text):
@@ -1807,6 +1868,7 @@ def main():
     check_third_party_notices()
     check_glossary_copy()
     check_router_resources()
+    check_skill_status_implemented_in()
     check_stage_ranges()
     check_stage_containment()
     check_apache_change_notices()

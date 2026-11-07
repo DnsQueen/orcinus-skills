@@ -1,6 +1,6 @@
 ---
 name: waza
-description: "**WORKFLOW SKILL** - Evaluate AI agent skills using structured benchmarks with YAML specs, fixture isolation, and pluggable validators. USE FOR: run waza, waza help, run eval, run benchmark, evaluate skill, test agent, generate eval suite, init eval, compare results, score agent, agent evaluation, skill testing, cross-model comparison. DO NOT USE FOR: improving skill frontmatter (use waza dev), creating new skills from scratch (use skill-creator), token counting or budget checks (use waza tokens). INVOKES: Copilot SDK executor, mock engine, code/regex validators. FOR SINGLE OPERATIONS: use waza run directly for a single benchmark. Only invoke via the orcinus router."
+description: "Evaluate AI agent skills using structured benchmarks with YAML specs, fixture isolation, and pluggable validators. Use when running an eval or benchmark, testing an agent, or comparing results across models. Only invoke via the orcinus router."
 license: MIT
 user-invocable: false
 compatibility: Requires the waza CLI (v0.40.0 or newer).

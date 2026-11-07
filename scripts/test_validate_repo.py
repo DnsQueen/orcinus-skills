@@ -1331,3 +1331,152 @@ def test_readme_skill_table_missing_markers_fails(tmp_path, monkeypatch):
     root = _minimal_repo(tmp_path)
     failures = _run_with_root(monkeypatch, root, vr.check_readme_skill_table)
     assert any("skill table" in f for f in failures)
+
+
+# --- Round-6 track 5: router (R1-R4, R6-R8, 2-R1, 2-R2, 2-R5) ---
+
+
+def _router_text():
+    return (vr.ROOT / "skills" / "orcinus" / "SKILL.md").read_text(encoding="utf-8")
+
+
+def _routing_table_text():
+    """The router's routing table only (between '## Routing' and the
+    next '## ' heading) — so a mention elsewhere in the skill cannot
+    stand in for a routing row."""
+    text = _router_text()
+    start = text.index("## Routing")
+    end = text.index("\n## ", start + 1)
+    return text[start:end]
+
+
+def test_issue_triage_has_fa_branch():
+    """R1: the router tells the agent to pass `fa`, so issue-triage
+    must have a Persian branch — otherwise `fa` falls through to the
+    French default (the actual user's language)."""
+    skill = (vr.ROOT / "skills" / "issue-triage" / "SKILL.md").read_text(encoding="utf-8")
+    fields, err = vr.parse_frontmatter(vr.ROOT / "skills" / "issue-triage" / "SKILL.md")
+    assert err is None, err
+    assert "'fa'" in fields["description"]
+    lang = skill[skill.index("## Language") : skill.index("## Configuration")]
+    assert "`fa`" in lang and "Persian" in lang
+    assert "farsi" in lang.lower() or "persian" in lang.lower()
+
+
+def test_monitoring_description_names_real_skill():
+    """R2: monitoring's description must not name `observability` —
+    no such skill exists. The telemetry skill is
+    `monitoring-observability`."""
+    fields, err = vr.parse_frontmatter(vr.ROOT / "skills" / "monitoring" / "SKILL.md")
+    assert err is None, err
+    assert "`observability`" not in fields["description"]
+    assert "`monitoring-observability`" in fields["description"]
+
+
+def test_router_routing_table_has_monitoring_observability():
+    """R3 / 2-R3: monitoring-observability needs a row in the router's
+    routing table, not just prose in rules.md."""
+    assert "monitoring-observability" in _routing_table_text()
+
+
+def test_skill_status_has_implemented_in_column(monkeypatch):
+    """R4 / 2-R4: skill-status.md must say which ORCINUS skill covers
+    each need — the Best source is the inspiration, not an installed
+    skill. A `built` row whose Implemented in names no real folder
+    (e.g. 'stack-selector: built', 'improve: built') misleads the
+    router into invoking something that is not there."""
+    status = (vr.ROOT / "skills" / "orcinus" / "references" / "skill-status.md").read_text(
+        encoding="utf-8"
+    )
+    assert "| Need | Best source | Implemented in | Status |" in status
+    assert (
+        "| Stack choice | stack-selector (lysandre001/skills-registry) | architecture | built |"
+        in status
+    )
+    assert (
+        "| Scope v1 / non-goals | improve (installed, advisor-only) | idea-calibrate | built |"
+        in status
+    )
+    # The new validator check enforces this on every row.
+    assert _run_with_root(monkeypatch, vr.ROOT, vr.check_skill_status_implemented_in) == []
+
+
+def test_pass_with_limitations_mapping():
+    """R6: security-review's PASS WITH LIMITATIONS is not in the
+    evidence schema's verdict enum, so the mapping must be stated
+    where the verdict is consumed: waived-with-reason maps to PASS,
+    otherwise to INCOMPLETE (not a blanket rule either way). The
+    schema itself gains no fourth verdict."""
+    schema = json.loads(
+        (vr.ROOT / "skills" / "orcinus-verify" / "references" / "evidence.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert schema["properties"]["verdict"]["enum"] == ["PASS", "FAIL", "INCOMPLETE"]
+    for path in (
+        vr.ROOT / "skills" / "security-review" / "SKILL.md",
+        vr.ROOT / "skills" / "orcinus-verify" / "SKILL.md",
+        vr.ROOT / "skills" / "orcinus" / "SKILL.md",
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert "PASS WITH LIMITATIONS" in text, path
+        assert "waived" in text and "INCOMPLETE" in text, path
+
+
+def test_router_host_incompatibility_is_general():
+    """R7 (PARTIAL): the router's host-incompatibility row must cover
+    any install other than the Claude Code plugin — plugin-root
+    agents/ and commands/ and per-skill scripts/ do not travel there
+    — not Hermes alone. The README states the same beyond Hermes."""
+    table = _router_text()
+    table = table[table.index("## When a sub-skill is missing") :]
+    table = table[: table.index("\n## ", 1)]
+    assert "Host-incompatible" in table
+    row = [line for line in table.splitlines() if "Host-incompatible" in line]
+    assert len(row) == 1
+    assert "any install other than the Claude Code plugin" in row[0]
+    assert "agents/" in row[0] and "commands/" in row[0]
+    readme = (vr.ROOT / "README.md").read_text(encoding="utf-8")
+    assert "any install other than the Claude Code plugin" in readme
+
+
+def test_waza_i18n_descriptions_short_and_router_only_is_honest():
+    """R8: the two longest descriptions (waza, i18n) must come down
+    toward the ~287-char median, waza must not contradict the
+    router-only rule in its own description, and the README must say
+    plainly that 'Only invoke via the orcinus router' is unenforced
+    prose — user-invocable: false hides a sub-skill from the / menu,
+    it does not stop the model invoking it directly."""
+    for name, limit in (("waza", 350), ("i18n", 350)):
+        fields, err = vr.parse_frontmatter(vr.ROOT / "skills" / name / "SKILL.md")
+        assert err is None, err
+        assert len(fields["description"]) <= limit, (name, len(fields["description"]))
+    waza, _ = vr.parse_frontmatter(vr.ROOT / "skills" / "waza" / "SKILL.md")
+    assert "use waza run directly" not in waza["description"]
+    readme = (vr.ROOT / "README.md").read_text(encoding="utf-8")
+    assert "Only invoke via the orcinus router" in readme
+    assert "does not stop the model" in readme
+
+
+def test_frontmatter_rejects_unquoted_colon_space(tmp_path):
+    """2-R5 (PARTIAL): the subset parser must agree with PyYAML that
+    an unquoted plain scalar cannot contain ': ' — `description: Use
+    when: ...` is a ScannerError in real YAML. The differential test
+    already exists; this fixes the parser itself."""
+    path = tmp_path / "SKILL.md"
+    path.write_text(
+        "---\nname: x\ndescription: Use when: building a thing\nlicense: MIT\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+    fields, err = vr.parse_frontmatter(path)
+    assert fields is None and err is not None, "unquoted ': ' must be rejected like PyYAML"
+    # Quoted scalars may still contain ': ', and a colon without a
+    # following space is still a plain scalar (e.g. a URL).
+    fields = _parse_text(
+        'name: x\ndescription: "Use when: building a thing"\nlicense: MIT\n', tmp_path
+    )
+    assert fields["description"] == "Use when: building a thing"
+    fields = _parse_text(
+        "name: x\ndescription: See https://example.com/docs\nlicense: MIT\n", tmp_path
+    )
+    assert fields["description"] == "See https://example.com/docs"

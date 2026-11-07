@@ -1,6 +1,6 @@
 ---
 name: comparator
-description: Blind A/B comparison between two versions of a skill: judge outputs without knowing which version produced which, then declare a winner.
+description: "Blind A/B comparison between two versions of a skill: judge outputs without knowing which version produced which, then declare a winner."
 ---
 
 <!-- ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — minimal frontmatter (name, description) added, because Claude Code registers an agent only with frontmatter; upstream ships it as a plain instruction file. The body is otherwise verbatim; see skills/skill-creator/ATTRIBUTION.md. -->

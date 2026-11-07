@@ -1,6 +1,6 @@
 ---
 name: monitoring
-description: "Use when setting up uptime and health monitoring, alerts, or on-call basics for a service already in production, so you learn it is down before customers do — health and readiness probes, alerting on SLO error-budget burn rather than raw counts, curing alert fatigue, on-call rotation with escalation, and a status page. NOT instrumenting logs, metrics or traces, or wiring OpenTelemetry (that is `observability`). Only invoke via the orcinus router."
+description: "Use when setting up uptime and health monitoring, alerts, or on-call basics for a service already in production, so you learn it is down before customers do — health and readiness probes, alerting on SLO error-budget burn rather than raw counts, curing alert fatigue, on-call rotation with escalation, and a status page. NOT instrumenting logs, metrics or traces, or wiring OpenTelemetry (that is `monitoring-observability`). Only invoke via the orcinus router."
 license: MIT
 user-invocable: false
 ---
