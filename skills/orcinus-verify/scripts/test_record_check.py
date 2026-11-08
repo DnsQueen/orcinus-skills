@@ -149,47 +149,63 @@ def test_skills_only_install_records_without_digest_module(tmp_path):
     assert fragment["revision"] == _head_sha(repo)
 
 
-def _stub_git(tmp_path, name, sh_body, bat_body):
-    """An executable `git` stub on PATH: `sh_body` on POSIX, `bat_body`
-    on Windows. An extensionless `git` file is never executed on
-    Windows — CreateProcess only tries the exact name and the
-    PATHEXT extensions — so the stub must be `git.bat` there (the
-    same rule test_verify_sh.py documents for `bash`); with the
-    extensionless file the real git.exe runs and the stub is silently
-    ignored, which is what failed these tests on the Windows runner
-    (CI run 42499224528)."""
-    import stat
+def _fake_git(monkeypatch, respond):
+    """Stub git by faking subprocess.run.
 
-    stubdir = tmp_path / name
-    stubdir.mkdir()
-    if sys.platform == "win32":
-        stub = stubdir / "git.bat"
-        stub.write_text(bat_body, encoding="utf-8")
+    No file on PATH can stub git on Windows: CreateProcess appends
+    only .exe to an extensionless name (it never consults PATHEXT),
+    and a .bat/.cmd file needs cmd.exe to run it — so both the
+    extensionless stub and the git.bat stub from round 1 are
+    silently ignored and the real git.exe runs (CI runs 42499224528
+    and 42501954616). Faking subprocess.run works on every
+    platform, so there is no platform branch here at all; non-git
+    calls go to the real run, so the check command itself still
+    executes for real. `respond(argv, kwargs)` returns the canned
+    CompletedProcess for each git call."""
+    real_run = subprocess.run
+
+    def fake_run(argv, *args, **kwargs):
+        if argv and argv[0] == "git":
+            return respond(argv, kwargs)
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
+def _completed(argv, kwargs, stdout):
+    """A CompletedProcess with stdout in the call's text/bytes mode:
+    the production calls use text=True for rev-parse and bytes for
+    ls-tree, and the fake must match or the validation under test
+    sees the wrong type."""
+    if kwargs.get("text", False):
+        out = stdout if isinstance(stdout, str) else stdout.decode("utf-8")
+        err = ""
     else:
-        stub = stubdir / "git"
-        stub.write_text(sh_body, encoding="utf-8")
-        stub.chmod(stat.S_IRWXU)
-    return stubdir
+        out = stdout if isinstance(stdout, bytes) else stdout.encode("utf-8")
+        err = b""
+    return subprocess.CompletedProcess(argv, 0, stdout=out, stderr=err)
 
 
 def test_empty_git_output_fails_closed(tmp_path, monkeypatch):
     """FND-023 (round 8): git printing nothing with exit 0 used to
     bind a capture to revision "" and the empty digest. _resolve_repo
     must require --show-toplevel to name an existing directory."""
-    import os
-
     repo = _repo(tmp_path)
-    stubdir = _stub_git(
-        tmp_path,
-        "stubbin-empty",
-        "#!/bin/sh\nexit 0\n",
-        "@echo off\r\nexit /b 0\r\n",
-    )
-    monkeypatch.setenv("PATH", str(stubdir) + os.pathsep + os.environ["PATH"])
+    seen = []
+
+    def respond(argv, kwargs):
+        seen.append(argv)
+        return _completed(argv, kwargs, "")
+
+    _fake_git(monkeypatch, respond)
     try:
         rc.record("test", _OK_ARGV, False, tmp_path / "bundle", repo, None, None, 60)
     except rc.RecordError as e:
-        assert "repo" in str(e).lower() or "git" in str(e).lower()
+        # The rejection must come from _resolve_repo (empty
+        # --show-toplevel), not a later stage: the message names it,
+        # and exactly one git call was made.
+        assert "did not name a repository" in str(e), str(e)
+        assert seen == [["git", "-C", str(repo), "rev-parse", "--show-toplevel"]], seen
         return
     raise AssertionError("expected RecordError for empty git output")
 
@@ -198,30 +214,25 @@ def test_revision_must_be_a_full_sha(tmp_path, monkeypatch):
     """FND-023 (round 8): _resolve_revision must require rev-parse
     --verify to succeed with a single-line full SHA (40 or 64 hex),
     not any non-empty stdout."""
-    import os
-
     repo = _repo(tmp_path)
-    # The show-toplevel argument is $4, not $3: the calls are
-    # `git -C <repo> rev-parse ...`, so $1=-C, $2=<repo>,
-    # $3=rev-parse, $4=--show-toplevel. With $3 the condition never
-    # fired and the test passed via _resolve_repo instead of
-    # exercising _resolve_revision as its docstring claims.
-    stubdir = _stub_git(
-        tmp_path,
-        "stubbin-badsha",
-        "#!/bin/sh\n"
-        'if [ "$4" = "--show-toplevel" ]; then echo "' + str(repo) + '"; exit 0; fi\n'
-        'echo "not-a-sha!!"\nexit 0\n',
-        "@echo off\r\n"
-        'if "%~4"=="--show-toplevel" echo ' + str(repo) + "\r\n"
-        'if "%~4"=="--show-toplevel" exit /b 0\r\n'
-        "echo not-a-sha!!\r\n"
-        "exit /b 0\r\n",
-    )
-    monkeypatch.setenv("PATH", str(stubdir) + os.pathsep + os.environ["PATH"])
+    seen = []
+
+    def respond(argv, kwargs):
+        seen.append(argv)
+        if "--show-toplevel" in argv:
+            return _completed(argv, kwargs, str(repo) + "\n")
+        return _completed(argv, kwargs, "not-a-sha!!\n")
+
+    _fake_git(monkeypatch, respond)
     try:
         rc.record("test", _OK_ARGV, False, tmp_path / "bundle", repo, None, None, 60)
-    except rc.RecordError:
+    except rc.RecordError as e:
+        # The bad SHA must be rejected by _resolve_revision, not
+        # earlier or later: the message names it, and --verify HEAD
+        # has to have been asked for (the round-1 $3/$4 bug let this
+        # test pass without reaching it).
+        assert "not a full commit SHA" in str(e), str(e)
+        assert any("--verify" in argv for argv in seen), seen
         return
     raise AssertionError("expected RecordError for a non-SHA revision")
 

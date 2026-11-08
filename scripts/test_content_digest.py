@@ -228,33 +228,63 @@ def test_content_digest_empty_tree_is_genuine_not_broken_git(tmp_path):
     )
 
 
+def _fake_git(monkeypatch, respond):
+    """Stub git by faking subprocess.run.
+
+    No file on PATH can stub git on Windows: CreateProcess appends
+    only .exe to an extensionless name (it never consults PATHEXT),
+    and a .bat/.cmd file needs cmd.exe to run it — so both the
+    extensionless stub and the git.bat stub from round 1 are
+    silently ignored and the real git.exe runs (CI runs 42499224528
+    and 42501954616). Faking subprocess.run works on every
+    platform, so there is no platform branch here at all; non-git
+    calls go to the real run. `respond(argv, kwargs)` returns the
+    canned CompletedProcess for each git call."""
+    real_run = subprocess.run
+
+    def fake_run(argv, *args, **kwargs):
+        if argv and argv[0] == "git":
+            return respond(argv, kwargs)
+        return real_run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
+def _completed(argv, kwargs, stdout):
+    """A CompletedProcess with stdout in the call's text/bytes mode:
+    the production calls use text=True for rev-parse and bytes for
+    ls-tree, and the fake must match or the validation under test
+    sees the wrong type."""
+    if kwargs.get("text", False):
+        out = stdout if isinstance(stdout, str) else stdout.decode("utf-8")
+        err = ""
+    else:
+        out = stdout if isinstance(stdout, bytes) else stdout.encode("utf-8")
+        err = b""
+    return subprocess.CompletedProcess(argv, 0, stdout=out, stderr=err)
+
+
 def test_content_digest_empty_git_output_fails(tmp_path, monkeypatch):
     """N-A1 (round 8): git printing nothing with exit 0 is broken git,
     not an empty tree — the tree object must be confirmed to exist
     before empty ls-tree output is accepted."""
-    import os
-    import stat
-
     repo = _repo(tmp_path)
-    stubdir = tmp_path / "stubbin"
-    stubdir.mkdir()
-    # Windows cannot execute an extensionless `git` file
-    # (CreateProcess only tries the exact name and the PATHEXT
-    # extensions), so the stub must be `git.bat` there — with the
-    # extensionless file the real git.exe runs and the stub is
-    # silently ignored, which is what failed this test on the
-    # Windows runner (CI run 42499224528).
-    if sys.platform == "win32":
-        stub = stubdir / "git.bat"
-        stub.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
-    else:
-        stub = stubdir / "git"
-        stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        stub.chmod(stat.S_IRWXU)
-    monkeypatch.setenv("PATH", str(stubdir) + os.pathsep + os.environ["PATH"])
+    seen = []
+
+    def respond(argv, kwargs):
+        seen.append(argv)
+        return _completed(argv, kwargs, "")
+
+    _fake_git(monkeypatch, respond)
     try:
         cd.content_digest(repo)
-    except cd.ContentDigestError:
+    except cd.ContentDigestError as e:
+        # ls-tree must have been asked for (empty output), and the
+        # tree object must have been checked before it was accepted;
+        # the rejection must come from that check, not elsewhere.
+        assert "tree object does not exist" in str(e), str(e)
+        assert any("ls-tree" in argv for argv in seen), seen
+        assert any("--verify" in argv for argv in seen), seen
         return
     raise AssertionError("expected ContentDigestError for empty git output")
 
