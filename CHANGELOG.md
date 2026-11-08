@@ -3,6 +3,70 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.5] — 2026-11-08
+
+Round-9 fix pass for the audit v3 of v0.10.4 (10 findings: 9
+confirmed, 1 partial, 0 refuted), plus three items from a friend's
+static review of v0.10.4. Every fix is red-first with a regression
+test; pytest 786 passed + 6 skipped (baseline 752 + 6), all gates
+green.
+
+### Fixed
+
+- FND-001 (High): `record_check.py` derives the repo from the cwd
+  and refuses a `--repo` that is not that repo, including bare
+  repos; the validator rejects any check, including `red_check`,
+  whose resolved cwd is outside the claimed repo. Residual,
+  documented in ADR 0006 and the SKILL.md Known limits: a fake run
+  inside the repo, including an untracked fake binary the
+  committed-tree digest does not cover, still validates —
+  fabrication is narrowed, not closed.
+- FND-002 (High): two-target binding — green checks bind to the
+  bundle revision; `fail_first.red_check` binds to its own
+  revision/digest. Worktree: the red revision must be the base
+  (parent of the fix commit when committed; HEAD when uncommitted).
+  Revert-at-smallest-scope binds via a recorded `red_diff_sha256`.
+  `fail_first.test_file_sha256` records the copied-in test file and
+  must match the test file in the green tree. New optional v6
+  fields, no schema bump: `fail_first.base_revision`,
+  `fail_first.red_diff_sha256`, `fail_first.test_file_sha256`.
+- FND-003 (Medium): the verdict is pinned —
+  `test_security_finding_cannot_be_non_blocking` now asserts
+  `expected_verdict == FAIL` and the specific message; the M2
+  mutant (deleting the auto-blocking rule) fails the test.
+- FND-006 (Low) + N-F6x: a dedicated `check_stop_reason` rejects a
+  non-empty `stop_reason` unless the verdict is INCOMPLETE with
+  empty checks, on all three verdicts; a genuine FAIL carrying one
+  is not misclassified.
+- F1 (friend's review): `check_tree_binding` recomputes the
+  working-tree state from `git status --porcelain=v1 -z -uall`
+  instead of trusting the bundle's claim; a bundle claiming
+  "clean" on a dirty tree is rejected, and a PASS is rejected
+  while untracked files exist (`git diff HEAD` does not cover
+  them).
+- F2 (friend's review): `record_check.py` streams captures to temp
+  files with a live 10 MiB cap (kill on exceed) instead of
+  buffering the whole output in RAM and checking afterwards.
+- F3 (friend's review): captures are written atomically (temp file
+  + `os.replace`) and a pre-planted symlink at the bundle
+  directory or either destination file is refused.
+- FND-005 (Low): `state.py` no longer prints the stale-lock note
+  when the flock was free on first try; the note fires only after
+  genuine contention. N-F5x: `_pid_is_alive` on win32 probes with
+  `ctypes` `OpenProcess` instead of always returning True.
+- FND-004 (Low): the README `.py` counts (43 total, 32 under
+  per-skill `scripts/`, 11 outside) are generated into the
+  skill-table block, so they cannot drift again.
+- FND-007: the README Status states Agent Evaluation is designed
+  but not yet demonstrated, until a real-executor run exists.
+- FND-010 + N-C: the README Hermes install section carries its own
+  untested caveat in-section.
+- N-A: SCOPE.md v1.1 now carries the ≥5-trials-per-task plan the
+  README points to. N-R9-2: ADR 0006's stale `state.py` sentence
+  corrected.
+- FND-008 and FND-009: no change (verification report: already
+  disclosed / no code fix).
+
 ## [0.10.4] — 2026-11-08
 
 CI fix, round 2, for the 0.10.3 Windows failure (run 42501954616:
