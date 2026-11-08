@@ -420,6 +420,22 @@ def _run_clean_copy_until_killed(tmp_path, sig):
     return proc.returncode, _leftover_clean_dirs() - before
 
 
+# POSIX signals have no Windows equivalent to assert about:
+# Popen.send_signal(SIGTERM) is TerminateProcess there (the
+# process dies with returncode 1 and no handler, atexit or
+# finally ever runs, so no cleanup is possible), and
+# send_signal(SIGINT) raises ValueError in the stdlib
+# (CI run 42499224528). The FND-024 guarantee is therefore
+# POSIX-only — see the note in clean_copy_check.py — and these
+# tests are skipped on Windows rather than asserting something
+# false there. POSIX coverage is unchanged.
+_skip_no_posix_signals = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="no deliverable SIGTERM/SIGINT on Windows (TerminateProcess / ValueError)",
+)
+
+
+@_skip_no_posix_signals
 def test_sigterm_removes_temp_dir(tmp_path):
     """FND-024: SIGTERM during the gates left a full repo copy
     behind (default SIGTERM disposition skips the `finally`
@@ -432,6 +448,7 @@ def test_sigterm_removes_temp_dir(tmp_path):
     assert leftovers == set(), f"SIGTERM left temp dirs behind: {leftovers}"
 
 
+@_skip_no_posix_signals
 def test_sigint_still_removes_temp_dir(tmp_path):
     """Control: SIGINT already cleaned up (KeyboardInterrupt runs
     the finally) — the SIGTERM fix must not regress it."""

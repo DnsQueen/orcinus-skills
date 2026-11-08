@@ -62,8 +62,12 @@ Usage:
 printed); without it the temp dir is deleted.
 A SIGTERM during the gates removes the temp dir too (a signal
 handler + atexit cleanup, round 8 FND-024) and the process still
-dies by SIGTERM. A SIGKILL cannot be caught, so a SIGKILLed run
-still leaks its temp dir — that is a property of the signal.
+dies by SIGTERM — on POSIX. On Windows there is no deliverable
+SIGTERM (Popen.send_signal(SIGTERM) is TerminateProcess: the
+process dies with returncode 1 and no handler, atexit or finally
+ever runs), so this guarantee does not apply there. A SIGKILL
+cannot be caught, so a SIGKILLed run still leaks its temp dir —
+that is a property of the signal.
 """
 
 import argparse
@@ -271,8 +275,10 @@ def _install_sigterm_cleanup(tmp):
     shutil.rmtree` in main() never ran and a full repo copy
     leaked on every SIGTERM. The handler removes the dir, then
     re-raises SIGTERM with the default disposition, so the
-    process still dies by SIGTERM (returncode -15) instead of
-    exiting 0 or 1. The `cleaned` flag (plus atexit.unregister
+    process still dies by SIGTERM (returncode -15 on POSIX)
+    instead of exiting 0 or 1. On Windows no SIGTERM is ever
+    delivered, so this handler never runs there — see the module
+    docstring. The `cleaned` flag (plus atexit.unregister
     in main's finally) keeps --keep honest: a kept dir is never
     removed at interpreter exit. SIGKILL cannot be caught —
     a SIGKILLed run still leaks its temp dir; that is a property
