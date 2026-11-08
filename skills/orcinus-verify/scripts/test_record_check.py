@@ -149,15 +149,26 @@ def test_skills_only_install_records_without_digest_module(tmp_path):
     assert fragment["revision"] == _head_sha(repo)
 
 
-def _stub_git(tmp_path, name, body):
-    """An executable `git` stub on PATH printing `body` behaviour."""
+def _stub_git(tmp_path, name, sh_body, bat_body):
+    """An executable `git` stub on PATH: `sh_body` on POSIX, `bat_body`
+    on Windows. An extensionless `git` file is never executed on
+    Windows — CreateProcess only tries the exact name and the
+    PATHEXT extensions — so the stub must be `git.bat` there (the
+    same rule test_verify_sh.py documents for `bash`); with the
+    extensionless file the real git.exe runs and the stub is silently
+    ignored, which is what failed these tests on the Windows runner
+    (CI run 42499224528)."""
     import stat
 
     stubdir = tmp_path / name
     stubdir.mkdir()
-    stub = stubdir / "git"
-    stub.write_text(body, encoding="utf-8")
-    stub.chmod(stat.S_IRWXU)
+    if sys.platform == "win32":
+        stub = stubdir / "git.bat"
+        stub.write_text(bat_body, encoding="utf-8")
+    else:
+        stub = stubdir / "git"
+        stub.write_text(sh_body, encoding="utf-8")
+        stub.chmod(stat.S_IRWXU)
     return stubdir
 
 
@@ -168,7 +179,12 @@ def test_empty_git_output_fails_closed(tmp_path, monkeypatch):
     import os
 
     repo = _repo(tmp_path)
-    stubdir = _stub_git(tmp_path, "stubbin-empty", "#!/bin/sh\nexit 0\n")
+    stubdir = _stub_git(
+        tmp_path,
+        "stubbin-empty",
+        "#!/bin/sh\nexit 0\n",
+        "@echo off\r\nexit /b 0\r\n",
+    )
     monkeypatch.setenv("PATH", str(stubdir) + os.pathsep + os.environ["PATH"])
     try:
         rc.record("test", _OK_ARGV, False, tmp_path / "bundle", repo, None, None, 60)
@@ -185,12 +201,22 @@ def test_revision_must_be_a_full_sha(tmp_path, monkeypatch):
     import os
 
     repo = _repo(tmp_path)
+    # The show-toplevel argument is $4, not $3: the calls are
+    # `git -C <repo> rev-parse ...`, so $1=-C, $2=<repo>,
+    # $3=rev-parse, $4=--show-toplevel. With $3 the condition never
+    # fired and the test passed via _resolve_repo instead of
+    # exercising _resolve_revision as its docstring claims.
     stubdir = _stub_git(
         tmp_path,
         "stubbin-badsha",
         "#!/bin/sh\n"
-        'if [ "$3" = "--show-toplevel" ]; then echo "' + str(repo) + '"; exit 0; fi\n'
+        'if [ "$4" = "--show-toplevel" ]; then echo "' + str(repo) + '"; exit 0; fi\n'
         'echo "not-a-sha!!"\nexit 0\n',
+        "@echo off\r\n"
+        'if "%~4"=="--show-toplevel" echo ' + str(repo) + "\r\n"
+        'if "%~4"=="--show-toplevel" exit /b 0\r\n'
+        "echo not-a-sha!!\r\n"
+        "exit /b 0\r\n",
     )
     monkeypatch.setenv("PATH", str(stubdir) + os.pathsep + os.environ["PATH"])
     try:

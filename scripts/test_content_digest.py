@@ -238,9 +238,19 @@ def test_content_digest_empty_git_output_fails(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     stubdir = tmp_path / "stubbin"
     stubdir.mkdir()
-    stub = stubdir / "git"
-    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    stub.chmod(stat.S_IRWXU)
+    # Windows cannot execute an extensionless `git` file
+    # (CreateProcess only tries the exact name and the PATHEXT
+    # extensions), so the stub must be `git.bat` there — with the
+    # extensionless file the real git.exe runs and the stub is
+    # silently ignored, which is what failed this test on the
+    # Windows runner (CI run 42499224528).
+    if sys.platform == "win32":
+        stub = stubdir / "git.bat"
+        stub.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+    else:
+        stub = stubdir / "git"
+        stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        stub.chmod(stat.S_IRWXU)
     monkeypatch.setenv("PATH", str(stubdir) + os.pathsep + os.environ["PATH"])
     try:
         cd.content_digest(repo)
