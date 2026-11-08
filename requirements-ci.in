@@ -4,7 +4,7 @@
 # installs with `pip install --require-hashes -r requirements-ci.txt`.
 # Regenerate after any change here:
 #   pip-compile --generate-hashes requirements-ci.in -o requirements-ci.txt
-pytest==8.4.2
+pytest==9.0.3
 ruff==0.17.4
 pyyaml==6.0.1
 mypy==1.18.2

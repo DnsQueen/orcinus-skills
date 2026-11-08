@@ -287,7 +287,8 @@ def test_ci_requirements_are_hashed():
     req = REPO / "requirements-ci.txt"
     assert req.is_file(), "requirements-ci.txt is missing"
     expected = {
-        "pytest": "8.4.2",
+        # Round 8, FND-021: 8.4.2 has PYSEC-2026-1845 (fixed in 9.0.3).
+        "pytest": "9.0.3",
         "ruff": "0.17.4",
         "pyyaml": "6.0.1",
         "mypy": "1.18.2",
