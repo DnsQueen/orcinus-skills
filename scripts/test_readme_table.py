@@ -46,10 +46,43 @@ def test_build_skill_table_from_manifest():
     table = grt.build_skill_table(manifest)
     rows = [line for line in table.splitlines() if line.startswith("| [")]
     assert len(rows) == 36
-    assert table.splitlines()[0] == "| Skill | Stages | Licence | Integration | Source |"
+    # FND-004: the first line is the generated .py counts comment;
+    # the table header follows it.
+    assert table.splitlines()[0].startswith("<!-- ")
+    assert table.splitlines()[1] == "| Skill | Stages | Licence | Integration | Source |"
     assert any("| [orcinus-verify](skills/orcinus-verify) | 40-59 |" in r for r in rows)
     assert any("| [refactor](skills/refactor) | 50-79 | MIT | verbatim |" in r for r in rows)
     assert "12 stars" not in table
+
+
+def test_build_skill_table_counts_python_files():
+    """FND-004 (round 9): the generated section carries the .py
+    counts, recomputed from the tree — total, under per-skill
+    scripts/, and outside them — so they cannot drift again (the
+    hand-kept comment said 42/31/11 for 43/32/11; the extra file
+    is the round-8 bundled content_digest.py)."""
+    manifest = json.loads((REPO / "skills" / "manifest.json").read_text())
+    table = grt.build_skill_table(manifest)
+    counts = table.splitlines()[0]
+    skills_dir = REPO / "skills"
+    py_files = sorted(skills_dir.rglob("*.py"))
+    total = len(py_files)
+    scripts = len(
+        [
+            p
+            for p in py_files
+            if len(p.relative_to(skills_dir).parts) >= 2
+            and p.relative_to(skills_dir).parts[1] == "scripts"
+        ]
+    )
+    assert counts.startswith(f"<!-- {total} .py files under skills/")
+    assert f"{scripts} live under per-skill scripts/" in counts
+    assert f"{total - scripts} outside per-skill scripts/" in counts
+    # The enumeration lists the files outside scripts/ by their
+    # repo-relative paths (a bare "examples/..." would trip the
+    # repo validator's relative-path check).
+    assert "skills/database-designer/index_optimizer.py" in counts
+    assert "skills/webapp-testing/examples/console_logging.py" in counts
 
 
 def test_build_skill_table_is_deterministic():
@@ -150,3 +183,37 @@ def test_status_section_is_honest_about_evals():
     )
     assert "unproven" in section, "Status must label the never-run agent suite unproven"
     assert "never run" in section, "Status must say the agent suite never ran"
+
+
+def test_status_section_states_agent_evaluation_not_demonstrated():
+    """FND-007 (round 9): Agent Evaluation is designed but not yet
+    demonstrated — the Status section must say so in words, until
+    a real-executor run exists."""
+    section = "\n".join(_section(_readme(), "Status"))
+    assert "designed but not yet demonstrated" in section
+    assert "no evaluation of a live agent" in section
+
+
+def test_scope_states_five_trials_plan():
+    """N-A (round 9): the README's "At least 5 trials per task
+    with a real executor is future work (see SCOPE.md)" must land
+    on a real plan in SCOPE.md, not a dangling pointer."""
+    scope = (REPO / "SCOPE.md").read_text(encoding="utf-8")
+    assert "5 trials" in scope
+    assert "real executor" in scope
+    assert "demonstrated" in scope
+
+
+def test_hermes_section_states_untested():
+    """FND-010 + N-C (round 9): the README's Hermes install
+    section must carry its own untested caveat in-section — the
+    disclosure in SCOPE.md alone does not reach a reader
+    following the install steps."""
+    text = _readme()
+    start = text.index("Hermes (Nous Research)")
+    end = text.index("\n## ", start)
+    # Join wrapped lines: the caveat's phrases span line breaks.
+    section = " ".join(text[start:end].split())
+    assert "Untested with a real Hermes installation" in section
+    assert "never loaded by a real Hermes CLI" in section
+    assert "not a verified run" in section

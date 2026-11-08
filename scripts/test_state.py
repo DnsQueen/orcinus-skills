@@ -769,6 +769,139 @@ def test_cli_validate_rejects_stale_state_by_default(tmp_path, monkeypatch, caps
     assert st.main(["validate", "--no-require-head", str(path)]) == 0
 
 
+def test_six_sequential_cli_transitions_print_no_stale_lock_note(tmp_path):
+    """FND-005 (round 9): the stale-lock note fired on every run
+    after the first — each CLI transition is a new process, so the
+    lock file still names the previous (dead) holder, and the note
+    printed even though the flock was free on first try. A dead
+    recorded PID after a completed transition is the normal state,
+    not a stale lock recovered. Six sequential legal transitions
+    (via BLOCKED back to BUILDING) must print no stale-lock note.
+    Each transition runs as its own CLI process, so the previous
+    holder's PID is genuinely dead — the shape the note used to
+    fire on."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    bundle = _write_bundle(repo, revision=revision)
+    state_dir = repo / ".orcinus"
+    state_dir.mkdir(exist_ok=True)
+    state_path = state_dir / "state.json"
+    state_path.write_text(json.dumps(_building(digest=digest, revision=revision)), encoding="utf-8")
+    script = Path(__file__).resolve().parent / "state.py"
+    steps = [
+        ("VERIFYING", []),
+        ("BLOCKED", []),
+        ("BUILDING", []),
+        ("VERIFYING", []),
+        ("VERIFIED", ["--evidence", bundle]),
+        ("AWAITING_APPROVAL", []),
+    ]
+    for to_stage, extra in steps:
+        proc = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "transition",
+                str(state_path),
+                "--to",
+                to_stage,
+                "--revision",
+                revision,
+                "--repo",
+                str(repo),
+                *extra,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=repo,
+            timeout=60,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "stale lock" not in proc.stderr, (to_stage, proc.stderr)
+
+
+def test_stale_lock_note_still_fires_after_contention(tmp_path, capsys):
+    """FND-005 control: the note is suppressed only when the flock
+    was free on first try — after genuine contention with a dead
+    recorded holder, the note still fires."""
+    import os
+    import threading
+    import time
+
+    state_path = tmp_path / "state.json"
+    state_path.write_text("{}\n", encoding="utf-8")
+    fd, lock_path, _ = st._acquire_lock(state_path)
+    assert fd is not None
+    st._unlock(fd)
+    os.close(fd)
+    # Plant a dead holder's PID in the lock file.
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    lock_path.write_text(f" {proc.pid}\n", encoding="utf-8")
+    # Hold the flock from another fd so the first try fails, then
+    # release it: the acquisition waits, then succeeds.
+    contender = os.open(lock_path, os.O_RDWR)
+    assert st._try_lock(contender)
+
+    def _release():
+        time.sleep(0.2)
+        st._unlock(contender)
+        os.close(contender)
+
+    threading.Thread(target=_release, daemon=True).start()
+    fd2, _, _ = st._acquire_lock(state_path, timeout_s=10.0)
+    assert fd2 is not None
+    assert "stale lock" in capsys.readouterr().err
+    st._unlock(fd2)
+    os.close(fd2)
+
+
+def test_pid_is_alive_posix():
+    """_pid_is_alive on POSIX: the current process is alive; a
+    reaped subprocess's PID is dead."""
+    import os
+
+    assert st._pid_is_alive(os.getpid()) is True
+    proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    proc.wait()
+    assert st._pid_is_alive(proc.pid) is False
+
+
+def test_pid_is_alive_windows_probe(monkeypatch):
+    """N-F5x (round 9): on Windows _pid_is_alive always returned
+    True, so a dead holder was never detected there. The probe is
+    OpenProcess: a handle means alive; no handle with
+    ERROR_ACCESS_DENIED (5) means alive but not ours; any other
+    failure means dead. Tested with a faked windll (this suite
+    runs on Linux)."""
+    import ctypes
+    from types import SimpleNamespace
+
+    class FakeKernel32:
+        def __init__(self):
+            self.last_error = 0
+
+        def OpenProcess(self, access, inherit, pid):
+            assert access == 0x1000
+            if pid == 1111:
+                return 4321  # a handle: alive
+            self.last_error = 5 if pid == 2222 else 87
+            return 0
+
+        def CloseHandle(self, handle):
+            return True
+
+        def GetLastError(self):
+            return self.last_error
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(kernel32=FakeKernel32()), raising=False)
+    assert st._pid_is_alive(1111) is True
+    assert st._pid_is_alive(2222) is True  # access denied: alive, not ours
+    assert st._pid_is_alive(3333) is False  # no such process
+
+
 def test_validate_state_require_head(tmp_path):
     """FND-008, function level: require_head compares the state's
     revision with HEAD; a stale revision is a problem, and a

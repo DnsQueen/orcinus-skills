@@ -489,12 +489,26 @@ def _read_lock_pid(lock_path):
 def _pid_is_alive(pid):
     """True when the process exists. A PermissionError means the
     process exists but belongs to another user — alive, so the
-    lock is held. On Windows there is no portable probe here, so
-    the PID is never declared dead: the stale note is
-    diagnostic only, and recovery never depends on it (the flock
-    is the lock)."""
+    lock is held. On Windows the probe is OpenProcess with
+    PROCESS_QUERY_LIMITED_INFORMATION (round 9, N-F5x): a handle
+    means alive; no handle with ERROR_ACCESS_DENIED (5) also
+    means alive (the process exists but is not ours); any other
+    failure means the PID names nothing. When the probe itself
+    cannot run, the PID is never declared dead — the stale note
+    is diagnostic only, and recovery never depends on it (the
+    flock is the lock)."""
     if sys.platform == "win32":
-        return True
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x1000, False, pid)
+            if handle:
+                kernel32.CloseHandle(handle)
+                return True
+            return kernel32.GetLastError() == 5  # ERROR_ACCESS_DENIED
+        except (OSError, AttributeError):
+            return True
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -525,24 +539,35 @@ def _acquire_lock(path, timeout_s=10.0):
         return None, lock_path, None
     deadline = time.monotonic() + timeout_s
     holder_pid = None
-    while True:
-        if _try_lock(fd):
-            break
-        pid = _read_lock_pid(lock_path)
-        if pid is not None:
-            holder_pid = pid
-        if time.monotonic() >= deadline:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-            return None, lock_path, holder_pid
-        time.sleep(0.05)
+    # Whether the flock was free on the first try (round 9,
+    # FND-005): the first attempt is made outside the wait loop so
+    # the note below can tell a free lock from a contended one.
+    free_on_first_try = _try_lock(fd)
+    if not free_on_first_try:
+        while True:
+            pid = _read_lock_pid(lock_path)
+            if pid is not None:
+                holder_pid = pid
+            if time.monotonic() >= deadline:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                return None, lock_path, holder_pid
+            time.sleep(0.05)
+            if _try_lock(fd):
+                break
     # We hold the lock. The recorded PID may name a dead process
     # (the previous holder died; the OS released the lock and the
-    # file stayed): note it, then overwrite it with ours.
+    # file stayed): note it — but only when the lock was NOT free
+    # on the first try. When the flock was free immediately, a dead
+    # recorded PID is the normal state after any completed
+    # transition, not a stale lock recovered: printing the note on
+    # every run after the first is noise on the happy path. The
+    # lock file is never unlinked (unlinking is what made the old
+    # stale-lock recovery racy).
     old_pid = _read_lock_pid(lock_path)
-    if old_pid is not None and not _pid_is_alive(old_pid):
+    if old_pid is not None and not _pid_is_alive(old_pid) and not free_on_first_try:
         print(
             f"note: stale lock {lock_path.name} recovered "
             f"(holder process {old_pid} no longer exists)",

@@ -1169,7 +1169,9 @@ def check_no_slash_invocation():
 def check_readme_skill_table():
     """The skill table in README.md is exactly what the generator
     produces from skills/manifest.json — a hand-edited table drifts
-    from the inventory silently."""
+    from the inventory silently. The generated section also carries
+    the .py counts (round 9, FND-004), recomputed from this repo's
+    skills/ directory, so a stale count fails here too."""
     readme = ROOT / "README.md"
     manifest_file = ROOT / "skills" / "manifest.json"
     if not readme.is_file():
@@ -1190,7 +1192,7 @@ def check_readme_skill_table():
     except (json.JSONDecodeError, ValueError) as e:
         fail(f"README skill table cannot be read: {e}")
         return
-    if current != generator.build_skill_table(manifest):
+    if current != generator.build_skill_table(manifest, ROOT / "skills"):
         fail("README skill table is stale — run scripts/generate_readme_table.py")
 
 

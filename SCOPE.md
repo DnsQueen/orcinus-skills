@@ -157,7 +157,11 @@ verifier, and the real agent-behavior eval run.
   content changes after approval.
 - **Real-agent eval runs**: run `evals/waza-orcinus-verify-agent/` with
   a real executor, and multi-environment install testing (a fresh
-  install on a clean machine, a real plugin install). The clean-copy check (`scripts/clean_copy_check.py`)
+  install on a clean machine, a real plugin install). At least 5 trials
+  per task with a real executor (round 9, N-A): the suite's 9 tasks × 1
+  trial at a 0.8 threshold cannot measure an LLM, so a real-executor
+  run needs ≥5 trials per task before Agent Evaluation can be called
+  demonstrated. The clean-copy check (`scripts/clean_copy_check.py`)
   is built, and `claude plugin validate . --strict` (plus
   `--profile directory --strict`) passes and runs in CI — the
   validator needs no login, it only checks that the files are

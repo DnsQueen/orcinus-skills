@@ -35,9 +35,57 @@ def _source_cell(source):
     return source
 
 
-def build_skill_table(manifest):
-    """Render the skill table (Markdown) from the manifest dict."""
+def _python_counts(skills_dir):
+    """(total, scripts, outside): the .py files under `skills_dir`
+    (round 9, FND-004) — total, under per-skill scripts/, and the
+    rest as repo-relative paths ("skills/<name>/...") for the
+    enumeration. A file counts as 'scripts' when 'scripts' is the
+    second component of its path under skills/
+    (skills/<name>/scripts/...). The counts were hand-kept before
+    and drifted (42/31/11 for 43/32/11 — the extra file is the
+    round-8 bundled content_digest.py); generated, they cannot.
+    The enumeration uses repo-relative paths, not skill-relative
+    ones: a bare "examples/..." would trip the repo validator's
+    relative-path check, which requires every skills/... path in
+    the README to exist."""
+    total = 0
+    scripts = 0
+    outside = []
+    for path in sorted(skills_dir.rglob("*.py")):
+        rel = path.relative_to(skills_dir)
+        total += 1
+        if len(rel.parts) >= 2 and rel.parts[1] == "scripts":
+            scripts += 1
+        else:
+            outside.append(f"skills/{rel}")
+    return total, scripts, outside
+
+
+def _python_counts_line(skills_dir):
+    """The generated .py-counts comment for the README's generated
+    section: the three numbers plus the enumeration of the files
+    outside per-skill scripts/."""
+    total, scripts, outside = _python_counts(skills_dir)
+    enumerated = ", ".join(outside)
+    return (
+        f"<!-- {total} .py files under skills/ — re-verify with "
+        f"`find skills -name '*.py' | wc -l`. {scripts} live under "
+        f"per-skill scripts/; {total - scripts} outside per-skill "
+        f"scripts/ ({enumerated}). -->"
+    )
+
+
+def build_skill_table(manifest, skills_dir=None):
+    """Render the skill table (Markdown) from the manifest dict,
+    preceded by the generated .py-counts comment. `skills_dir`
+    is the skills directory the counts are read from (default:
+    the skills directory beside this script's repo root); the
+    repo validator passes its own root, so a test repo's counts
+    are its own, not this checkout's."""
+    if skills_dir is None:
+        skills_dir = ROOT / "skills"
     lines = [
+        _python_counts_line(skills_dir),
         "| Skill | Stages | Licence | Integration | Source |",
         "|---|---|---|---|---|",
     ]

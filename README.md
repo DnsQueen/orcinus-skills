@@ -60,6 +60,12 @@ Hermes (Nous Research) — tap + bundle. The repo is a Hermes tap
 already: its skills live under `skills/`, which is the tap's default
 path.
 
+Untested with a real Hermes installation (round 9, FND-010): the
+bundle was validated by the repo's own YAML parser and check, never
+loaded by a real Hermes CLI — no Hermes CLI exists in this
+environment. The steps below are the documented procedure, not a
+verified run.
+
 ```bash
 hermes skills tap add DnsQueen/orcinus-skills
 ```
@@ -114,18 +120,13 @@ Hermes copy per-skill folders whole, including each skill's
 validator, and the drift check are absent there; the Claude Code
 plugin path installs the whole repo, so they are present there.
 
-<!-- Measured 2026-11-08 (round 7, F-09): 42 .py files under
-skills/ — re-verify with `find skills -name '*.py' | wc -l`. 31
-live under per-skill scripts/; 11 at skill roots
-(database-designer: index_optimizer.py, migration_generator.py,
-schema_analyzer.py + 3 tests; security-review/test_secret_scan.py;
-skill-creator/eval-viewer/generate_review.py;
-webapp-testing/examples/*.py x3). skills/monitoring/scripts/ holds
-only verify.sh, no .py. The auditor's live npx install
-(skills@1.7.6, v0.9.8 — historical measurement) counted 40; the +2 are
+<!-- Historical (round 7): the auditor's live npx install
+(skills@1.7.6, v0.9.8) counted 40 .py files; the +3 are
 skills/orcinus-verify/scripts/record_check.py +
-test_record_check.py, added in the round-7 fix pass. Per-skill
-folders travel whole; repo-root scripts/ and plugin-root agents/
+test_record_check.py (round 7) and the bundled content_digest.py
+(round 8). The current counts live in the generated inventory
+below and are recomputed, never hand-kept. Per-skill folders
+travel whole; repo-root scripts/ and plugin-root agents/
 and commands/ do not. -->
 And `${CLAUDE_PLUGIN_ROOT}` paths in skill text (one place:
 `monitoring-observability`'s metrics-collection reference) mean the
@@ -203,6 +204,7 @@ After that, keep working. ORCINUS detects the stage; you confirm each major gate
 ## What v0.10 contains
 
 <!-- BEGIN GENERATED SKILL TABLE — do not edit by hand; run scripts/generate_readme_table.py -->
+<!-- 43 .py files under skills/ — re-verify with `find skills -name '*.py' | wc -l`. 32 live under per-skill scripts/; 11 outside per-skill scripts/ (skills/database-designer/index_optimizer.py, skills/database-designer/migration_generator.py, skills/database-designer/schema_analyzer.py, skills/database-designer/test_migration_generator.py, skills/database-designer/test_migration_integration.py, skills/database-designer/test_postgres_migration.py, skills/security-review/test_secret_scan.py, skills/skill-creator/eval-viewer/generate_review.py, skills/webapp-testing/examples/console_logging.py, skills/webapp-testing/examples/element_discovery.py, skills/webapp-testing/examples/static_html_automation.py). -->
 | Skill | Stages | Licence | Integration | Source |
 |---|---|---|---|---|
 | [accessibility](skills/accessibility) | 20-39 | MIT | wrapper | [maxgfr/ultra11y](https://github.com/maxgfr/ultra11y) |
@@ -285,6 +287,6 @@ Sources that shaped v0.10 include Anthropic (Effective Harnesses, Agent Skills, 
 
 v0.10 foundation: the router and 35 focused sub-skills — all listed above. The map (`docs/MAP.md`) covers every micro-step, so no stage is empty. All 36 shipped skills are built (see `skills/manifest.json`); the 3 MAP needs with no implementing skill yet — Benchmark (SWE-bench), Sandbox runtime (SWE-agent/swe-rex), and Skill eval (plugin-eval) — are built in order, each proven before it ships.
 
-Eval honesty: the 33 scenario evals in `evals/*.md` are manual text scenarios, not scored harness runs. 32 of them carry a dated "Last run" note from a run on throwaway /tmp paths, not a harness re-run. By exact file-stem match, 9 of the 36 skills have no matching `*-01.md` eval file, and 6 eval files have no matching skill directory. One of the six is `router-01.md`, which evaluates the Router in `skills/orcinus`. The only harness-scored evals are the two waza suites, and both grade only `orcinus-verify`. The mock suite ran 2/2 with the real waza v0.40.0 binary, but a mock pass proves the harness runs, never the skill. The agent-behaviour suite (`evals/waza-orcinus-verify-agent/`, executor copilot-sdk, 9 tasks, 1 trial each) has never run with a real executor, so its results are unproven. 9 tasks × 1 trial at a 0.8 threshold cannot measure an LLM. At least 5 trials per task with a real executor is future work (see `SCOPE.md`).
+Eval honesty: the 33 scenario evals in `evals/*.md` are manual text scenarios, not scored harness runs. 32 of them carry a dated "Last run" note from a run on throwaway /tmp paths, not a harness re-run. By exact file-stem match, 9 of the 36 skills have no matching `*-01.md` eval file, and 6 eval files have no matching skill directory. One of the six is `router-01.md`, which evaluates the Router in `skills/orcinus`. The only harness-scored evals are the two waza suites, and both grade only `orcinus-verify`. The mock suite ran 2/2 with the real waza v0.40.0 binary, but a mock pass proves the harness runs, never the skill. The agent-behaviour suite (`evals/waza-orcinus-verify-agent/`, executor copilot-sdk, 9 tasks, 1 trial each) has never run with a real executor, so its results are unproven. Agent Evaluation as a capability is designed but not yet demonstrated: no evaluation of a live agent against a real executor has been observed, so nothing about agent behaviour is claimed. 9 tasks × 1 trial at a 0.8 threshold cannot measure an LLM. At least 5 trials per task with a real executor is future work (see `SCOPE.md`).
 
 Where a ready skill answers a need, it is used as-is — never rewritten — except where the licence or a real defect forced a change, and then the change is recorded in that skill's `ATTRIBUTION.md`. Two examples: `accessibility` is an own-words wrapper around the ultra11y engine (bundled byte-identical), and `database-designer` has fixes to its migration generator (upstream `json.dumps` on Column dataclasses failed on any schema change).

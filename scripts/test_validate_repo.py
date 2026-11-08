@@ -1324,7 +1324,7 @@ def _readme_table_repo(tmp_path):
         (repo_root / "scripts" / "generate_readme_table.py").read_bytes()
     )
     manifest = json.loads((root / "skills" / "manifest.json").read_text())
-    table = grt.build_skill_table(manifest)
+    table = grt.build_skill_table(manifest, root / "skills")
     (root / "README.md").write_text(
         "# Test\n\n" + grt.BEGIN + "\n" + table + grt.END + "\n", encoding="utf-8"
     )
