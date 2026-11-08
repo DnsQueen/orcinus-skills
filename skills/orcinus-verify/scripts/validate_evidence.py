@@ -65,8 +65,10 @@ Two layers, kept separate:
 Structural validation runs first. If it finds any problem, the
 semantic checks do not run at all: a malformed bundle produces a
 controlled report and exit 1, never a traceback. A bundle file
-that cannot even be read as JSON (not UTF-8, nested too deeply)
-is a controlled error with exit 2, never a traceback.
+that cannot even be read safely (a symlink, not a regular file,
+over the 5 MiB cap, not UTF-8, or breaching the JSON nesting or
+array limits) is a controlled error with exit 2, never a
+traceback.
 
 Usage: python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json> [--verdict-block <response.md>] [--repo <repo>] [--expected-revision <rev>] [--expected-diff <sha256>]
 Exit 0 when the bundle is valid and consistent; exit 1 otherwise,
@@ -111,6 +113,31 @@ but the binding is to the tree, not to the run: a lying command's
 capture still binds cleanly to the tree it ran on, and a fabricated
 JUnit file still parses. The claim stays "tamper-evident recording
 bound to a tree", never "proof of execution".
+
+Input limits (round 10, track 1 — Cloudflare takeaway 1): the
+validator's own input is bounded before it is trusted. The bundle
+file is read no-follow, as a regular file, with a live 5 MiB cap
+and fatal UTF-8 decoding; the JSON text is scanned for nesting
+depth (64) and array size (1000) before parsing; the parsed value
+is checked the same way (plus a cyclic-reference check) before any
+schema or semantic rule runs; and the reported problems
+are capped at 100, with unsafe diagnostic characters escaped so a
+hostile bundle cannot smuggle control or bidi-override characters
+into validator output. The limits, the Windows reserved-name
+rejection, and the three-verdict findings contract below are
+adapted from Cloudflare's security-audit-skill (MIT, Copyright
+(c) 2025-2026 Cloudflare, Inc.),
+skills/security-audit/validate-findings.cjs — see the attribution
+comments at each ported piece. What was ported verbatim is the
+Windows reserved-name pattern and the LIMITS numbers; the
+scanners and the escaping are reimplemented in Python (own-words)
+around those numbers, and the findings contract is adapted to our
+finding shape (file/line/evidence plus severity/category) rather
+than copied: our `confirmed` is the pre-existing finding, while
+`needs_validation` (exact unresolved fact, no severity) and
+`rejected` (disproved, with a reason) are new optional verdicts.
+The multi-agent audit harness around the source validator was not
+imported — schema/validator pattern only.
 """
 
 import argparse
@@ -119,9 +146,11 @@ import json
 import os
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import types
+import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -165,6 +194,247 @@ VERDICTS = ("PASS", "FAIL", "INCOMPLETE")
 # a hostile bundle from OOMing the validator (the old code hashed
 # the whole file with read_bytes()).
 MAX_ARTIFACT_BYTES = 10 * 1024 * 1024
+
+# Validator input limits, ported from Cloudflare's
+# security-audit-skill (MIT, Copyright (c) 2025-2026 Cloudflare,
+# Inc.), skills/security-audit/validate-findings.cjs (LIMITS block):
+# the same numbers — a 5 MiB bundle cap, 64 nesting levels, 1000
+# items per array, 100 reported errors. The numbers are kept
+# identical because our bundles are the same shape of input as the
+# source's findings files (structured JSON metadata, with bulk
+# output in capped artifacts), and no bundle in this repo comes
+# close to any of them — matching the source needs no different
+# number from our own usage. The artifact cap above (10 MiB) is
+# different on purpose: artifacts are bulk command output, while
+# the bundle is metadata.
+MAX_BUNDLE_BYTES = 5 * 1024 * 1024
+MAX_JSON_NESTING_DEPTH = 64
+MAX_ARRAY_ITEMS = 1000
+MAX_VALIDATION_ERRORS = 100
+
+
+class JsonStructureError(Exception):
+    """A bundle whose JSON text breaches the input limits
+    (nesting depth or array size)."""
+
+
+# Verbatim from cloudflare/security-audit-skill (MIT, Copyright
+# (c) 2025-2026 Cloudflare, Inc.),
+# skills/security-audit/validate-findings.cjs
+# (WINDOWS_RESERVED_COMPONENT): a path component that is a Windows
+# reserved device name, with any extension and in any case — on
+# Windows such a name is a device, not a file. The superscript
+# digits cover com¹/com²/com³ and lpt¹/lpt²/lpt³, which Windows
+# also reserves.
+WINDOWS_RESERVED_COMPONENT = re.compile(
+    r"^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)",
+    re.IGNORECASE,
+)
+
+
+def is_windows_reserved_component(segment):
+    """True when `segment` is a Windows reserved device name
+    (con/prn/aux/nul/com1-9/lpt1-9, any case, with any extension)."""
+    return WINDOWS_RESERVED_COMPONENT.match(segment) is not None
+
+
+# The Default Ignorable Code Points (Unicode
+# DerivedCoreProperties.txt): Python's unicodedata does not expose
+# them as a property, so the ranges are listed explicitly. Together
+# with the categories below they are the set Cloudflare's
+# UNSAFE_DIAGNOSTIC_CHARACTER covers.
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x061C, 0x061C),
+    (0x180E, 0x180E),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x2064),
+    (0x2066, 0x206F),
+    (0xFEFF, 0xFEFF),
+    (0xFFF0, 0xFFF8),
+    (0xE0001, 0xE0001),
+    (0xE0020, 0xE007F),
+    (0xE0100, 0xE01EF),
+)
+
+
+def _is_unsafe_diagnostic_character(ch):
+    """True for a character that must never reach validator output
+    raw: control, format, surrogate, line/paragraph separator, or
+    default-ignorable. A bidi-override or zero-width character in a
+    problem string could make a FAIL read as a PASS on a terminal."""
+    if unicodedata.category(ch) in ("Cc", "Cf", "Cs", "Zl", "Zp"):
+        return True
+    code_point = ord(ch)
+    return any(start <= code_point <= end for start, end in _DEFAULT_IGNORABLE_RANGES)
+
+
+def escape_unsafe_diagnostic_characters(value):
+    """Escape every unsafe diagnostic character in `value` as
+    \\uXXXX (or \\u{...} above the BMP) — the same rendering as
+    Cloudflare's escapeUnsafeDiagnosticCharacters, reimplemented
+    with unicodedata. Idempotent: the escape itself is plain ASCII,
+    so escaping twice changes nothing."""
+    out = []
+    for ch in str(value):
+        if not _is_unsafe_diagnostic_character(ch):
+            out.append(ch)
+        elif ord(ch) <= 0xFFFF:
+            out.append(f"\\u{ord(ch):04x}")
+        else:
+            out.append(f"\\u{{{ord(ch):x}}}")
+    return "".join(out)
+
+
+def _mark_json_array_item(containers):
+    """Count one value in the innermost open array, if it is
+    expecting an item: the item counter for check_json_text_limits
+    (adapted from Cloudflare's markArrayItem)."""
+    if not containers:
+        return
+    is_array, expects_item, items = containers[-1]
+    if not is_array or not expects_item:
+        return
+    items += 1
+    if items > MAX_ARRAY_ITEMS:
+        raise JsonStructureError(f"input exceeds {MAX_ARRAY_ITEMS} item array limit")
+    containers[-1] = (is_array, False, items)
+
+
+def check_json_text_limits(text):
+    """Enforce the nesting-depth and array-item limits on JSON text
+    before it is parsed — the adapted form of Cloudflare's
+    enforceJsonTextLimits: one pass over the text, tracking
+    string/escape state and a stack of open containers. Raises
+    JsonStructureError on the first breach. Strings are opaque:
+    brackets inside them are data, never structure."""
+    containers = []  # each: (is_array, expects_item, items)
+    in_string = False
+    escaped = False
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            _mark_json_array_item(containers)
+            in_string = True
+        elif ch in "[{":
+            _mark_json_array_item(containers)
+            if len(containers) >= MAX_JSON_NESTING_DEPTH:
+                raise JsonStructureError(
+                    f"input exceeds {MAX_JSON_NESTING_DEPTH} level nesting depth limit"
+                )
+            containers.append((ch == "[", ch == "[", 0))
+        elif ch in "]}":
+            if containers:
+                containers.pop()
+        elif ch == ",":
+            if containers and containers[-1][0]:
+                is_array, _expects_item, items = containers[-1]
+                containers[-1] = (is_array, True, items)
+        elif not ch.isspace():
+            _mark_json_array_item(containers)
+
+
+def _limit_path(base, key):
+    """The location of `key` under `base`, in the dotted form the
+    validator's other messages use (adapted from Cloudflare's
+    propertyPath)."""
+    if isinstance(key, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+        return f"{base}.{key}"
+    return f"{base}[{key!r}]"
+
+
+def collect_input_limit_errors(value, location="$data"):
+    """Enforce the nesting-depth and array-item limits on a parsed
+    value, and reject cyclic references — the adapted form of
+    Cloudflare's collectDataLimitErrors. JSON text can never
+    produce a shared reference, but an in-process caller can hand
+    validate_bundle a cyclic dict, and the structural interpreter
+    would recurse on it until the interpreter limit. Only true
+    cycles are rejected, not merely repeated references: Cloudflare
+    flags repeated references too, but its validator reads JSON
+    text, where a repeated reference cannot occur — while our
+    in-process callers legitimately build bundles with shared
+    sub-objects (a copied check shares its argv list), and the
+    interpreter terminates on such DAGs. The hostile-input path is
+    the CLI, where the text scan above already bounds the input,
+    so a repeated reference here is not a hole. Returns the list of
+    limit problems (empty means within limits)."""
+    stack = [(value, location, 1 if isinstance(value, (dict, list)) else 0, False)]
+    ancestors = set()
+    while stack:
+        current, loc, depth, is_exit = stack.pop()
+        if is_exit:
+            ancestors.discard(id(current))
+            continue
+        if not isinstance(current, (dict, list)):
+            continue
+        if depth > MAX_JSON_NESTING_DEPTH:
+            return [f"{loc}: exceeds {MAX_JSON_NESTING_DEPTH} level nesting depth limit"]
+        if id(current) in ancestors:
+            return [f"{loc}: input must not contain cyclic object references"]
+        ancestors.add(id(current))
+        stack.append((current, loc, depth, True))
+        if isinstance(current, list):
+            if len(current) > MAX_ARRAY_ITEMS:
+                return [f"{loc}: exceeds {MAX_ARRAY_ITEMS} item array limit"]
+            for index in range(len(current) - 1, -1, -1):
+                child = current[index]
+                if isinstance(child, (dict, list)):
+                    stack.append((child, f"{loc}[{index}]", depth + 1, False))
+        else:
+            for key in reversed(list(current.keys())):
+                child = current[key]
+                if isinstance(child, (dict, list)):
+                    stack.append((child, _limit_path(loc, key), depth + 1, False))
+    return []
+
+
+def read_bundle_file(path):
+    """Read a bundle file safely: refuse symlinks, require a regular
+    file, enforce the byte cap live while reading (never after — a
+    hostile file must not be buffered whole first), and decode UTF-8
+    fatally. Returns the decoded text. Raises ValueError with a safe
+    message on any refusal — the message never embeds file content,
+    only the reason. The no-follow open is the adapted form of
+    Cloudflare's readFileWithinLimit (O_NOFOLLOW + regular-file
+    check + live byte cap + fatal UTF-8); the symlink pre-check
+    covers platforms without O_NOFOLLOW (Windows)."""
+    path = Path(path)
+    if path.is_symlink():
+        raise ValueError("input must not be a symlink")
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError as e:
+        raise ValueError(f"input could not be opened: {e}") from e
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("input must be a regular file")
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_BUNDLE_BYTES:
+                raise ValueError(f"input exceeds {MAX_BUNDLE_BYTES} byte limit")
+            chunks.append(chunk)
+        data = b"".join(chunks)
+    finally:
+        os.close(fd)
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError("input is not valid UTF-8") from e
+
 
 # Keywords the subset interpreter implements. Anything else in the
 # schema raises, so an unimplemented keyword is a loud failure,
@@ -336,7 +606,14 @@ def _is_blocking(finding):
     """A finding is blocking unless it is explicitly non-blocking
     AND not a security / data-loss finding: those categories are
     automatically blocking, whatever their severity says (2-V7) —
-    a security finding cannot label itself non-blocking."""
+    a security finding cannot label itself non-blocking. A finding
+    whose verdict is needs_validation or rejected is not a
+    confirmed finding at all, so it is never blocking, whatever its
+    category says: an unvalidated candidate forces INCOMPLETE via
+    expected_verdict instead (see check_finding_verdicts), and a
+    disproved candidate forces nothing."""
+    if finding.get("verdict") in ("needs_validation", "rejected"):
+        return False
     if finding.get("category") in ("security", "data-loss"):
         return True
     return finding.get("severity") != "non-blocking"
@@ -366,7 +643,10 @@ def expected_verdict(bundle):
     severity is anything other than "non-blocking" counts as
     blocking — and a security / data-loss finding counts as blocking
     whatever its severity says. No acceptance criteria means the verification stopped:
-    INCOMPLETE, never PASS."""
+    INCOMPLETE, never PASS. A needs_validation finding is incomplete
+    evidence too: the candidate was not validated, so the bundle is
+    INCOMPLETE, never PASS — and never FAIL either, since nothing
+    about it is established."""
     checks = _checks(bundle)
     findings = _findings(bundle)
     blocking = [f for f in findings if _is_blocking(f)]
@@ -378,12 +658,14 @@ def expected_verdict(bundle):
     ]
     unverified = bundle.get("unverified_items")
     criteria = bundle.get("acceptance_criteria")
+    needs_validation = [f for f in findings if f.get("verdict") == "needs_validation"]
     incomplete = (
         [c for c in checks if c.get("verdict") == "INCOMPLETE"]
         or (isinstance(unverified, list) and bool(unverified))
         or [c for c in checks if c.get("unverified_items")]
         or (isinstance(criteria, list) and not criteria)
         or (not checks and not _docs_only_no_checks_pass(bundle))
+        or needs_validation
     )
     if blocking or failed:
         return "FAIL"
@@ -417,6 +699,11 @@ def check_verdict_consistency(bundle, problems):
             problems.append("verdict is PASS but unverified_items is non-empty")
         if any(c.get("unverified_items") for c in checks):
             problems.append("verdict is PASS but a check has non-empty unverified_items")
+        if any(f.get("verdict") == "needs_validation" for f in _findings(bundle)):
+            problems.append(
+                "verdict is PASS but there is a needs_validation finding: "
+                "an unvalidated finding cannot be PASSed — file INCOMPLETE"
+            )
     elif verdict == "FAIL":
         problems.append(
             "verdict is FAIL but there is no blocking finding and no check with verdict FAIL"
@@ -1104,15 +1391,99 @@ def check_files_changed_for_behaviour_change(bundle, problems):
         )
 
 
+def check_finding_verdicts(bundle, problems):
+    """The three-verdict findings contract (Cloudflare
+    report-schema.json + VALIDATION-AND-REPORTING.md, adapted to our
+    finding shape: file/line/evidence plus severity/category):
+    - confirmed: a finding with evidence; severity is required (a
+      finding without one is blocking, fail-closed — the
+      pre-existing rule, now enforced here because the schema no
+      longer requires severity unconditionally); it must not carry
+      the needs_validation/rejected fields.
+    - needs_validation: an unvalidated candidate; it carries the
+      exact unresolved fact in `unresolved` and must NOT carry a
+      severity — an unvalidated candidate with a severity attached
+      is a severity claim without evidence — or a `reason`, which
+      belongs to a disproved candidate. It is never blocking: it
+      forces INCOMPLETE via expected_verdict instead.
+    - rejected: a disproved candidate; it carries the `reason` it
+      was disproved and must NOT carry a severity — or an
+      `unresolved` fact, which belongs to a candidate still open.
+    A finding with no verdict is confirmed (the pre-existing shape):
+    every previously valid bundle keeps its meaning, so this is
+    additive under schema v6. This is the machine-checked form of
+    the rule that a check that did not run is never reported as
+    passed: an unvalidated finding cannot be a PASS, with or
+    without a severity attached."""
+    for f in _findings(bundle):
+        verdict = f.get("verdict")
+        label = f"finding in {f.get('file')!r}"
+        if verdict == "needs_validation":
+            if "severity" in f:
+                problems.append(
+                    f"{label} is needs_validation but has a severity: "
+                    f"an unvalidated finding must not carry a severity"
+                )
+            if "reason" in f:
+                problems.append(
+                    f"{label} is needs_validation but has a reason: "
+                    f"a needs_validation finding must not carry a reason"
+                )
+            unresolved = f.get("unresolved")
+            if not isinstance(unresolved, str) or not unresolved.strip():
+                problems.append(
+                    f"{label} is needs_validation but has no unresolved fact: "
+                    f"a needs_validation finding must name the exact unresolved "
+                    f"fact in 'unresolved'"
+                )
+        elif verdict == "rejected":
+            if "severity" in f:
+                problems.append(
+                    f"{label} is rejected but has a severity: "
+                    f"a disproved finding must not carry a severity"
+                )
+            if "unresolved" in f:
+                problems.append(
+                    f"{label} is rejected but has an unresolved fact: "
+                    f"a rejected finding must not carry 'unresolved'"
+                )
+            reason = f.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                problems.append(
+                    f"{label} is rejected but has no reason: "
+                    f"a rejected finding must record why it was disproved in 'reason'"
+                )
+        else:  # confirmed, or no verdict (the pre-existing shape)
+            if "severity" not in f:
+                problems.append(
+                    f"{label} has no severity: a confirmed finding must declare "
+                    f"its severity ('blocking' or 'non-blocking') — a finding "
+                    f"without one used to be treated as non-blocking (fail-open)"
+                )
+            for field in ("unresolved", "reason"):
+                if field in f:
+                    problems.append(
+                        f"{label} is confirmed but has {field!r}: a confirmed "
+                        f"finding must not carry the {field} of an unvalidated "
+                        f"or disproved candidate"
+                    )
+
+
 def check_finding_categories(bundle, problems):
     """Security and data-loss findings are automatically blocking
     (2-V7): the category, not the self-declared severity, decides.
     And a non-blocking claim must declare its category, or the
     auto-blocking rule could be dodged by omitting it. A PASS rule
-    only — an honest FAIL bundle may still report the finding."""
+    only — an honest FAIL bundle may still report the finding.
+    Findings whose verdict is needs_validation or rejected are not
+    confirmed findings, so the auto-blocking rule does not apply to
+    them: check_finding_verdicts owns their shape, and _is_blocking
+    never counts them as blocking."""
     if bundle.get("verdict") != "PASS":
         return
     for f in _findings(bundle):
+        if f.get("verdict") in ("needs_validation", "rejected"):
+            continue
         category = f.get("category")
         if category in ("security", "data-loss"):
             problems.append(
@@ -1200,6 +1571,12 @@ def _resolve_inside(bundle_dir, artifact):
     for part in raw.parts:
         if part in ("", "."):
             continue
+        if is_windows_reserved_component(part):
+            return None, (
+                f"artifact {artifact!r} has a Windows reserved-name component "
+                f"{part!r}: con/prn/aux/nul/com1-9/lpt1-9 are devices on Windows, "
+                f"not files in the bundle"
+            )
         current = current / part
         if current.is_symlink():
             return None, f"artifact {artifact!r} passes through a symlink: {current}"
@@ -2241,6 +2618,17 @@ def check_tree_binding(
                 )
 
 
+def _sanitise_problems(problems):
+    """Escape unsafe diagnostic characters in every problem and cap
+    the list at MAX_VALIDATION_ERRORS: a hostile bundle must not
+    smuggle control or bidi-override characters into validator
+    output, and the output stays bounded however many contradictions
+    the bundle holds (Cloudflare's createErrorList caps at the same
+    100). Escaping is idempotent, so main() escaping again at print
+    time changes nothing."""
+    return [escape_unsafe_diagnostic_characters(p) for p in problems[:MAX_VALIDATION_ERRORS]]
+
+
 def validate_bundle(
     bundle, schema, bundle_dir=None, repo=None, expected_revision=None, expected_diff_sha256=None
 ):
@@ -2253,7 +2641,27 @@ def validate_bundle(
     when given, every check's revision and content digest are
     recomputed from that repo's tree and compared against the bundle
     and against expected_revision / expected_diff_sha256; when None,
-    no tree binding is performed (legacy/in-process behaviour)."""
+    no tree binding is performed (legacy/in-process behaviour).
+    Input limits run before anything else: a bundle that breaches
+    the nesting-depth / array-item limits, or holds a cyclic
+    reference, is reported as a limit error and never reaches
+    the schema or semantic layers. Every returned problem is
+    diagnostic-escaped and the list is capped at
+    MAX_VALIDATION_ERRORS."""
+    if isinstance(bundle, dict):
+        limit_problems = collect_input_limit_errors(bundle)
+        if limit_problems:
+            return _sanitise_problems(limit_problems)
+    return _sanitise_problems(
+        _validate_bundle_inner(
+            bundle, schema, bundle_dir, repo, expected_revision, expected_diff_sha256
+        )
+    )
+
+
+def _validate_bundle_inner(
+    bundle, schema, bundle_dir=None, repo=None, expected_revision=None, expected_diff_sha256=None
+):
     problems = _old_schema_problems(bundle, schema)
     if problems:
         return problems
@@ -2268,6 +2676,7 @@ def validate_bundle(
     check_plan_coverage(bundle, problems)
     check_change_type_files(bundle, problems)
     check_files_changed_for_behaviour_change(bundle, problems)
+    check_finding_verdicts(bundle, problems)
     check_finding_categories(bundle, problems)
     check_acceptance_criteria(bundle, problems)
     check_time_order(bundle, problems)
@@ -2390,14 +2799,34 @@ def main(argv):
         print(f"no such file: {path}", file=sys.stderr)
         return 2
     try:
-        bundle = json.loads(path.read_text(encoding="utf-8"))
+        text = read_bundle_file(path)
+    except ValueError as e:
+        # A bundle that cannot even be read safely (a symlink, not a
+        # regular file, over the byte cap, not valid UTF-8) is a
+        # controlled error, exit 2 — never a traceback, against the
+        # module docstring's promise.
+        print(
+            f"{path} could not be read: {escape_unsafe_diagnostic_characters(e)}",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        check_json_text_limits(text)
+    except JsonStructureError as e:
+        # The file cannot be read as JSON within the validator's
+        # limits (2-V4 pins exit 2 for over-nested input): a
+        # controlled read error, never a traceback.
+        print(f"{path} could not be read as JSON: {e}", file=sys.stderr)
+        return 2
+    try:
+        bundle = json.loads(text)
     except json.JSONDecodeError as e:
         print(f"{path} is not valid JSON: {e}", file=sys.stderr)
         return 1
-    except (UnicodeDecodeError, RecursionError, OSError) as e:
-        # 2-V4: a bundle that cannot even be read as JSON (not UTF-8,
-        # nested too deeply) is a controlled error, exit 2 — never a
-        # traceback, against the module docstring's promise.
+    except RecursionError as e:
+        # Unreachable in practice — the text scan above caps nesting
+        # at 64 — but a bundle that cannot be parsed is still a
+        # controlled error, exit 2, never a traceback (2-V4).
         print(f"{path} could not be read as JSON: {e}", file=sys.stderr)
         return 2
     if not isinstance(bundle, dict):
@@ -2417,7 +2846,7 @@ def main(argv):
             expected_diff_sha256=args.expected_diff_sha256,
         )
     except (ValueError, OSError, RecursionError) as e:
-        print(f"validator error: {e}", file=sys.stderr)
+        print(f"validator error: {escape_unsafe_diagnostic_characters(e)}", file=sys.stderr)
         return 2
     if args.verdict_block is not None:
         block_path = Path(args.verdict_block)
@@ -2435,6 +2864,12 @@ def main(argv):
         else:
             check_verdict_block(bundle, block, problems)
     if problems:
+        # Problems from validate_bundle are already escaped and
+        # capped; verdict-block problems are appended above, so
+        # escape again at print time (idempotent) and cap here too.
+        problems = [
+            escape_unsafe_diagnostic_characters(p) for p in problems[:MAX_VALIDATION_ERRORS]
+        ]
         print(f"FAIL: {len(problems)} problem(s) in {path}")
         for p in problems:
             print(f"  - {p}")

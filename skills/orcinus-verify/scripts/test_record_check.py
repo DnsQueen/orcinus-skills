@@ -818,3 +818,20 @@ def test_recorded_check_validates_in_a_pass_bundle(tmp_path):
         },
     }
     assert ve.validate_bundle(bundle, _SCHEMA, bundle_dir=out_dir) == []
+
+
+def test_name_rejects_windows_reserved_names(tmp_path):
+    # Cloudflare takeaway 1 (round 10, track 1): a check name becomes
+    # <name>.stdout / <name>.stderr, so a Windows reserved stem
+    # (con/prn/aux/nul/com1-9/lpt1-9, any case, with any extension)
+    # would write to a device on Windows, not a file in the bundle.
+    repo = _repo(tmp_path)
+    out_dir = tmp_path / "bundle"
+    for bad_name in ("con", "COM1", "nul", "aux", "lpt9", "con.txt"):
+        proc, fragment = _run_record(repo, out_dir, bad_name, [sys.executable, "-c", "print('ok')"])
+        assert proc.returncode == 2, (bad_name, proc.stderr)
+        assert fragment is None
+    # A name that merely starts with a reserved stem is fine.
+    proc, fragment = _run_record(repo, out_dir, "contest", [sys.executable, "-c", "print('ok')"])
+    assert proc.returncode == 0, proc.stderr
+    assert fragment is not None

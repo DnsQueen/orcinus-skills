@@ -76,6 +76,11 @@ itself, or as either destination file — is refused before the
 command runs, so a capture can never overwrite a file outside
 the bundle directory through a link. A pre-existing regular
 capture file is still replaced (re-recording a gate is normal).
+A check name that is a Windows reserved device name (con, prn,
+aux, nul, com1-9, lpt1-9 — the Cloudflare validate-findings.cjs
+pattern, MIT, ported verbatim) is refused for the same reason the
+validator rejects such artifact paths: on Windows the captures
+would be devices, not files in the bundle directory.
 
 The content digest is computed by the existing content_digest
 function (skills/orcinus-verify/scripts/content_digest.py — a
@@ -125,6 +130,20 @@ DEFAULT_TIMEOUT_SECONDS = 600
 # must be a safe file stem: no separator, no leading dot (no "..",
 # no hidden file), at most 100 characters.
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+
+# Windows reserved device names — verbatim from
+# cloudflare/security-audit-skill (MIT, Copyright (c) 2025-2026
+# Cloudflare, Inc.), skills/security-audit/validate-findings.cjs
+# (WINDOWS_RESERVED_COMPONENT). A reserved stem would write the
+# captures to a device on Windows (con, prn, aux, nul, com1-9,
+# lpt1-9 — with any extension, in any case), not to files in the
+# bundle directory, so such a name is refused before the command
+# runs. The validator (validate_evidence.py) rejects the same names
+# in artifact paths named by hand-written bundles.
+_WINDOWS_RESERVED_COMPONENT = re.compile(
+    r"^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)",
+    re.IGNORECASE,
+)
 
 
 # A full commit SHA in this repo's object format: SHA-1 (40 hex)
@@ -442,6 +461,12 @@ def record(name, argv, shell, out_dir, cwd, repo, digest_module, timeout):
         raise RecordError(
             f"--name {name!r} is not a safe check name: use letters, digits, "
             f"'.', '_' or '-', starting with a letter or digit"
+        )
+    if _WINDOWS_RESERVED_COMPONENT.match(name):
+        raise RecordError(
+            f"--name {name!r} is a Windows reserved device name "
+            f"(con/prn/aux/nul/com1-9/lpt1-9): the capture files would be "
+            f"devices on Windows, not files in the bundle directory"
         )
     if shell:
         if len(argv) != 1:

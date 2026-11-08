@@ -2775,3 +2775,288 @@ def test_historical_timestamps_still_valid(tmp_path):
     b, repo = _bound_bundle(tmp_path)
     _retime(b, tmp_path, "2000-01-01T10:00:00Z", "2000-01-01T10:00:12Z")
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
+
+
+# --- Cloudflare takeaway 1 (round 10, track 1): validator hard limits,
+# Windows reserved names, diagnostic escaping, three-verdict findings.
+#
+# Source: cloudflare/security-audit-skill (MIT),
+# skills/security-audit/validate-findings.cjs — LIMITS block, Windows
+# reserved-name rejection, unsafe-diagnostic-character escaping, and
+# the confirmed / needs_validation / rejected contract. Ported to
+# Python (adapted, own-words) where the source is Node; see
+# validate_evidence.py for the attribution and the port notes.
+
+
+def _run_cli_raw(data, suffix=".json"):
+    """Run the validator as a subprocess on a temp file holding raw
+    `data` (bytes or str). Like _run_cli, but for inputs json.dump
+    cannot produce (oversized, invalid UTF-8, symlinked)."""
+    import subprocess
+    import tempfile
+
+    validator = Path(__file__).resolve().parent / "validate_evidence.py"
+    with tempfile.NamedTemporaryFile("wb", suffix=suffix, delete=False) as f:
+        f.write(data if isinstance(data, bytes) else data.encode("utf-8"))
+        path = f.name
+    proc = subprocess.run([sys.executable, str(validator), path], capture_output=True, text=True)
+    Path(path).unlink()
+    return proc
+
+
+def test_json_text_nesting_beyond_limit_fails():
+    # LIMITS.nestingDepth 64: a 65-deep object is rejected before
+    # parsing, and 64-deep is accepted.
+    deep = "{" * 65 + "}" * 65
+    import pytest
+
+    with pytest.raises(ve.JsonStructureError):
+        ve.check_json_text_limits(deep)
+    ve.check_json_text_limits("{" * 64 + "}" * 64)
+
+
+def test_json_text_array_beyond_limit_fails():
+    # LIMITS.arrayItems 1000: a 1001-item array is rejected before
+    # parsing, and 1000 items are accepted.
+    many = "[" + ",".join(["1"] * 1001) + "]"
+    import pytest
+
+    with pytest.raises(ve.JsonStructureError):
+        ve.check_json_text_limits(many)
+    ve.check_json_text_limits("[" + ",".join(["1"] * 1000) + "]")
+
+
+def test_parsed_bundle_over_array_items_fails():
+    # The same array cap on the parsed value: 1001 findings are a
+    # limit error, reported before any schema or semantic check.
+    b = _good_bundle()
+    b["findings"] = [
+        {"file": "src/x.ts", "line": 1, "evidence": "e", "severity": "blocking"}
+        for _ in range(1001)
+    ]
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=None)
+    assert any("array limit" in p for p in problems)
+
+
+def test_parsed_bundle_cyclic_input_fails():
+    # A repeated/cyclic object reference cannot come from JSON, but
+    # an in-process caller can pass one — and _validate would recurse
+    # on it forever. The limit check rejects it first.
+    b = _good_bundle()
+    b["self"] = b
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=None)
+    assert any("cyclic" in p or "repeated" in p for p in problems)
+
+
+def test_bundle_file_over_byte_cap_fails():
+    # LIMITS.inputBytes 5 MiB, enforced while reading (not after):
+    # an oversized bundle file is a controlled read error, exit 2,
+    # never a traceback and never a half-read bundle.
+    import json
+
+    b = _good_bundle()
+    b["requirement"] = "x" * (ve.MAX_BUNDLE_BYTES + 1)
+    proc = _run_cli_raw(json.dumps(b))
+    assert proc.returncode == 2
+    assert "Traceback" not in proc.stderr
+    assert "byte limit" in (proc.stdout + proc.stderr)
+
+
+def test_bundle_file_symlink_is_refused():
+    # The bundle file itself must not be a symlink: the validator
+    # reads the named file, not wherever a link points.
+    import json
+    import subprocess
+    import tempfile
+
+    validator = Path(__file__).resolve().parent / "validate_evidence.py"
+    with tempfile.TemporaryDirectory() as d:
+        real = Path(d) / "real.json"
+        real.write_text(json.dumps(_good_bundle()), encoding="utf-8")
+        link = Path(d) / "link.json"
+        link.symlink_to(real)
+        proc = subprocess.run(
+            [sys.executable, str(validator), str(link)], capture_output=True, text=True
+        )
+        assert proc.returncode == 2
+        assert "Traceback" not in proc.stderr
+        assert "symlink" in (proc.stdout + proc.stderr)
+
+
+def test_bundle_file_invalid_utf8_fails():
+    # Fatal UTF-8 decoding: a bundle that is not valid UTF-8 is a
+    # controlled read error, exit 2, never a traceback.
+    proc = _run_cli_raw(b'{"schema_version": 6, "\xff": 1}')
+    assert proc.returncode == 2
+    assert "Traceback" not in proc.stderr
+    assert "UTF-8" in (proc.stdout + proc.stderr)
+
+
+def test_validation_errors_capped_at_100():
+    # LIMITS.validationErrors 100: a bundle with 150 problems
+    # reports exactly 100 — the output stays bounded however many
+    # contradictions the bundle holds.
+    b = _good_bundle()
+    b["findings"] = [{"file": "src/x.ts", "line": 1, "evidence": "e"} for _ in range(150)]
+    problems = _problems(b)
+    assert len(problems) == ve.MAX_VALIDATION_ERRORS == 100
+
+
+def test_artifact_windows_reserved_name_fails(tmp_path):
+    # A Windows reserved name (con/prn/aux/nul/com1-9/lpt1-9, any
+    # case, with any extension) must not be an artifact path: on
+    # Windows such a file is a device, not a file in the bundle.
+    bundle_dir = tmp_path / "bundle"
+    bundle_dir.mkdir()
+    for artifact in ("con.stdout", "COM1.log", "logs/nul.txt"):
+        (bundle_dir / "con.stdout").write_bytes(b"not in the bundle")
+        (bundle_dir / "COM1.log").write_bytes(b"not in the bundle")
+        (bundle_dir / "logs").mkdir(exist_ok=True)
+        (bundle_dir / "logs" / "nul.txt").write_bytes(b"not in the bundle")
+        b = _artifact_bundle(bundle_dir, artifact, b"not in the bundle")
+        problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=bundle_dir)
+        assert any("reserved" in p for p in problems), artifact
+    # A name that merely starts with a reserved stem is fine.
+    b = _artifact_bundle(bundle_dir, "contest.log", b"not in the bundle")
+    (bundle_dir / "contest.log").write_bytes(b"not in the bundle")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=bundle_dir)
+    assert not any("reserved" in p for p in problems)
+
+
+def test_diagnostic_escapes_unsafe_characters():
+    # Unsafe diagnostic characters (control, format, surrogate,
+    # line/paragraph separator, default-ignorable) are escaped in
+    # problem strings: a hostile bundle must not smuggle terminal
+    # control or bidi-override characters into validator output.
+    escaped = ve.escape_unsafe_diagnostic_characters("a\u202eb\x01c")
+    assert escaped == "a\\u202eb\\u0001c"
+    assert "\u202e" not in escaped and "\x01" not in escaped
+    b = _good_bundle()
+    b["checks"][0]["command"] = "echo \u202e fake-pass"
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=None)
+    assert problems
+    assert not any("\u202e" in p for p in problems)
+    assert any("\\u202e" in p for p in problems)
+
+
+def _needs_validation_finding(**extra):
+    finding = {
+        "file": "src/auth.ts",
+        "line": 12,
+        "evidence": "the deployed config is not visible from source",
+        "verdict": "needs_validation",
+        "unresolved": "whether the deployed config enables the legacy fallback",
+    }
+    finding.update(extra)
+    return finding
+
+
+def test_needs_validation_finding_is_valid_but_incomplete():
+    # The three-verdict contract: a needs_validation finding carries
+    # the exact unresolved fact and NO severity, and it makes the
+    # bundle INCOMPLETE — never a pass, never a failure.
+    b = _good_bundle()
+    b["verdict"] = "INCOMPLETE"
+    b["findings"] = [_needs_validation_finding()]
+    assert ve.expected_verdict(b) == "INCOMPLETE"
+    assert _problems(b) == []
+
+
+def test_needs_validation_finding_with_severity_fails():
+    b = _good_bundle()
+    b["verdict"] = "INCOMPLETE"
+    b["findings"] = [_needs_validation_finding(severity="blocking")]
+    problems = _problems(b)
+    assert any("needs_validation" in p and "severity" in p for p in problems)
+
+
+def test_needs_validation_finding_without_unresolved_fact_fails():
+    b = _good_bundle()
+    b["verdict"] = "INCOMPLETE"
+    finding = _needs_validation_finding()
+    del finding["unresolved"]
+    b["findings"] = [finding]
+    problems = _problems(b)
+    assert any("needs_validation" in p and "unresolved" in p for p in problems)
+
+
+def test_needs_validation_finding_forces_incomplete_not_pass():
+    # A bundle that claims PASS while holding an unvalidated finding
+    # is rejected, and the finding cannot be counted as a pass.
+    b = _good_bundle()
+    b["findings"] = [_needs_validation_finding()]
+    assert ve.expected_verdict(b) == "INCOMPLETE"
+    problems = _problems(b)
+    assert any("needs_validation" in p for p in problems)
+
+
+def test_needs_validation_security_finding_is_not_blocking():
+    # An unvalidated candidate is not a confirmed finding: even a
+    # suspected security issue filed as needs_validation forces
+    # INCOMPLETE, not FAIL — and filing it that way gains no PASS,
+    # so the auto-blocking rule cannot be dodged into one.
+    b = _good_bundle()
+    b["findings"] = [_needs_validation_finding(category="security")]
+    assert ve.expected_verdict(b) == "INCOMPLETE"
+
+
+def test_rejected_finding_is_valid_without_severity(tmp_path):
+    # A rejected finding records a disproved candidate: no severity,
+    # a reason, and it changes no verdict on its own — a PASS bundle
+    # carrying one still passes.
+    b = _good_bundle()
+    b["findings"] = [
+        {
+            "file": "src/auth.ts",
+            "line": 12,
+            "evidence": "the sink is behind an allowlist check",
+            "verdict": "rejected",
+            "reason": "source shows the sink unreachable without auth",
+        }
+    ]
+    assert ve.expected_verdict(b) == "PASS"
+    _recorded_bundle(b, tmp_path)
+    assert _problems(b, tmp_path) == []
+
+
+def test_rejected_finding_with_severity_fails():
+    b = _good_bundle()
+    b["verdict"] = "INCOMPLETE"
+    b["findings"] = [
+        {
+            "file": "src/auth.ts",
+            "line": 12,
+            "evidence": "e",
+            "verdict": "rejected",
+            "reason": "r",
+            "severity": "blocking",
+        }
+    ]
+    problems = _problems(b)
+    assert any("rejected" in p and "severity" in p for p in problems)
+
+
+def test_rejected_finding_without_reason_fails():
+    b = _good_bundle()
+    b["verdict"] = "INCOMPLETE"
+    b["findings"] = [{"file": "src/auth.ts", "line": 12, "evidence": "e", "verdict": "rejected"}]
+    problems = _problems(b)
+    assert any("rejected" in p and "reason" in p for p in problems)
+
+
+def test_confirmed_finding_must_not_carry_unresolved_or_reason():
+    # The forbidden-field lists, adapted: a confirmed finding must
+    # not smuggle in the needs_validation / rejected fields.
+    b = _good_bundle()
+    b["verdict"] = "INCOMPLETE"
+    b["findings"] = [
+        {
+            "file": "src/x.ts",
+            "line": 1,
+            "evidence": "e",
+            "severity": "blocking",
+            "unresolved": "something still open",
+        }
+    ]
+    problems = _problems(b)
+    assert any("confirmed" in p and "unresolved" in p for p in problems)
