@@ -290,3 +290,71 @@ optional base_revision — pattern only, no code copied):
   schema v6; the validator enforces them as PASS rules, the same
   way the JUnit reports are required for a PASS without being
   required fields.
+
+## Round 9 — the dirty-tree binding gap: recompute the working-tree state (F1)
+
+Date: 2026-11-08
+Status: accepted
+
+A friend's static review of v0.10.4 found the round-8 binding
+trusted the bundle's own claim about the tree:
+`check_tree_binding` recomputed `git diff HEAD` only when the
+bundle itself claimed `working_tree_state == "dirty"`, and
+`check_dirty_files` only cross-checked the bundle's own
+self-declared fields — it never ran `git status --porcelain`
+independently. A bundle claiming "clean" on a dirty tree
+validated, and `_git_diff_sha256` is `git diff HEAD` only, so
+untracked files were never covered by any binding at all.
+
+Decision (pattern: in-toto's input materials — a result is bound
+to the inputs it actually ran on, and an input the digest does
+not cover is either hashed as a material or the result is refused;
+pattern only, no code copied):
+
+- When a repo is given, `check_tree_binding` recomputes the real
+  working-tree state from `git status --porcelain=v1 -z` (the -z
+  form keeps non-ASCII paths raw, the round-5 quoting lesson).
+  A bundle claiming "clean" on a dirty tree — or "dirty" on a
+  clean one — is rejected, on any verdict: the state claim is
+  part of the binding, not a label. The diff is bound whenever
+  the tree is actually dirty, whatever the bundle claims.
+- Untracked files: a PASS is rejected while untracked files exist
+  in the repo. `git diff HEAD` does not cover them, so a PASS
+  cannot be bound to them — including a new fix file the agent
+  forgot to commit. Hashing them as materials was considered and
+  rejected: it would change what `diff_sha256` means (the sha256
+  of `git diff HEAD`, recorded by the agent's procedure), and the
+  strong remedy is already available — commit the files, remove
+  them, or file for a clean tree. The rejection is the binding,
+  not a workaround.
+- Carve-outs, and only these: uncommitted files under `.orcinus/`
+  and `docs/verification/` are not dirt — the same exclusions as
+  the content digest and the state machine's own dirt gate
+  (state.py `_tree_is_dirty`, F-07): those are the two places
+  where recording verification itself writes, so committing the
+  state file or an evidence bundle never counts as dirt, and the
+  validator's dirt rule and the state gate must agree, or a
+  bundle could validate but never transition (or the reverse).
+  Untracked files inside the bundle directory are likewise
+  excluded when the bundle lives elsewhere in the repo: they are
+  the evidence artifacts themselves (captures, JUnit reports),
+  written there during verification and verified separately by
+  their sha256s. The bundle-directory exclusion does not apply
+  when the bundle sits at the repo root, where it would swallow
+  the whole tree. Untracked files anywhere else — a scratch file,
+  a new source file — still block a PASS; the remedy is to commit
+  them or move them out. The exclusions apply to tracked
+  modifications in those directories too, for the same reason:
+  they are verification's workspace, not the tree under
+  verification, and the content digest excludes them as well.
+- When git cannot report the status, a PASS fails closed (its
+  tree cannot be bound); a FAIL/INCOMPLETE bundle is still
+  fileable, and the diff binding falls back to the bundle's claim.
+  `check_dirty_files` is unchanged: it remains the self-declared
+  cross-check for the no-repo path.
+
+Residual, stated honestly: this closes the state claim and the
+untracked gap for PASS bundles validated against a repo. It does
+not touch the lying-command half (a fake command run inside the
+repo still records — N-R9-1) or the revert `red_diff_sha256`
+limit above (recorded, not recomputed).

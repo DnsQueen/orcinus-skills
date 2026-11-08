@@ -1803,7 +1803,79 @@ def _check_red_test_file(bundle, ff, repo, target, problems, require_presence):
         )
 
 
-def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_diff_sha256=None):
+# The two directories where recording verification itself writes
+# (round 9, F1): the same exclusions as content_digest's
+# EXCLUDED_PREFIXES and state.py's _tree_is_dirty — the state
+# file and the evidence bundles are verification's own workspace,
+# not the tree under verification, so uncommitted files there are
+# not dirt. The validator's dirt rule and the state machine's dirt
+# gate must agree on what "dirty" means, or a bundle could
+# validate but never transition (or the reverse).
+_VERIFICATION_WORKSPACE_DIRS = (".orcinus", "docs/verification")
+
+
+def _is_verification_workspace_path(repo, path, bundle_root):
+    """True when the repo-relative `path` is verification's own
+    workspace, not tree content: under .orcinus/ or
+    docs/verification/, or inside the bundle directory itself
+    (when the bundle lives elsewhere in the repo — its captures
+    and reports are written there during verification and are
+    verified separately, by their sha256s)."""
+    for excluded in _VERIFICATION_WORKSPACE_DIRS:
+        if path == excluded or path.startswith(excluded + "/"):
+            return True
+    return bundle_root is not None and _is_within(repo / path, bundle_root)
+
+
+def _git_working_tree_status(repo):
+    """(tracked, untracked) from `git status --porcelain` in
+    `repo`, or None when git cannot produce it: repo-relative
+    paths of tracked modifications (staged or unstaged) and of
+    untracked files. `-z` keeps paths raw: without it git quotes
+    non-ASCII paths (core.quotePath), so one file could compare two
+    ways against the bundle directory (round 5, F2). `-uall` lists
+    untracked files individually: without it an untracked
+    directory collapses to one "?? dir/" entry, and the bundle
+    directory inside it could not be excluded precisely. A rename
+    contributes one tracked entry (its new path) plus its source
+    path as a bare field, which is consumed, not counted twice."""
+    rc, out = _git_output(repo, "status", "--porcelain=v1", "-z", "-uall")
+    if rc != 0:
+        return None
+    fields = [f for f in out.split("\0") if f]
+    tracked, untracked = [], []
+    i = 0
+    while i < len(fields):
+        field = fields[i]
+        if field.startswith("?? "):
+            untracked.append(field[3:])
+        elif (
+            len(field) >= 3
+            and field[2] == " "
+            # XY: X is the index status, Y the worktree status — either
+            # may be a space (an unstaged modification is " M ...").
+            and field[0] in " MADRCU?!"
+            and field[1] in "MDU?! "
+        ):
+            tracked.append(field[3:])
+            if field[0] in "RC":
+                i += 1  # the next field is the rename/copy source path
+        i += 1
+    return tracked, untracked
+
+
+def _is_within(path, directory):
+    """True when `path` is inside `directory` (both resolved):
+    the bundle-directory exclusion for the untracked-files rule."""
+    try:
+        return Path(path).resolve().is_relative_to(Path(directory).resolve())
+    except (ValueError, OSError):
+        return False
+
+
+def check_tree_binding(
+    bundle, problems, repo, expected_revision=None, expected_diff_sha256=None, bundle_dir=None
+):
     """Bind the bundle to the tree it ran on (round 8, FND-004;
     pattern: SLSA's slsa-verifier and in-toto's in_toto_verify —
     the verifier re-reads the object itself, recomputes the digest,
@@ -1848,6 +1920,19 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
       record_check.py is the control there;
     - a PASS on a dirty tree must pin the diff it ran on: the sha256
       of `git diff HEAD`, recomputed here, must match diff_sha256;
+    - the working-tree state is recomputed from `git status
+      --porcelain`, never trusted from the bundle (round 9, F1): a
+      bundle claiming "clean" on a dirty tree — or "dirty" on a
+      clean one — is rejected, the diff is bound whenever the tree
+      is actually dirty, and a PASS is rejected while untracked
+      files exist outside verification's own workspace (`git diff
+      HEAD` does not cover them). Uncommitted files under
+      `.orcinus/` and `docs/verification/` are not dirt (the same
+      exclusions as the content digest and the state machine's
+      dirt gate), and neither are untracked files inside the
+      bundle directory itself — unless the bundle sits at the repo
+      root. When git cannot report the status, a PASS fails
+      closed;
     - --expected-revision / --expected-diff, when given, must match
       the bundle revision / recomputed diff.
     When no repo can be resolved at all, a PASS bundle claiming a
@@ -1914,6 +1999,73 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
     except Exception as e:
         problems.append(f"cannot recompute the content digest for revision {target} in {repo}: {e}")
         return
+    # The real working-tree state, recomputed from git (round 9,
+    # F1) — never the bundle's self-declared working_tree_state:
+    # check_dirty_files only cross-checks the bundle's own fields,
+    # and `git diff HEAD` never covers untracked files. Untracked
+    # files inside the bundle directory are the evidence artifacts
+    # themselves (captures, reports), verified separately by their
+    # sha256s — they are excluded, unless the bundle sits at the
+    # repo root, where the exclusion would swallow the whole tree.
+    # When git cannot report the status, a PASS fails closed (its
+    # tree cannot be bound); a FAIL/INCOMPLETE bundle is still
+    # fileable, and the diff binding below falls back to the
+    # bundle's claim.
+    status = _git_working_tree_status(repo)
+    if status is None:
+        if verdict == "PASS":
+            problems.append(
+                f"cannot determine the working-tree state in {repo}: a PASS bundle "
+                "cannot be bound to a tree whose state git cannot report"
+            )
+        actually_dirty = bundle.get("working_tree_state") == "dirty"
+        outside_untracked: list = []
+    else:
+        tracked, untracked = status
+        bundle_root = None
+        if bundle_dir is not None:
+            try:
+                resolved_dir = Path(bundle_dir).resolve()
+                if resolved_dir != repo:
+                    bundle_root = resolved_dir
+            except OSError:
+                bundle_root = None
+        # Dirt is an uncommitted change outside verification's own
+        # workspace (round 9, F1): the same definition as the state
+        # machine's dirt gate and the content digest's exclusions.
+        dirty_tracked = [
+            p for p in tracked if not _is_verification_workspace_path(repo, p, bundle_root)
+        ]
+        outside_untracked = [
+            p for p in untracked if not _is_verification_workspace_path(repo, p, bundle_root)
+        ]
+        actually_dirty = bool(dirty_tracked or outside_untracked)
+        claimed = bundle.get("working_tree_state")
+        if claimed == "clean" and actually_dirty:
+            dirty_bits = list(dirty_tracked[:5])
+            dirty_bits += [f"?? {p}" for p in outside_untracked[:5]]
+            more = len(dirty_tracked) + len(outside_untracked) - len(dirty_bits)
+            detail = ", ".join(dirty_bits)
+            if more > 0:
+                detail += f", and {more} more"
+            problems.append(
+                f"working_tree_state is 'clean' but the tree is dirty in {repo}: {detail}"
+            )
+        elif claimed == "dirty" and not actually_dirty:
+            problems.append(
+                f"working_tree_state is 'dirty' but the tree is clean in {repo}: the "
+                "recorded diff cannot be the diff of a clean tree"
+            )
+        if verdict == "PASS" and outside_untracked:
+            shown = ", ".join(outside_untracked[:5])
+            more = len(outside_untracked) - 5
+            if more > 0:
+                shown += f", and {more} more"
+            problems.append(
+                f"the tree has untracked files in {repo} ({shown}): a PASS cannot be "
+                "bound to content `git diff HEAD` does not cover — commit them, remove "
+                "them, or file for a clean tree"
+            )
     # Green checks bind to the bundle revision (unchanged).
     for check in _checks(bundle):
         label = f"check {check.get('name')!r}"
@@ -2041,7 +2193,7 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
                         "the reverted tree must be recorded, so the red run is bound "
                         "to the diff that reverts the fix at the smallest scope"
                     )
-    if verdict == "PASS" and bundle.get("working_tree_state") == "dirty":
+    if verdict == "PASS" and actually_dirty:
         diff = _git_diff_sha256(repo)
         if diff is None:
             problems.append(
@@ -2099,7 +2251,9 @@ def validate_bundle(
     check_empty_checks(bundle, problems)
     check_stop_reason(bundle, problems)
     check_dirty_files(bundle, problems)
-    check_tree_binding(bundle, problems, repo, expected_revision, expected_diff_sha256)
+    check_tree_binding(
+        bundle, problems, repo, expected_revision, expected_diff_sha256, bundle_dir=bundle_dir
+    )
     return problems
 
 

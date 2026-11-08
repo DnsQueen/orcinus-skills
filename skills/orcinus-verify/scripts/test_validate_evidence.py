@@ -2272,7 +2272,10 @@ def test_tree_binding_dirty_diff_passes_and_wrong_diff_fails(tmp_path):
     import subprocess
 
     b, repo = _bound_bundle(tmp_path)
-    (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
+    # Round 9, FND-002 changed the recording repo's fix commit to
+    # code.py "x = 2", so dirtying the tree needs content that
+    # differs from HEAD — writing "x = 2" is a no-op now.
+    (repo / "code.py").write_text("x = 99\n", encoding="utf-8")
     diff = subprocess.run(
         ["git", "-C", str(repo), "diff", "HEAD"], check=True, capture_output=True
     ).stdout
@@ -2516,6 +2519,81 @@ def test_tree_binding_revert_requires_red_diff(tmp_path):
     del b["fail_first"]["red_diff_sha256"]
     problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
     assert any("red_diff_sha256" in p for p in problems), problems
+
+
+def test_tree_binding_rejects_clean_claim_on_dirty_tree(tmp_path):
+    # F1 (friend's review): the validator recomputes the working-tree
+    # state from git instead of trusting the bundle's claim — a
+    # bundle claiming "clean" on a tree with tracked modifications
+    # is rejected, whatever it claims.
+    b, repo = _bound_bundle(tmp_path)
+    (repo / "code.py").write_text("x = 99\n", encoding="utf-8")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("clean" in p and "dirty" in p for p in problems), problems
+
+
+def test_tree_binding_rejects_pass_with_untracked_files(tmp_path):
+    # F1: `git diff HEAD` does not cover untracked files, so a PASS
+    # filed while untracked files exist in the repo is not bound to
+    # them — including a new fix file the agent forgot to commit.
+    b, repo = _bound_bundle(tmp_path)
+    (repo / "new_module.py").write_text("y = 1\n", encoding="utf-8")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("untracked" in p for p in problems), problems
+
+
+def test_tree_binding_rejects_dirty_claim_on_clean_tree(tmp_path):
+    # F1 (mirror): a bundle claiming "dirty" on a tree that is
+    # actually clean is a false state claim too — the recorded diff
+    # cannot be the diff of a clean tree.
+    b, repo = _bound_bundle(tmp_path)
+    b["working_tree_state"] = "dirty"
+    b["dirty_files"] = ["code.py"]
+    b["diff_sha256"] = "0" * 64
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("dirty" in p and "clean" in p for p in problems), problems
+
+
+def test_tree_binding_untracked_files_in_bundle_dir_do_not_block(tmp_path):
+    # F1: the bundle's own artifacts (captures, reports) are written
+    # into the bundle directory during verification, so untracked
+    # files inside the bundle directory do not block a PASS — they
+    # are verified separately, by their sha256s. The bundle dir here
+    # is inside the repo; the red worktree is removed first, as
+    # SKILL.md step 3 instructs, so it is not an untracked leftover.
+    import subprocess
+
+    repo = _recording_repo(tmp_path)
+    bundle_dir = repo / "evidence"
+    bundle_dir.mkdir()
+    b = _good_bundle()
+    _recorded_bundle(b, bundle_dir, repo=repo)
+    b["revision"] = _head_sha_of(repo)
+    wt = bundle_dir.parent / (bundle_dir.name + "-worktree")
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    _write_junit_reports(b, bundle_dir)
+    _write_test_report(b, bundle_dir)
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=bundle_dir, repo=repo) == []
+
+
+def test_tree_binding_verification_workspace_is_not_dirt(tmp_path):
+    # F1: the validator's dirt rule and the state machine's dirt
+    # gate agree on what "dirty" means (state.py _tree_is_dirty,
+    # F-07): untracked files where recording verification itself
+    # writes — .orcinus/ and docs/verification/ — are not dirt,
+    # so a PASS validates while the state file and another bundle
+    # sit uncommitted there.
+    b, repo = _bound_bundle(tmp_path)
+    (repo / ".orcinus").mkdir(exist_ok=True)
+    (repo / ".orcinus" / "state.json").write_text("{}\n", encoding="utf-8")
+    (repo / "docs" / "verification").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "verification" / "other.json").write_text("{}\n", encoding="utf-8")
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo) == []
 
 
 def test_test_gate_without_junit_report_fails(tmp_path):
