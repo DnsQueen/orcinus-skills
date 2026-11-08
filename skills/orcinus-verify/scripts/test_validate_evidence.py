@@ -186,9 +186,24 @@ def _recording_repo(directory):
     _git(repo, "init", "-q", "-b", "main")
     _git(repo, "config", "user.email", "test@orcinus.local")
     _git(repo, "config", "user.name", "ORCINUS Test")
+    # Two commits (round 9, FND-002): the base commit holds the
+    # pre-fix code, the fix commit holds the fix AND the canonical
+    # test file — the documented fail-first procedure records the
+    # red run in a worktree at the base and the green checks at the
+    # fix commit, so the fixture's bundle revision (HEAD) has a
+    # real base to bind the red to. A one-commit repo cannot model
+    # that shape: its red would sit on the bundle revision itself,
+    # which is exactly the mislabelled shape the validator rejects.
     (repo / "code.py").write_text("x = 1\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "code")
+    (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
+    (repo / "tests").mkdir(exist_ok=True)
+    (repo / "tests" / "test_capture.py").write_text(
+        "def test_capture_persian_only():\n    assert True\n", encoding="utf-8"
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "fix")
     return repo
 
 
@@ -230,6 +245,38 @@ def _run_record_check(directory, name, argv, repo, shell=False):
     return json.loads(proc.stdout)
 
 
+def _red_worktree(directory, repo):
+    """A worktree of `repo` at the base commit (HEAD~1, the pre-fix
+    tree), with the canonical test file copied in: the tree the red
+    run records against, per SKILL.md step 3. The test file does not
+    exist at the base — it is part of the fix — so it is copied in
+    uncommitted, exactly as the documented procedure does. The
+    worktree is a sibling of the bundle directory, never inside it."""
+    import subprocess
+
+    directory = Path(directory)
+    wt = directory.parent / (directory.name + "-worktree")
+    if (wt / ".git").exists():
+        return wt
+    base = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD~1"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", str(wt), base],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    src = repo / "tests" / "test_capture.py"
+    dst = wt / "tests" / "test_capture.py"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(src.read_bytes())
+    return wt
+
+
 def _recorded_bundle(bundle, directory, commands=None, repo=None):
     """Record every check in `bundle` (and fail_first.red_check) by
     running record_check.py for real, writing the capture files into
@@ -260,16 +307,30 @@ def _recorded_bundle(bundle, directory, commands=None, repo=None):
         check.pop("stderr_text", None)
     ff = bundle.get("fail_first")
     if isinstance(ff, dict) and isinstance(ff.get("red_check"), dict):
+        # Round 9, FND-002: the red run is recorded in a worktree at
+        # the base commit (HEAD~1, the pre-fix tree), not in the
+        # repo at the fix commit — the documented procedure (SKILL.md
+        # step 3). The test file does not exist at the base, so it is
+        # copied into the worktree first, and its sha256 is recorded
+        # in fail_first as the material binding the red run to the
+        # test that passes green.
+        red_repo = _red_worktree(directory, repo)
         cmd = cmds.get("red_check", _RED_COMMAND)
         if isinstance(cmd, str):
-            fragment = _run_record_check(directory, "red_check", [cmd], repo, shell=True)
+            fragment = _run_record_check(directory, "red_check", [cmd], red_repo, shell=True)
         else:
-            fragment = _run_record_check(directory, "red_check", cmd, repo)
+            fragment = _run_record_check(directory, "red_check", cmd, red_repo)
         # The red run has no name in the schema (additionalProperties
         # is false): the fragment's name is the capture filename stem.
         fragment.pop("name", None)
         ff["red_check"].update(fragment)
         ff["red_check"].pop("stdout_text", None)
+        import hashlib
+
+        ff["test_file_sha256"] = hashlib.sha256(
+            (repo / "tests" / "test_capture.py").read_bytes()
+        ).hexdigest()
+        ff["base_revision"] = _head_sha_of(red_repo)
 
 
 def _good_bundle():
@@ -2121,7 +2182,7 @@ def _retime(bundle, bundle_dir, started, finished):
 
 def _second_commit(repo):
     """A second commit on the recording repo; returns its HEAD."""
-    (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
+    (repo / "code.py").write_text("x = 3\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "second")
     return _head_sha_of(repo)
@@ -2333,6 +2394,128 @@ def test_tree_binding_ignores_missing_check_cwd(tmp_path):
     _reforge(b["checks"][0], tmp_path)
     problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
     assert problems == [], problems
+
+
+def _re_record_red_at_head(bundle, directory, repo):
+    """Re-record the red run in the main repo at HEAD (the fix
+    commit) instead of the worktree at the base: the mislabelled
+    shape (round 9, FND-002) — the run happened on the pre-fix
+    tree, but the capture claims the fixed tree."""
+    fragment = _run_record_check(directory, "red_check", _RED_COMMAND, repo)
+    fragment.pop("name", None)
+    red = bundle["fail_first"]["red_check"]
+    red.update(fragment)
+    red.pop("stdout_text", None)
+    return fragment
+
+
+def test_tree_binding_rejects_red_check_at_bundle_revision(tmp_path):
+    # FND-002 (round 9): the mislabelled shape — the red run is
+    # recorded with --repo at the fixed tree, so its revision and
+    # digest claim the fixed tree while the test it shows failing
+    # ran on the pre-fix tree. A red run on the bundle revision
+    # itself cannot show the test failing before the fix: for a
+    # committed fix the red revision must be a strict ancestor of
+    # the bundle revision (the base).
+    b, repo = _bound_bundle(tmp_path)
+    _re_record_red_at_head(b, tmp_path, repo)
+    del b["fail_first"]["base_revision"]
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("red_check" in p and "bundle revision" in p for p in problems), problems
+
+
+def test_tree_binding_rejects_red_check_on_wrong_base(tmp_path):
+    # FND-002: a red run on a revision that is not an ancestor of
+    # the bundle revision is not a red for this fix — here a later
+    # commit (a descendant), forged with a consistent capture hash.
+    b, repo = _bound_bundle(tmp_path)
+    head2 = _second_commit(repo)
+    b["fail_first"]["red_check"]["revision"] = head2
+    _reforge(b["fail_first"]["red_check"], tmp_path)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("red_check" in p and "ancestor" in p for p in problems), problems
+
+
+def test_tree_binding_rejects_forged_red_digest(tmp_path):
+    # FND-002: the red run's content digest must equal the digest
+    # recomputed from the tree at the RED revision — a digest
+    # forged with a consistent capture hash must not validate.
+    b, repo = _bound_bundle(tmp_path)
+    b["fail_first"]["red_check"]["content_digest"] = "sha256:" + "f" * 64
+    _reforge(b["fail_first"]["red_check"], tmp_path)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("red_check" in p and "content_digest" in p for p in problems), problems
+
+
+def test_tree_binding_rejects_red_test_file_mismatch(tmp_path):
+    # FND-002: fail_first.test_file_sha256 is the test file as a
+    # material (in-toto): it must match the test file in the green
+    # tree, so the red run ran the same test that passes green.
+    b, repo = _bound_bundle(tmp_path)
+    b["fail_first"]["test_file_sha256"] = "0" * 64
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("test_file_sha256" in p for p in problems), problems
+
+
+def test_tree_binding_requires_red_test_file_sha256(tmp_path):
+    # FND-002: a PASS for a behaviour change with method worktree
+    # must record the test file's sha256 — without it the red run
+    # is not tied to any test file at all.
+    b, repo = _bound_bundle(tmp_path)
+    del b["fail_first"]["test_file_sha256"]
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("test_file_sha256" in p for p in problems), problems
+
+
+def test_tree_binding_rejects_red_base_mismatch(tmp_path):
+    # FND-002: when fail_first.base_revision is declared, the red
+    # run must have run on it — a red on another revision than the
+    # declared base is a misbound red.
+    b, repo = _bound_bundle(tmp_path)
+    head2 = _second_commit(repo)
+    b["fail_first"]["base_revision"] = head2
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("base_revision" in p for p in problems), problems
+
+
+def _revert_bundle(tmp_path):
+    """A bundle whose fail-first proof used revert-at-smallest-scope:
+    the red run is recorded in the main repo at HEAD (the fix
+    commit — the revert is a dirty-tree change, and the content
+    digest covers committed content only), with red_diff_sha256 the
+    sha256 of `git diff HEAD` in the reverted tree. Returns
+    (bundle, repo, red_diff_sha256)."""
+    import hashlib
+    import subprocess
+
+    b, repo = _bound_bundle(tmp_path)
+    b["fail_first"]["method"] = "revert-at-smallest-scope"
+    _re_record_red_at_head(b, tmp_path, repo)
+    (repo / "code.py").write_text("x = 1\n", encoding="utf-8")
+    diff = subprocess.run(
+        ["git", "-C", str(repo), "diff", "HEAD"], check=True, capture_output=True
+    ).stdout
+    red_diff = hashlib.sha256(diff).hexdigest()
+    (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
+    b["fail_first"]["red_diff_sha256"] = red_diff
+    return b, repo, red_diff
+
+
+def test_tree_binding_revert_shape_passes_with_red_diff(tmp_path):
+    # FND-002: the revert shape is the other legitimate red — the
+    # red run sits on the bundle revision (the revert is dirty-tree
+    # only) and binds via the recorded red_diff_sha256.
+    b, repo, _ = _revert_bundle(tmp_path)
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo) == []
+
+
+def test_tree_binding_revert_requires_red_diff(tmp_path):
+    # FND-002: a PASS with method revert-at-smallest-scope and no
+    # recorded red_diff_sha256 has no binding for its red at all.
+    b, repo, _ = _revert_bundle(tmp_path)
+    del b["fail_first"]["red_diff_sha256"]
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("red_diff_sha256" in p for p in problems), problems
 
 
 def test_test_gate_without_junit_report_fails(tmp_path):

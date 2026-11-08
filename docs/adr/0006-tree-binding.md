@@ -230,3 +230,63 @@ in the repo, which the committed-tree digest does not cover. The
 claim stays "tamper-evident recording bound to a tree", never
 "proof of execution"; only a trust boundary the job cannot touch
 closes the lying-command half.
+
+## Round 9 — two-target binding: the red run binds to its own revision (FND-002)
+
+Date: 2026-11-08
+Status: accepted
+
+The round-9 audit (FND-002, High) showed the round-8 binding
+defeated the documented fail-first procedure: `check_tree_binding`
+put `fail_first.red_check` in the same single-target list as every
+green check, so a red run recorded in a worktree at the pre-fix
+commit was rejected (its revision and digest differ from the bundle
+revision by construction) — while the same red run recorded with
+`--repo` at the fixed tree validated, claiming the fixed tree for a
+run that happened on the pre-fix tree. The procedure in SKILL.md
+step 3 could not produce a valid bundle for a committed fix; only
+the uncommitted (dirty-tree) shape validated, where the red revision
+is HEAD either way.
+
+Decision (pattern: CI's two-runs-two-SHAs pairing — a red and a
+green are two separate runs on two SHAs, paired by test name, never
+one run claiming two revisions; in-toto's input materials for the
+test file; SLSA-style caller-supplied expected revision for the
+optional base_revision — pattern only, no code copied):
+
+- Green checks bind to the bundle revision, unchanged.
+  `fail_first.red_check` binds to its own revision and digest,
+  recomputed from the tree at the red revision.
+- For method "worktree" the red revision must be the base the fix
+  is built on: a strict ancestor of the bundle revision when the
+  fix is committed (the parent of the fix commit, or an earlier
+  commit for a multi-commit fix), ancestor-or-equal when the bundle
+  revision is "working-tree" (an uncommitted fix, whose base is
+  HEAD). A red on the bundle revision itself is rejected for a
+  committed fix — that is the mislabelled shape. A red on a
+  revision that is not an ancestor at all is rejected too.
+- `fail_first.base_revision` is an optional declared base (schema
+  v6, no version bump): when present, the red revision must equal
+  it and it must resolve to a commit.
+- `fail_first.test_file_sha256` records the test file as a
+  material: the sha256 of the test file as copied into the red
+  worktree, required for a PASS with method "worktree" or
+  "revert-at-smallest-scope", and it must match the test file in
+  the green tree (`git show <revision>:<path>`, or the working-tree
+  file when the bundle revision is "working-tree"). The committed
+  content digest does not cover the copied-in file, so without
+  this the red run is not tied to any test file.
+- For method "revert-at-smallest-scope" the red run sits on the
+  bundle revision itself (the revert is a dirty-tree change and
+  the digest covers committed content only), so its revision must
+  equal the bundle revision and it binds via the recorded
+  `red_diff_sha256` (the sha256 of `git diff HEAD` in the reverted
+  tree at red-run time), required for a PASS with that method. The
+  validator cannot recompute that diff after the fix is re-applied,
+  so the recorded hash binds the red run to a diff a reviewer can
+  reproduce by re-applying the revert — stated here as the honest
+  limit of that binding, not as a recomputed check.
+- No schema version bump: all three new fields are optional in
+  schema v6; the validator enforces them as PASS rules, the same
+  way the JUnit reports are required for a PASS without being
+  required fields.

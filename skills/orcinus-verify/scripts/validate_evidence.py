@@ -1693,6 +1693,116 @@ def _git_diff_sha256(repo):
     return hashlib.sha256(proc.stdout).hexdigest()
 
 
+def _check_cwd_in_repo(check, label, repo, repo_common, problems):
+    """A check's cwd must be in the repo the bundle is bound to
+    (round 9, FND-001): the command ran on this tree, not on a
+    scratch directory elsewhere (record_check.py refuses such a
+    recording; the validator mirrors it for bundles whose cwd still
+    exists). A cwd that no longer exists (a worktree removed after
+    recording) cannot be checked this way: the record-time
+    containment is the control there."""
+    cwd = check.get("cwd")
+    if not isinstance(cwd, str) or not cwd or repo_common is None:
+        return
+    check_common = _git_common_dir(cwd)
+    if check_common is None:
+        if Path(cwd).exists():
+            problems.append(
+                f"{label} cwd {cwd!r} is not inside the git "
+                f"repository {repo}: the command did not run in "
+                f"the tree this bundle is bound to"
+            )
+    elif check_common != repo_common:
+        problems.append(
+            f"{label} cwd {cwd!r} is in a different repository "
+            f"than {repo}: the command did not run in the tree "
+            f"this bundle is bound to"
+        )
+
+
+def _is_ancestor(repo, ancestor, descendant):
+    """True when `ancestor` is an ancestor of `descendant` in
+    `repo` (a commit is an ancestor of itself): `git merge-base
+    --is-ancestor` exits 0 for yes, 1 for no. False when git cannot
+    run — the caller reports the binding failure, never a pass."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", ancestor, descendant],
+            capture_output=True,
+            timeout=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return proc.returncode == 0
+
+
+def _git_file_sha256(repo, rev, path, working_tree=False):
+    """The sha256 of `path` at `rev` in `repo`, or None when it
+    cannot be read. The committed bytes come from `git show
+    <rev>:<path>`; when the green tree is the working tree
+    (bundle revision \"working-tree\"), the file is read from disk
+    instead — an uncommitted new test file has no committed bytes
+    to show."""
+    if working_tree:
+        try:
+            target = Path(repo) / path
+            if target.is_file():
+                return hashlib.sha256(target.read_bytes()).hexdigest()
+        except OSError:
+            pass
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "show", f"{rev}:{path}"],
+            capture_output=True,
+            timeout=60,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return hashlib.sha256(proc.stdout).hexdigest()
+
+
+def _check_red_test_file(bundle, ff, repo, target, problems, require_presence):
+    """The test file as a material (round 9, FND-002; pattern:
+    in-toto's input materials): fail_first.test_file_sha256 is the
+    sha256 of the test file as copied into the red worktree, and it
+    must match the test file in the green tree — the red run ran the
+    same test that passes green. Presence is required only for a
+    PASS proof (`require_presence`); a recorded hash that does not
+    match is wrong on any verdict."""
+    test_id = ff.get("test")
+    if not isinstance(test_id, str) or "::" not in test_id:
+        return  # the nodeid rule in check_fail_first already reports it
+    test_path = test_id.split("::", 1)[0]
+    actual = _git_file_sha256(
+        repo, target, test_path, working_tree=bundle.get("revision") == "working-tree"
+    )
+    if actual is None:
+        problems.append(
+            f"fail_first.test {test_id!r} test file {test_path!r} does not exist "
+            f"in the green tree at revision {target}: the red run cannot be "
+            "tied to the test that passes green"
+        )
+        return
+    recorded = ff.get("test_file_sha256")
+    if not isinstance(recorded, str) or not recorded:
+        if require_presence:
+            problems.append(
+                "fail_first has no test_file_sha256: the sha256 of the test file "
+                "as copied into the red worktree must be recorded, so the red "
+                "run is tied to the test that passes green"
+            )
+        return
+    if recorded != actual:
+        problems.append(
+            f"fail_first.test_file_sha256 {recorded} does not match the sha256 "
+            f"of {test_path} in the green tree ({actual}): the red run did not "
+            "run the test that passes green"
+        )
+
+
 def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_diff_sha256=None):
     """Bind the bundle to the tree it ran on (round 8, FND-004;
     pattern: SLSA's slsa-verifier and in-toto's in_toto_verify —
@@ -1703,10 +1813,32 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
     When `repo` is None no tree binding is performed (legacy /
     in-process behaviour — state.py calls validate_bundle this way
     until it passes a repo). When a repo is given:
-    - the bundle revision must resolve to a commit in it, and every
-      check's revision (including fail_first.red_check) must resolve
-      to that same commit; a bundle revision of "working-tree"
-      binds to HEAD, the commit its diff applies to;
+    - the bundle revision must resolve to a commit in it; a bundle
+      revision of "working-tree" binds to HEAD, the commit its diff
+      applies to;
+    - every green check's revision must resolve to that same commit,
+      and its content_digest must equal the digest recomputed from
+      the tree at that revision;
+    - fail_first.red_check binds to ITS OWN revision (round 9,
+      FND-002; pattern: CI's two-runs-two-SHAs pairing — a red and a
+      green are two separate runs on two SHAs, paired by test name,
+      never one run claiming two revisions). For method "worktree"
+      the red revision must be the base the fix is built on: a
+      strict ancestor of the bundle revision when the fix is
+      committed (the parent of the fix commit, or an earlier commit
+      for a multi-commit fix), ancestor-or-equal when the bundle
+      revision is "working-tree" (an uncommitted fix, whose base is
+      HEAD) — never the bundle revision itself for a committed fix:
+      a red run recorded with --repo at the fixed tree claims the
+      fixed tree while the test ran on the pre-fix tree. When
+      fail_first.base_revision is declared, the red revision must
+      equal it. For method "revert-at-smallest-scope" the red ran on
+      the bundle revision itself (the revert is a dirty-tree change,
+      and the content digest covers committed content only), so its
+      revision must equal the bundle revision and it binds via the
+      recorded red_diff_sha256. In both methods the red run's
+      content_digest is recomputed from the tree at the RED revision,
+      and test_file_sha256 must match the test file in the green tree;
     - every check's cwd (including fail_first.red_check) must be in
       that repo — same git common dir — when the directory still
       exists (round 9, FND-001): a command recorded in a scratch
@@ -1714,8 +1846,6 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
       no longer exists (a worktree removed after recording) cannot
       be checked this way; the record-time containment in
       record_check.py is the control there;
-    - every check's content_digest must equal the digest recomputed
-      from the tree at that revision;
     - a PASS on a dirty tree must pin the diff it ran on: the sha256
       of `git diff HEAD`, recomputed here, must match diff_sha256;
     - --expected-revision / --expected-diff, when given, must match
@@ -1784,35 +1914,10 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
     except Exception as e:
         problems.append(f"cannot recompute the content digest for revision {target} in {repo}: {e}")
         return
-    targets = [(c, f"check {c.get('name')!r}") for c in _checks(bundle)]
-    ff = bundle.get("fail_first")
-    if isinstance(ff, dict) and isinstance(ff.get("red_check"), dict):
-        targets.append((ff["red_check"], "fail_first.red_check"))
-    for check, label in targets:
-        # Round 9, FND-001: a check's cwd must be in the repo the
-        # bundle is bound to — the command ran on this tree, not
-        # on a scratch directory elsewhere (record_check.py refuses
-        # such a recording; the validator mirrors it for bundles
-        # whose cwd still exists). A cwd that no longer exists (a
-        # worktree removed after recording) cannot be checked this
-        # way: the record-time containment is the control there,
-        # and the revision/digest binding below still applies.
-        cwd = check.get("cwd")
-        if isinstance(cwd, str) and cwd and repo_common is not None:
-            check_common = _git_common_dir(cwd)
-            if check_common is None:
-                if Path(cwd).exists():
-                    problems.append(
-                        f"{label} cwd {cwd!r} is not inside the git "
-                        f"repository {repo}: the command did not run in "
-                        f"the tree this bundle is bound to"
-                    )
-            elif check_common != repo_common:
-                problems.append(
-                    f"{label} cwd {cwd!r} is in a different repository "
-                    f"than {repo}: the command did not run in the tree "
-                    f"this bundle is bound to"
-                )
+    # Green checks bind to the bundle revision (unchanged).
+    for check in _checks(bundle):
+        label = f"check {check.get('name')!r}"
+        _check_cwd_in_repo(check, label, repo, repo_common, problems)
         revision = check.get("revision")
         if isinstance(revision, str) and revision:
             resolved = _resolve_commit(repo, revision)
@@ -1833,6 +1938,109 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
                     f"{label} content_digest {digest} does not match the digest recomputed "
                     f"from the tree at revision {target} ({recomputed})"
                 )
+    # The red run binds to its own revision (round 9, FND-002):
+    # the green checks above bind to the bundle revision, the red
+    # run to the base it ran on. A fail_first with method
+    # "not-applicable" carries no red proof, so a stray red_check
+    # there is not bound — only its cwd is checked above.
+    ff = bundle.get("fail_first")
+    red = ff.get("red_check") if isinstance(ff, dict) else None
+    if isinstance(red, dict):
+        _check_cwd_in_repo(red, "fail_first.red_check", repo, repo_common, problems)
+        method = ff.get("method")
+        if method in ("worktree", "revert-at-smallest-scope"):
+            plan = bundle.get("verification_plan")
+            change_type = plan.get("change_type") if isinstance(plan, dict) else None
+            is_behavior = change_type in BEHAVIOR_CHANGE_TYPES
+            require_proof = verdict == "PASS" and is_behavior
+            red_revision = red.get("revision")
+            red_target = None
+            if isinstance(red_revision, str) and red_revision:
+                red_target = _resolve_commit(repo, red_revision)
+                if red_target is None:
+                    problems.append(
+                        f"fail_first.red_check revision {red_revision!r} does not resolve "
+                        f"to a commit in {repo}"
+                    )
+                elif method == "worktree":
+                    # The base the fix is built on: a strict
+                    # ancestor of the bundle revision for a
+                    # committed fix — never the bundle revision
+                    # itself, which is the mislabelled shape
+                    # (--repo at the fixed tree) — and
+                    # ancestor-or-equal for an uncommitted fix,
+                    # whose base is HEAD (SKILL.md step 3).
+                    base = ff.get("base_revision")
+                    if isinstance(base, str) and base:
+                        base_target = _resolve_commit(repo, base)
+                        if base_target is None:
+                            problems.append(
+                                f"fail_first.base_revision {base!r} does not resolve "
+                                f"to a commit in {repo}"
+                            )
+                        elif base_target != red_target:
+                            problems.append(
+                                f"fail_first.red_check revision {red_revision!r} "
+                                f"(resolved {red_target}) does not match "
+                                f"fail_first.base_revision {base!r} (resolved "
+                                f"{base_target}): the red run must run on the "
+                                "declared base"
+                            )
+                    if red_target == target:
+                        if bundle_revision != "working-tree":
+                            problems.append(
+                                f"fail_first.red_check revision {red_revision!r} is the "
+                                "bundle revision: a red run on the fixed tree cannot "
+                                "show the test failing before the fix — the red run "
+                                "must run on the base (the parent of the fix commit "
+                                "when committed, HEAD when uncommitted)"
+                            )
+                    elif not _is_ancestor(repo, red_target, target):
+                        problems.append(
+                            f"fail_first.red_check revision {red_revision!r} (resolved "
+                            f"{red_target}) is not an ancestor of the bundle revision "
+                            f"{bundle_revision!r} (resolved {target}): the red run did "
+                            "not run on the base this fix is built on"
+                        )
+                else:  # revert-at-smallest-scope
+                    # The revert is a dirty-tree change on the
+                    # bundle revision itself, so the red revision
+                    # must equal it; the binding is the recorded
+                    # red_diff_sha256 below.
+                    if red_target != target:
+                        problems.append(
+                            f"fail_first.red_check revision {red_revision!r} (resolved "
+                            f"{red_target}) does not match the bundle revision "
+                            f"{bundle_revision!r} (resolved {target}): a "
+                            "revert-at-smallest-scope red run reverts the fix on "
+                            "the bundle revision itself"
+                        )
+                if red_target is not None:
+                    try:
+                        red_recomputed = _content_digest_fn(repo, red_target)
+                    except Exception as e:
+                        problems.append(
+                            f"cannot recompute the content digest for the red revision "
+                            f"{red_target} in {repo}: {e}"
+                        )
+                    else:
+                        digest = red.get("content_digest")
+                        if isinstance(digest, str) and digest and digest != red_recomputed:
+                            problems.append(
+                                f"fail_first.red_check content_digest {digest} does not "
+                                "match the digest recomputed from the tree at the red "
+                                f"revision "
+                                f"{red_target} ({red_recomputed})"
+                            )
+            _check_red_test_file(bundle, ff, repo, target, problems, require_presence=require_proof)
+            if method == "revert-at-smallest-scope" and require_proof:
+                if not isinstance(ff.get("red_diff_sha256"), str) or not ff.get("red_diff_sha256"):
+                    problems.append(
+                        "fail_first has no red_diff_sha256: for method "
+                        "'revert-at-smallest-scope' the sha256 of `git diff HEAD` in "
+                        "the reverted tree must be recorded, so the red run is bound "
+                        "to the diff that reverts the fix at the smallest scope"
+                    )
     if verdict == "PASS" and bundle.get("working_tree_state") == "dirty":
         diff = _git_diff_sha256(repo)
         if diff is None:
