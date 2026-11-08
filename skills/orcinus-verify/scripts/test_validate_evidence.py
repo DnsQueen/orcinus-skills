@@ -2475,10 +2475,38 @@ def test_tree_binding_accepts_crlf_test_file_sha256(tmp_path):
 
     b, repo = _bound_bundle(tmp_path)
     green = (repo / "tests" / "test_capture.py").read_bytes()
-    crlf = green.replace(b"\n", b"\r\n")
-    assert crlf != green  # the fixture file is LF; the CRLF form differs
+    # CI fix round 5 (0.10.7, windows job): the working-tree file
+    # is CRLF on Windows (write_text translates LF->CRLF), so
+    # expanding the raw read would turn each CRLF into CRCRLF
+    # (\r\r\n) and hash the wrong bytes — the exact hash the
+    # Windows job recorded (66d80570...). Normalise to LF first,
+    # then expand: the CRLF form of the green-tree file.
+    lf = green.replace(b"\r\n", b"\n")
+    crlf = lf.replace(b"\n", b"\r\n")
+    assert crlf != lf  # the fixture file is LF; the CRLF form differs
     b["fail_first"]["test_file_sha256"] = hashlib.sha256(crlf).hexdigest()
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo) == []
+
+
+def test_tree_binding_rejects_crcrlf_test_file_sha256(tmp_path):
+    # CI fix round 5 (0.10.7, windows job): the round-4 test built
+    # the CRLF form by expanding the working-tree read, which on
+    # Windows is already CRLF — so it hashed CRCRLF (\r\r\n) bytes
+    # instead. The validator's line-ending equivalence class is
+    # exactly {LF, CRLF} (see _line_ending_hashes): a CRCRLF hash
+    # is a hash of different content and must still fail, or the
+    # round-4 fix would have loosened the material binding instead
+    # of canonicalising it.
+    import hashlib
+
+    b, repo = _bound_bundle(tmp_path)
+    green = (repo / "tests" / "test_capture.py").read_bytes()
+    lf = green.replace(b"\r\n", b"\n")
+    crcrlf = lf.replace(b"\n", b"\r\n").replace(b"\n", b"\r\n")
+    assert crcrlf != lf.replace(b"\n", b"\r\n")
+    b["fail_first"]["test_file_sha256"] = hashlib.sha256(crcrlf).hexdigest()
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("test_file_sha256" in p for p in problems), problems
 
 
 def test_tree_binding_requires_red_test_file_sha256(tmp_path):
