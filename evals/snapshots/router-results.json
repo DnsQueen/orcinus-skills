@@ -1,0 +1,124 @@
+{
+  "metadata": {
+    "generated_at": "2026-11-08T22:34:24.476131+00:00",
+    "generated_by": "scripts/router_eval.py grade_arms on REFERENCE_DECISIONS (self-check)",
+    "harness": "scripts/router_eval.py",
+    "eval": "evals/router-01.md",
+    "total_scenarios": 12,
+    "live_run": false,
+    "note": "Self-check pin, not an agent measurement: every arm grades REFERENCE_DECISIONS, the expected answers written out in scripts/router_eval.py, so every arm scores 12/12 and the honest delta is 0. These numbers pin the grader and the honest-delta computation — they say nothing about how a real agent routes. No live-agent run has been recorded yet, so there is no live honest delta; live is null until a recorded three-arm run replaces it. Do not cite the delta here as skill performance."
+  },
+  "self_check": {
+    "decisions": {
+      "idea-no-repo": {
+        "stage": "Idea capture",
+        "routes": [
+          "idea-capture"
+        ],
+        "mode": "full"
+      },
+      "idea-needs-sharpening": {
+        "stage": "Idea",
+        "routes": [
+          "idea-calibrate"
+        ],
+        "mode": "full"
+      },
+      "idea-no-tree": {
+        "stage": "Architecture",
+        "routes": [
+          "architecture"
+        ],
+        "mode": "full"
+      },
+      "arch-no-build": {
+        "stage": "Scaffold",
+        "routes": [
+          "scaffold"
+        ],
+        "mode": "full"
+      },
+      "builds-slice": {
+        "stage": "Build",
+        "routes": [
+          "build"
+        ],
+        "mode": "full"
+      },
+      "slice-done": {
+        "stage": "Verify",
+        "routes": [
+          "orcinus-verify"
+        ],
+        "mode": "full"
+      },
+      "slice-done-auth": {
+        "stage": "Verify",
+        "routes": [
+          "orcinus-verify",
+          "security-review"
+        ],
+        "mode": "full"
+      },
+      "web-ui-verify": {
+        "stage": "Verify: web UI",
+        "routes": [
+          "webapp-testing"
+        ],
+        "mode": "full"
+      },
+      "shipped-uptime": {
+        "stage": "Health / monitoring",
+        "routes": [
+          "monitoring"
+        ],
+        "mode": "full"
+      },
+      "shipped-telemetry": {
+        "stage": "Telemetry / instrumentation",
+        "routes": [
+          "monitoring-observability"
+        ],
+        "mode": "full"
+      },
+      "typo-patch-lite": {
+        "stage": "Build",
+        "routes": [
+          "build"
+        ],
+        "mode": "lite"
+      },
+      "benchmark-missing": {
+        "stage": "Evidence / eval",
+        "routes": [
+          "waza"
+        ],
+        "mode": "full",
+        "missing": [
+          "SWE-bench"
+        ]
+      }
+    },
+    "arms": {
+      "__baseline__": {
+        "passed": 12,
+        "total": 12
+      },
+      "__terse__": {
+        "passed": 12,
+        "total": 12
+      },
+      "orcinus": {
+        "passed": 12,
+        "total": 12
+      }
+    },
+    "honest_delta": {
+      "orcinus": 0
+    },
+    "vs_baseline_delta": {
+      "orcinus": 0
+    }
+  },
+  "live": null
+}
