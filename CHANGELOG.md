@@ -3,6 +3,30 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.1] — 2026-11-08
+
+CI fixes for the 0.10.0 head: the first CI run on the round-7
+changes failed two jobs, so this release carries the fixes. (0.10.0
+was never tagged or released; 0.10.1 is the release that ships the
+round-7 work.)
+
+### Fixed
+
+- Clean-install job: the validator tests recorded evidence captures
+  against the checkout, which has no `.git` in a git-archive clean
+  copy — all 24 recording tests failed there. Captures are now
+  recorded against a throwaway git repo beside the bundle directory.
+  `record_check.py` itself is unchanged: failing outside a git repo
+  is a deliberate property of the execution binding, not a bug.
+- Windows test job: the `record_check` tests pinned LF bytes from
+  `print('ok')`, which emits CRLF on Windows. The tests now use raw
+  `sys.stdout.buffer.write` output, and a new test asserts CRLF bytes
+  are recorded verbatim — the recorder must never normalise them.
+- Windows test job: a temp-dir cleanup race (WinError 32) in the
+  bare-revision test — the test changed the working directory into a
+  temporary directory that was deleted while still the cwd. The
+  directory change is now scoped so the cwd is restored first.
+
 ## [0.10.0] — 2026-11-08
 
 Round-7 fix pass: every confirmed defect from the independent
