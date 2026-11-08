@@ -664,3 +664,58 @@ def test_main_exit_2_for_incompatible(monkeypatch, capsys):
     when another is merely incomplete."""
     _all_ready(monkeypatch, {"check_waza": "incompatible", "check_node": "incomplete"})
     assert doctor.main() == 2
+
+
+# --- Round 8, Track B: FND-025 + N-B1 — git/node versions must be parsed ---
+
+
+def test_git_garbage_version_is_incompatible(monkeypatch):
+    """FND-025: check_git only checked rc != 0 and never parsed
+    the version — a stub git printing NOT-A-GIT-VERSION was
+    reported [ok]. An unreadable version is incompatible, like
+    ruff/pytest/waza."""
+    _patched_run(
+        monkeypatch,
+        {
+            ("git", "--version"): (0, "NOT-A-GIT-VERSION"),
+            ("git", "-C"): (0, ""),
+        },
+    )
+    result = doctor.check_git()
+    assert result["status"] == "incompatible"
+    assert "unreadable" in result["detail"]
+
+
+def test_git_real_version_is_ready(monkeypatch):
+    """Control: a parseable git version still reports ready, with
+    the version in the detail."""
+    _patched_run(
+        monkeypatch,
+        {
+            ("git", "--version"): (0, "git version 2.43.0"),
+            ("git", "-C"): (0, ""),
+        },
+    )
+    result = doctor.check_git()
+    assert result["status"] == "ready"
+    assert "2.43.0" in result["detail"]
+
+
+def test_node_garbage_version_is_incompatible(monkeypatch):
+    """N-B1: check_node had the same hole as check_git — a stub
+    node printing garbage was reported [ok]. An unreadable node
+    version is incompatible (node is optional when missing, but
+    present-but-unreadable is wrong, not ready)."""
+    _patched_run(monkeypatch, {("node", "--version"): (0, "node NOT-A-NODE-VERSION")})
+    result = doctor.check_node()
+    assert result["status"] == "incompatible"
+    assert "unreadable" in result["detail"]
+
+
+def test_node_real_version_is_ready(monkeypatch):
+    """Control: a parseable node version (the `v24.22.1` form
+    node prints) still reports ready."""
+    _patched_run(monkeypatch, {("node", "--version"): (0, "v24.22.1")})
+    result = doctor.check_node()
+    assert result["status"] == "ready"
+    assert "24.22.1" in result["detail"]

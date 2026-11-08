@@ -169,6 +169,17 @@ def check_git():
             "git is not installed or does not run (the git gates cannot run without it)",
             fix="Install git.",
         )
+    # Round 8, FND-025: the version is parsed, like ruff/pytest/
+    # waza — a git printing garbage used to report [ok] on the
+    # strength of rc == 0 alone. No minimum is enforced: no
+    # minimum git version is documented anywhere in this repo,
+    # so any parseable version is ready; only an unreadable one
+    # is incompatible.
+    version = _version_tuple(out)
+    if version is None:
+        return _check(
+            "git", "incompatible", f"git is installed but its version is unreadable: {out!r}"
+        )
     rc2, out2 = _run(["git", "-C", str(ROOT), "status", "--porcelain"], timeout=15)
     if rc2 is None or rc2 != 0:
         # Not a repository (or status timed out) is not a dirty
@@ -196,6 +207,16 @@ def check_node():
             "the demo and the JS/TS skills, not for the Python "
             "gates)",
             fix="Install Node 24 (see docs or nodejs.org).",
+        )
+    # Round 8, N-B1: same class as FND-025 — the version is
+    # parsed, so a node printing garbage is incompatible, not
+    # ready. Node is optional when missing (incomplete), but
+    # present-but-unreadable is wrong, not ready. No minimum is
+    # enforced: no minimum node version is documented here.
+    version = _version_tuple(out)
+    if version is None:
+        return _check(
+            "node", "incompatible", f"node is installed but its version is unreadable: {out!r}"
         )
     return _check("node", "ready", f"node {out.strip()}")
 

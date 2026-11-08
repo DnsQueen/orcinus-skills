@@ -60,12 +60,19 @@ Usage:
   python3 scripts/clean_copy_check.py --mode release [--rev <rev>]
 --keep leaves the temp dir in place for inspection (its path is
 printed); without it the temp dir is deleted.
+A SIGTERM during the gates removes the temp dir too (a signal
+handler + atexit cleanup, round 8 FND-024) and the process still
+dies by SIGTERM. A SIGKILL cannot be caught, so a SIGKILLed run
+still leaks its temp dir — that is a property of the signal.
 """
 
 import argparse
+import atexit
 import io
 import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -256,6 +263,49 @@ def _gates(dest):
     return failed, len(results)
 
 
+def _install_sigterm_cleanup(tmp):
+    """Remove `tmp` when the process is killed by SIGTERM — and
+    register the same removal with atexit for any other abrupt
+    exit. Round 8, FND-024: the default SIGTERM disposition
+    terminates the process without an exception, so the `finally:
+    shutil.rmtree` in main() never ran and a full repo copy
+    leaked on every SIGTERM. The handler removes the dir, then
+    re-raises SIGTERM with the default disposition, so the
+    process still dies by SIGTERM (returncode -15) instead of
+    exiting 0 or 1. The `cleaned` flag (plus atexit.unregister
+    in main's finally) keeps --keep honest: a kept dir is never
+    removed at interpreter exit. SIGKILL cannot be caught —
+    a SIGKILLed run still leaks its temp dir; that is a property
+    of the signal, not a gap in this cleanup. Returns
+    (old_handler, cleanup) so main() can restore/unregister."""
+    state = {"cleaned": False}
+
+    def cleanup():
+        if not state["cleaned"]:
+            state["cleaned"] = True
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    atexit.register(cleanup)
+    old_handler = None
+    if hasattr(signal, "SIGTERM"):
+
+        def _handler(signum, frame):
+            cleanup()
+            # Die by SIGTERM, as the sender asked: restore the
+            # default disposition and re-send it to ourselves.
+            signal.signal(signal.SIGTERM, signal.SIG_DFL)
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        try:
+            old_handler = signal.signal(signal.SIGTERM, _handler)
+        except (OSError, ValueError):
+            # Not the main thread (or another platform limit):
+            # the atexit cleanup still covers normal exits, and
+            # the finally in main() covers the gates.
+            old_handler = None
+    return old_handler, cleanup
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", default=str(ROOT), help="repo to copy (default: this repo)")
@@ -279,6 +329,11 @@ def main(argv=None):
     tmp = Path(tempfile.mkdtemp(prefix="orcinus-clean-"))
     dest = tmp / "orcinus-skills"
     print(f"Clean copy: {dest}")
+    old_handler, _cleanup = (None, None)
+    if not args.keep:
+        # Round 8, FND-024: without this, SIGTERM skips the
+        # finally below and leaks the temp dir.
+        old_handler, _cleanup = _install_sigterm_cleanup(tmp)
     try:
         if args.mode == "release":
             ok, error = _git_archive(source, args.rev, dest)
@@ -291,6 +346,15 @@ def main(argv=None):
     finally:
         if not args.keep:
             shutil.rmtree(tmp, ignore_errors=True)
+            try:
+                atexit.unregister(_cleanup)
+            except (AttributeError, ValueError):
+                pass
+            if old_handler is not None and hasattr(signal, "SIGTERM"):
+                try:
+                    signal.signal(signal.SIGTERM, old_handler)
+                except (OSError, ValueError):
+                    pass
         else:
             print(f"Kept: {dest}")
     if failed:

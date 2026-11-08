@@ -386,3 +386,56 @@ def test_mypy_scope_has_a_single_source_of_truth():
                 f"ci.yml still hand-copies the mypy scope: {line.strip()!r} — "
                 "run plain `python -m mypy` and let the config supply it"
             )
+
+
+# --- Round 8, Track B: FND-024 — SIGTERM must not leak the temp dir ---
+
+
+def _leftover_clean_dirs():
+    """orcinus-clean-* temp dirs currently in the system temp dir."""
+    import tempfile
+
+    return set(Path(tempfile.gettempdir()).glob("orcinus-clean-*"))
+
+
+def _run_clean_copy_until_killed(tmp_path, sig):
+    """Run clean_copy_check as a subprocess against a fixture
+    whose first gate sleeps, kill it with `sig`, and return
+    (returncode, new leftovers)."""
+    src = _fixture_repo(tmp_path, sleep=30)
+    shutil.copy(HERE / "clean_copy_check.py", src / "scripts" / "clean_copy_check.py")
+    before = _leftover_clean_dirs()
+    proc = subprocess.Popen(
+        [sys.executable, str(src / "scripts" / "clean_copy_check.py"), "--source", str(src)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    time.sleep(2)
+    assert proc.poll() is None, "the run finished before the kill"
+    proc.send_signal(sig)
+    proc.wait(timeout=15)
+    return proc.returncode, _leftover_clean_dirs() - before
+
+
+def test_sigterm_removes_temp_dir(tmp_path):
+    """FND-024: SIGTERM during the gates left a full repo copy
+    behind (default SIGTERM disposition skips the `finally`
+    rmtree; 2/2 trials in the verification repro). The process
+    must still die by SIGTERM, with zero new leftovers."""
+    import signal
+
+    rc, leftovers = _run_clean_copy_until_killed(tmp_path, signal.SIGTERM)
+    assert rc == -signal.SIGTERM, f"expected death by SIGTERM, got {rc}"
+    assert leftovers == set(), f"SIGTERM left temp dirs behind: {leftovers}"
+
+
+def test_sigint_still_removes_temp_dir(tmp_path):
+    """Control: SIGINT already cleaned up (KeyboardInterrupt runs
+    the finally) — the SIGTERM fix must not regress it."""
+    import signal
+
+    rc, leftovers = _run_clean_copy_until_killed(tmp_path, signal.SIGINT)
+    assert rc == -signal.SIGINT, f"expected death by SIGINT, got {rc}"
+    assert leftovers == set(), f"SIGINT left temp dirs behind: {leftovers}"
