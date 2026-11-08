@@ -346,18 +346,29 @@ def test_isolated_workdir_restores_cwd_before_cleanup(monkeypatch):
     cleanup deletes the dir, and Windows cannot delete the
     process's current directory — so the cwd must be restored
     BEFORE the temp dir exits, not after. Simulate the Windows
-    rule: rmtree refuses any directory that is (or contains) the
-    current directory."""
-    real_rmtree = tempfile._rmtree
+    rule: cleanup refuses a directory that is (or contains) the
+    current directory.
 
-    def windows_rmtree(path, *args, **kwargs):
-        target = Path(path).resolve()
+    CI fix round 7 (0.10.10): the round-6 simulation patched
+    tempfile._rmtree, a private alias that exists on Ubuntu's
+    Python 3.12.3 but not on the setup-python 3.11/3.12/3.13
+    builds CI uses — all seven CI jobs failed at the first line
+    with AttributeError. Patch the stable seam instead:
+    TemporaryDirectory.cleanup, the public method __exit__ calls
+    to delete the dir. It exists on every supported Python, and
+    the wrapper only fires if the cwd is still inside the dir
+    when cleanup runs — so the test still proves the ordering,
+    on every version."""
+    real_cleanup = tempfile.TemporaryDirectory.cleanup
+
+    def windows_cleanup(self):
+        target = Path(self.name).resolve()
         cwd = Path.cwd().resolve()
         if cwd == target or target in cwd.parents:
-            raise PermissionError(13, "simulated WinError 32", str(path))
-        return real_rmtree(path, *args, **kwargs)
+            raise PermissionError(13, "simulated WinError 32", str(self.name))
+        return real_cleanup(self)
 
-    monkeypatch.setattr(tempfile, "_rmtree", windows_rmtree)
+    monkeypatch.setattr(tempfile.TemporaryDirectory, "cleanup", windows_cleanup)
     before = Path.cwd()
     with rev.isolated_workdir() as workdir:
         assert Path.cwd() == workdir
