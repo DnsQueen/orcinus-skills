@@ -27,6 +27,15 @@ _SCHEMA = ve.load_schema(
     Path(__file__).resolve().parent.parent / "references" / "evidence.schema.json"
 )
 
+# A command whose stdout is byte-identical on every platform. print()
+# is NOT one: CPython's TextIOWrapper (newline=None) translates '\n'
+# to os.linesep on write, so print('ok') emits b'ok\r\n' on Windows
+# and b'ok\n' elsewhere — pinning b'ok\n' for it fails on Windows
+# (CI run 42427290363). sys.stdout.buffer.write writes raw bytes
+# with no translation, so the recorded bytes are deterministic and
+# the exact-byte assertions below are valid on every platform.
+_OK_ARGV = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok\\n')"]
+
 
 def _git(repo, *args):
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
@@ -83,11 +92,11 @@ def _run_record(repo, out_dir, name, argv, extra=()):
 def test_recorded_check_fragment(tmp_path):
     repo = _repo(tmp_path)
     out_dir = tmp_path / "bundle"
-    proc, fragment = _run_record(repo, out_dir, "test", [sys.executable, "-c", "print('ok')"])
+    proc, fragment = _run_record(repo, out_dir, "test", _OK_ARGV)
     assert proc.returncode == 0, proc.stderr
     assert fragment is not None
     assert fragment["name"] == "test"
-    assert fragment["command_argv"] == [sys.executable, "-c", "print('ok')"]
+    assert fragment["command_argv"] == _OK_ARGV
     assert fragment["shell"] is False
     assert fragment["cwd"] == str(repo.resolve())
     assert fragment["exit_code"] == 0
@@ -104,12 +113,39 @@ def test_recorded_check_fragment(tmp_path):
 def test_capture_files_hash_correctly(tmp_path):
     repo = _repo(tmp_path)
     out_dir = tmp_path / "bundle"
-    proc, fragment = _run_record(repo, out_dir, "test", [sys.executable, "-c", "print('ok')"])
+    proc, fragment = _run_record(repo, out_dir, "test", _OK_ARGV)
     assert proc.returncode == 0, proc.stderr
     stdout = (out_dir / "test.stdout").read_bytes()
     stderr = (out_dir / "test.stderr").read_bytes()
     assert stdout == b"ok\n"
     assert stderr == b""
+    assert hashlib.sha256(stdout).hexdigest() == fragment["stdout_sha256"]
+    assert hashlib.sha256(stderr).hexdigest() == fragment["stderr_sha256"]
+
+
+def test_crlf_stdout_recorded_verbatim(tmp_path):
+    # A CRLF-emitting command must be recorded byte-for-byte: the
+    # transcript records the bytes that actually happened, so the
+    # recorder must never normalise CRLF to LF. This guards against
+    # "fixing" the Windows failure inside record_check.py: if the
+    # recorder ever rewrote the bytes, the artifact and the fragment
+    # hash would stop matching the emitted bytes and this test would
+    # fail. Windows itself cannot be reproduced here, so the CRLF
+    # bytes are produced explicitly through the raw buffer.
+    repo = _repo(tmp_path)
+    out_dir = tmp_path / "bundle"
+    proc, fragment = _run_record(
+        repo,
+        out_dir,
+        "test",
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok\\r\\n')"],
+    )
+    assert proc.returncode == 0, proc.stderr
+    stdout = (out_dir / "test.stdout").read_bytes()
+    stderr = (out_dir / "test.stderr").read_bytes()
+    assert stdout == b"ok\r\n"
+    assert stderr == b""
+    assert fragment["stdout_sha256"] == hashlib.sha256(b"ok\r\n").hexdigest()
     assert hashlib.sha256(stdout).hexdigest() == fragment["stdout_sha256"]
     assert hashlib.sha256(stderr).hexdigest() == fragment["stderr_sha256"]
 
