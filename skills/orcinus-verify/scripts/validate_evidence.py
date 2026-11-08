@@ -68,10 +68,17 @@ controlled report and exit 1, never a traceback. A bundle file
 that cannot even be read as JSON (not UTF-8, nested too deeply)
 is a controlled error with exit 2, never a traceback.
 
-Usage: python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json> [--verdict-block <response.md>]
+Usage: python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json> [--verdict-block <response.md>] [--repo <repo>] [--expected-revision <rev>] [--expected-diff <sha256>]
 Exit 0 when the bundle is valid and consistent; exit 1 otherwise,
 with each problem on its own line; exit 2 for a usage error, a
 missing or unreadable schema, or an internal validator error.
+--repo defaults to the working directory: the bundle is bound to
+that repo's tree (every check's revision and content digest are
+recomputed from it, and a dirty-tree PASS has its diff recomputed).
+With no repo present a PASS bundle claiming a revision fails closed.
+Pass --repo explicitly when the bundle was recorded against another
+repo. --expected-revision / --expected-diff name the revision /
+diff the caller expects the bundle to be bound to.
 
 The validator and its schema live inside the orcinus-verify skill
 folder and resolve relative to this file, so they work from a user
@@ -94,7 +101,16 @@ exit code, both stream hashes, content digest, revision) from the
 stored fields and the artifact files on disk, so a hand-written check
 cannot be filed as PASS. But a local writer can still run the wrapper
 on a lying command, so the bundle is tamper-evident recording, not
-proof the commands ran.
+proof the commands ran. Since round 8 the validator also binds a PASS
+bundle to a tree when a repo is given (--repo, default the working
+directory): every check's revision and content digest are recomputed
+from that repo's tree, a dirty-tree PASS has its `git diff HEAD`
+recomputed, and a PASS with a required test gate needs a JUnit
+test_report with at least one test and at least one passed test —
+but the binding is to the tree, not to the run: a lying command's
+capture still binds cleanly to the tree it ran on, and a fabricated
+JUnit file still parses. The claim stays "tamper-evident recording
+bound to a tree", never "proof of execution".
 """
 
 import argparse
@@ -103,10 +119,11 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 import types
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # The binding hash lives in one place: record_check.py in this same
@@ -120,6 +137,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 _record_check: types.ModuleType | None = None
 try:
     import record_check as _record_check  # noqa: E402
+except ImportError:
+    pass
+
+# The content digest lives beside this file too (a byte-identical
+# copy of scripts/content_digest.py, bundled for skills-only
+# installs). Guarded like record_check: the tree binding reports
+# the missing file instead of crashing.
+_content_digest_fn = None
+try:
+    import content_digest as _content_digest_module  # noqa: E402
+
+    _content_digest_fn = _content_digest_module.content_digest
 except ImportError:
     pass
 
@@ -502,32 +531,32 @@ def _nodeid_to_junit(test_id):
 
 
 def _load_junit_report(report, bundle_dir, label, problems):
-    """Read one fail_first report ({artifact, sha256, format}) as
+    """Read one JUnit report ({artifact, sha256, format}) as
     {(classname, name): status}, with status in passed / failed /
-    error / skipped. Returns None when the report cannot be
-    established (the problem is already appended): absent,
-    unreadable, hash-mismatched, or unparsable — and no report
-    means no PASS, never a fallback to the stdout substring. The
-    artifact is read through the same containment / symlink /
+    error / skipped. `label` is the report's full dotted name
+    ("fail_first.red_report", "test_report"). Returns None when the
+    report cannot be established (the problem is already appended):
+    absent, unreadable, hash-mismatched, or unparsable — and no
+    report means no PASS, never a fallback to the stdout substring.
+    The artifact is read through the same containment / symlink /
     size-cap path as every other artifact."""
     if not isinstance(report, dict):
         problems.append(
-            f"fail_first.{label} is missing: a behaviour-change PASS "
-            f"needs the structured {label} (JUnit XML, pytest "
-            f"--junitxml) — no report means no PASS"
+            f"{label} is missing: a PASS needs the structured "
+            f"{label} (JUnit XML, pytest --junitxml) — no report means no PASS"
         )
         return None
     artifact = report.get("artifact")
     if not isinstance(artifact, str) or not artifact:
-        problems.append(f"fail_first.{label} has no artifact: record the JUnit XML report file")
+        problems.append(f"{label} has no artifact: record the JUnit XML report file")
         return None
     if bundle_dir is None:
         problems.append(
-            f"fail_first.{label} {artifact!r} was not verified: no "
+            f"{label} {artifact!r} was not verified: no "
             f"bundle directory was given, so the artifact is unverified"
         )
         return None
-    f, problem = _open_artifact(bundle_dir, artifact, f"fail_first.{label}")
+    f, problem = _open_artifact(bundle_dir, artifact, label)
     if problem:
         problems.append(problem)
         return None
@@ -535,25 +564,25 @@ def _load_junit_report(report, bundle_dir, label, problems):
         data = f.read(MAX_ARTIFACT_BYTES + 1)
     if len(data) > MAX_ARTIFACT_BYTES:
         problems.append(
-            f"fail_first.{label} {artifact!r} is larger than the "
+            f"{label} {artifact!r} is larger than the "
             f"{MAX_ARTIFACT_BYTES}-byte artifact cap"
         )
         return None
     recorded = report.get("sha256")
     if isinstance(recorded, str) and recorded and hashlib.sha256(data).hexdigest() != recorded:
         problems.append(
-            f"fail_first.{label} {artifact!r} sha256 mismatch: the file changed since the bundle was written"
+            f"{label} {artifact!r} sha256 mismatch: the file changed since the bundle was written"
         )
         return None
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError:
-        problems.append(f"fail_first.{label} {artifact!r} is not valid UTF-8 text")
+        problems.append(f"{label} {artifact!r} is not valid UTF-8 text")
         return None
     try:
         root = ET.fromstring(text)
     except ET.ParseError as e:
-        problems.append(f"fail_first.{label} {artifact!r} is not valid JUnit XML: {e}")
+        problems.append(f"{label} {artifact!r} is not valid JUnit XML: {e}")
         return None
     statuses = {}
     for case in root.iter("testcase"):
@@ -677,7 +706,9 @@ def check_fail_first(bundle, problems, bundle_dir=None):
             f"green runs cannot be linked to a test without one"
         )
         return
-    red_report = _load_junit_report(ff.get("red_report"), bundle_dir, "red_report", problems)
+    red_report = _load_junit_report(
+        ff.get("red_report"), bundle_dir, "fail_first.red_report", problems
+    )
     if red_report is not None:
         status = red_report.get(expected)
         if status is None:
@@ -691,7 +722,9 @@ def check_fail_first(bundle, problems, bundle_dir=None):
                 f"status {status!r}, not failed: the red run must show "
                 f"the test failing before the fix"
             )
-    green_report = _load_junit_report(ff.get("green_report"), bundle_dir, "green_report", problems)
+    green_report = _load_junit_report(
+        ff.get("green_report"), bundle_dir, "fail_first.green_report", problems
+    )
     if green_report is not None:
         status = green_report.get(expected)
         if status is None:
@@ -705,6 +738,86 @@ def check_fail_first(bundle, problems, bundle_dir=None):
                 f"status {status!r}, not passed: the green run must show "
                 f"the test passing after the fix"
             )
+
+
+def check_test_report(bundle, problems, bundle_dir):
+    """A required test gate must be backed by a JUnit XML report
+    with tests>0 and passed>0 (round 8, FND-005): a command printing
+    "no tests ran in 0.00s" exits 0 and used to validate as a
+    passing test gate, and an all-skipped suite ran no test either.
+    Applies only when the test gate is required — never for a
+    legitimately waived docs-only/config-only gate — and only for
+    PASS (an honest FAIL/INCOMPLETE bundle needs no report). The
+    report is read through the same artifact path as the fail-first
+    reports, so a tampered file fails its sha256. What this does NOT
+    close: a lying command printing fake output. The report file
+    itself can be fabricated the same way; only a trust boundary
+    the job cannot touch closes that (see the module docstring)."""
+    if bundle.get("verdict") != "PASS":
+        return
+    plan = bundle.get("verification_plan")
+    if not isinstance(plan, dict):
+        return
+    required = plan.get("required_gates")
+    if not isinstance(required, list) or "test" not in required:
+        return
+    statuses = _load_junit_report(bundle.get("test_report"), bundle_dir, "test_report", problems)
+    if statuses is None:
+        return
+    total = len(statuses)
+    passed = sum(1 for status in statuses.values() if status == "passed")
+    if total == 0:
+        problems.append(
+            "test_report lists no tests: a required test gate must run at least one test"
+        )
+    elif passed == 0:
+        problems.append(
+            f"test_report lists {total} test(s) but none passed: a required test gate "
+            "must have at least one passing test (an all-skipped suite ran no test)"
+        )
+
+
+# A timestamp more than this far in the future is not clock skew:
+# it is a fabricated or mis-recorded run (round 8, FND-006).
+FUTURE_TOLERANCE = timedelta(minutes=5)
+
+
+def _parse_timestamp(value):
+    """An aware datetime for an RFC 3339 timestamp, or None when it
+    cannot be parsed or has no timezone (the schema / time-order
+    checks already report those; this check must not raise on
+    unvalidated input)."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
+
+
+def check_future_timestamps(bundle, problems):
+    """Timestamps in the future beyond a 5-minute clock-skew
+    tolerance are rejected (round 8, FND-006): a bundle dated 2099
+    used to validate. All checks plus fail_first.red_check. There
+    is deliberately no lower bound: a historical bundle must keep
+    validating, so only the future is rejected."""
+    now = datetime.now(timezone.utc)
+    targets = [(c, f"check {c.get('name')!r}") for c in _checks(bundle)]
+    ff = bundle.get("fail_first")
+    if isinstance(ff, dict) and isinstance(ff.get("red_check"), dict):
+        targets.append((ff["red_check"], "fail_first.red_check"))
+    for check, label in targets:
+        for field in ("started_at", "finished_at"):
+            parsed = _parse_timestamp(check.get(field))
+            if parsed is None:
+                continue
+            if parsed > now + FUTURE_TOLERANCE:
+                problems.append(
+                    f"{label} {field} {check[field]} is in the future "
+                    f"(more than {FUTURE_TOLERANCE} ahead of the validator's clock): "
+                    "a timestamp from the future is not a recorded run"
+                )
 
 
 # Commands that run nothing: a check whose command is a shell no-op
@@ -1487,12 +1600,192 @@ def _old_schema_problems(bundle, schema):
     ]
 
 
-def validate_bundle(bundle, schema, bundle_dir=None):
+# A full commit SHA in this repo's object format: SHA-1 (40 hex)
+# or SHA-256 (64 hex) — the same shape record_check.py requires
+# for a resolved revision (round 8, FND-023).
+_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def _git_output(repo, *args):
+    """(returncode, stdout) of a git command in `repo`, or
+    (None, "") when git cannot run at all."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args], capture_output=True, text=True, timeout=60
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None, ""
+    return proc.returncode, proc.stdout
+
+
+def _resolve_commit(repo, rev):
+    """The full SHA `rev` names in `repo`, or None when it names
+    nothing: `git rev-parse --verify <rev>^{commit}` must succeed
+    and print a single full SHA — a bare rev-parse echoing its
+    input, or a stubbed git printing nothing, resolves to nothing."""
+    rc, out = _git_output(repo, "rev-parse", "--verify", f"{rev}^{{commit}}")
+    if rc != 0:
+        return None
+    sha = out.strip()
+    return sha if _SHA_RE.fullmatch(sha) else None
+
+
+def _git_diff_sha256(repo):
+    """The sha256 of `git diff HEAD` in `repo`, or None when git
+    cannot produce it."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "diff", "HEAD"], capture_output=True, timeout=60
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return hashlib.sha256(proc.stdout).hexdigest()
+
+
+def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_diff_sha256=None):
+    """Bind the bundle to the tree it ran on (round 8, FND-004;
+    pattern: SLSA's slsa-verifier and in-toto's in_toto_verify —
+    the verifier re-reads the object itself, recomputes the digest,
+    and compares it against the claim and the caller's expected
+    identity, instead of trusting self-declared fields).
+
+    When `repo` is None no tree binding is performed (legacy /
+    in-process behaviour — state.py calls validate_bundle this way
+    until it passes a repo). When a repo is given:
+    - the bundle revision must resolve to a commit in it, and every
+      check's revision (including fail_first.red_check) must resolve
+      to that same commit; a bundle revision of "working-tree"
+      binds to HEAD, the commit its diff applies to;
+    - every check's content_digest must equal the digest recomputed
+      from the tree at that revision;
+    - a PASS on a dirty tree must pin the diff it ran on: the sha256
+      of `git diff HEAD`, recomputed here, must match diff_sha256;
+    - --expected-revision / --expected-diff, when given, must match
+      the bundle revision / recomputed diff.
+    When no repo can be resolved at all, a PASS bundle claiming a
+    revision FAILS CLOSED — never silently passes. An honest
+    FAIL/INCOMPLETE bundle in the same situation is still fileable:
+    it is not a success claim. What this does NOT prove: that the
+    commands ran (the lying-command half stays out of scope — see
+    the module docstring and docs/adr/0006-tree-binding.md)."""
+    if repo is None:
+        return
+    verdict = bundle.get("verdict")
+    rc, out = _git_output(repo, "rev-parse", "--show-toplevel")
+    top = out.strip() if rc == 0 else ""
+    if rc != 0 or not top or "\n" in top or not Path(top).is_dir():
+        if verdict == "PASS":
+            problems.append(
+                f"cannot bind the bundle to a tree: {repo} is not a git "
+                "repository — a PASS bundle claiming a revision cannot "
+                "validate without a repo to recompute it against "
+                "(pass --repo <repo>)"
+            )
+        return
+    repo = Path(top)
+    head = _resolve_commit(repo, "HEAD")
+    if head is None:
+        if verdict == "PASS":
+            problems.append(
+                f"cannot bind the bundle to a tree: HEAD does not resolve to a commit in {repo}"
+            )
+        return
+    bundle_revision = bundle.get("revision")
+    if bundle_revision == "working-tree":
+        target = head
+    elif isinstance(bundle_revision, str):
+        target = _resolve_commit(repo, bundle_revision)
+        if target is None:
+            problems.append(
+                f"bundle revision {bundle_revision!r} does not resolve to a commit in {repo}: "
+                "the bundle cannot be bound to a tree that has no such revision"
+            )
+            return
+    else:
+        return  # the schema layer already reported a non-string revision
+    if expected_revision is not None:
+        expected = _resolve_commit(repo, expected_revision)
+        if expected is None:
+            problems.append(
+                f"--expected-revision {expected_revision!r} does not resolve to a commit in {repo}"
+            )
+        elif expected != target:
+            problems.append(
+                f"bundle revision {bundle_revision!r} (resolved {target}) does not match "
+                f"--expected-revision {expected_revision!r} (resolved {expected})"
+            )
+    if _content_digest_fn is None:
+        problems.append(
+            "content_digest.py is missing from the skill folder: the bundle's "
+            "content digests cannot be recomputed without it"
+        )
+        return
+    try:
+        recomputed = _content_digest_fn(repo, target)
+    except Exception as e:
+        problems.append(
+            f"cannot recompute the content digest for revision {target} in {repo}: {e}"
+        )
+        return
+    targets = [(c, f"check {c.get('name')!r}") for c in _checks(bundle)]
+    ff = bundle.get("fail_first")
+    if isinstance(ff, dict) and isinstance(ff.get("red_check"), dict):
+        targets.append((ff["red_check"], "fail_first.red_check"))
+    for check, label in targets:
+        revision = check.get("revision")
+        if isinstance(revision, str) and revision:
+            resolved = _resolve_commit(repo, revision)
+            if resolved is None:
+                problems.append(
+                    f"{label} revision {revision!r} does not resolve to a commit in {repo}"
+                )
+            elif resolved != target:
+                problems.append(
+                    f"{label} revision {revision!r} (resolved {resolved}) does not match "
+                    f"the bundle revision {bundle_revision!r} (resolved {target}): a check "
+                    "recorded on another revision cannot validate this bundle"
+                )
+        digest = check.get("content_digest")
+        if isinstance(digest, str) and digest:
+            if digest != recomputed:
+                problems.append(
+                    f"{label} content_digest {digest} does not match the digest recomputed "
+                    f"from the tree at revision {target} ({recomputed})"
+                )
+    if verdict == "PASS" and bundle.get("working_tree_state") == "dirty":
+        diff = _git_diff_sha256(repo)
+        if diff is None:
+            problems.append(
+                f"cannot recompute `git diff HEAD` in {repo}: the dirty-tree PASS "
+                "cannot be bound to its diff"
+            )
+        else:
+            recorded = bundle.get("diff_sha256")
+            if isinstance(recorded, str) and recorded and recorded != diff:
+                problems.append(
+                    f"diff_sha256 {recorded} does not match the sha256 of `git diff HEAD` "
+                    f"recomputed in {repo} ({diff}): the PASS is bound to a different diff"
+                )
+            if expected_diff_sha256 is not None and expected_diff_sha256 != diff:
+                problems.append(
+                    f"--expected-diff {expected_diff_sha256} does not match the sha256 of "
+                    f"`git diff HEAD` recomputed in {repo} ({diff})"
+                )
+
+
+def validate_bundle(bundle, schema, bundle_dir=None, repo=None, expected_revision=None, expected_diff_sha256=None):
     """Both layers. Structural problems short-circuit the semantic
     checks, so a malformed bundle can never crash them. bundle_dir
     is the directory the bundle file lives in; artifact paths resolve
     against it (the CLI passes the bundle's parent). When it is None,
-    artifacts are recorded as explicitly unverified, never as passed."""
+    artifacts are recorded as explicitly unverified, never as passed.
+    repo is the git repo the bundle is bound to (round 8, FND-004):
+    when given, every check's revision and content digest are
+    recomputed from that repo's tree and compared against the bundle
+    and against expected_revision / expected_diff_sha256; when None,
+    no tree binding is performed (legacy/in-process behaviour)."""
     problems = _old_schema_problems(bundle, schema)
     if problems:
         return problems
@@ -1501,6 +1794,7 @@ def validate_bundle(bundle, schema, bundle_dir=None):
         return problems
     check_verdict_consistency(bundle, problems)
     check_fail_first(bundle, problems, bundle_dir)
+    check_test_report(bundle, problems, bundle_dir)
     check_identities(bundle, problems)
     check_noop_commands(bundle, problems)
     check_plan_coverage(bundle, problems)
@@ -1509,11 +1803,13 @@ def validate_bundle(bundle, schema, bundle_dir=None):
     check_finding_categories(bundle, problems)
     check_acceptance_criteria(bundle, problems)
     check_time_order(bundle, problems)
+    check_future_timestamps(bundle, problems)
     check_artifacts(bundle, problems, bundle_dir)
     check_recorded_checks(bundle, problems, bundle_dir)
     check_output_present(bundle, problems)
     check_empty_checks(bundle, problems)
     check_dirty_files(bundle, problems)
+    check_tree_binding(bundle, problems, repo, expected_revision, expected_diff_sha256)
     return problems
 
 
@@ -1588,7 +1884,8 @@ def main(argv):
     parser = argparse.ArgumentParser(
         description="Validate an ORCINUS verification evidence bundle.",
         usage="python3 skills/orcinus-verify/scripts/validate_evidence.py "
-        "<bundle.json> [--verdict-block <response.md>]",
+        "<bundle.json> [--verdict-block <response.md>] [--repo <repo>] "
+        "[--expected-revision <rev>] [--expected-diff <sha256>]",
     )
     parser.add_argument("bundle", help="the evidence bundle JSON file")
     parser.add_argument(
@@ -1596,6 +1893,25 @@ def main(argv):
         default=None,
         metavar="<response.md>",
         help="a file holding the prose response: its ```verdict block must agree with the bundle",
+    )
+    parser.add_argument(
+        "--repo",
+        default=None,
+        metavar="<repo>",
+        help="the git repo the bundle is bound to (default: the working directory)",
+    )
+    parser.add_argument(
+        "--expected-revision",
+        default=None,
+        metavar="<rev>",
+        help="the revision the bundle must be bound to",
+    )
+    parser.add_argument(
+        "--expected-diff",
+        default=None,
+        dest="expected_diff_sha256",
+        metavar="<sha256>",
+        help="the sha256 of `git diff HEAD` a dirty-tree PASS must be bound to",
     )
     args = parser.parse_args(argv[1:])
     path = Path(args.bundle)
@@ -1621,7 +1937,14 @@ def main(argv):
         return 2
     try:
         schema = load_schema(SCHEMA_PATH)
-        problems = validate_bundle(bundle, schema, bundle_dir=path.parent)
+        problems = validate_bundle(
+            bundle,
+            schema,
+            bundle_dir=path.parent,
+            repo=Path(args.repo) if args.repo is not None else Path.cwd(),
+            expected_revision=args.expected_revision,
+            expected_diff_sha256=args.expected_diff_sha256,
+        )
     except (ValueError, OSError, RecursionError) as e:
         print(f"validator error: {e}", file=sys.stderr)
         return 2

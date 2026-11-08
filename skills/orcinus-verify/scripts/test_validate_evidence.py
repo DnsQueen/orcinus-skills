@@ -75,7 +75,40 @@ def _write_junit_reports(bundle, directory, red_cases=None, green_cases=None):
         }
 
 
-def _problems(bundle, bundle_dir=None):
+def _write_test_report(bundle, directory):
+    """Write a real JUnit report for the required 'test' gate under
+    `directory` and record it as the bundle's test_report (FND-005,
+    round 8): two passing tests, so tests>0 and passed>0. The
+    fixture's test gate prints '45 passed', but the report is the
+    structured evidence — the counts are what the rule checks, and
+    no stdout count is ever trusted (the lying-command half stays
+    out of scope)."""
+    import hashlib
+
+    directory = Path(directory)
+    cases = [
+        (_CANONICAL_CLASSNAME, _CANONICAL_NAME, "passed"),
+        ("tests.test_other", "test_other", "passed"),
+    ]
+    data = _junit_xml(cases)
+    (directory / "test-report.xml").write_bytes(data)
+    bundle["test_report"] = {
+        "artifact": "test-report.xml",
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "format": "junit-xml",
+    }
+
+
+def _test_gate_required(bundle):
+    plan = bundle.get("verification_plan")
+    return (
+        isinstance(plan, dict)
+        and isinstance(plan.get("required_gates"), list)
+        and "test" in plan["required_gates"]
+    )
+
+
+def _problems(bundle, bundle_dir=None, **validate_kwargs):
     # A PASS bundle for a behaviour change must carry real JUnit
     # reports (F-03) and real recorded captures (F-01), so the
     # fixture writes them into a temp bundle directory and validates
@@ -84,19 +117,26 @@ def _problems(bundle, bundle_dir=None):
     # silently gain a matching report. When the caller passes a
     # bundle_dir (a test that recorded its captures there with
     # _recorded_bundle), the reports are written into that same
-    # directory, so one directory holds reports and captures.
+    # directory, so one directory holds reports and captures. A PASS
+    # bundle with a required test gate also needs its test_report
+    # (FND-005): written here whenever the plan requires the gate,
+    # so the fixture's passing bundles stay passing.
     import tempfile
 
     if bundle_dir is not None:
         bundle_dir = Path(bundle_dir)
         if isinstance(bundle.get("fail_first"), dict):
             _write_junit_reports(bundle, bundle_dir)
-        return ve.validate_bundle(bundle, _SCHEMA, bundle_dir=bundle_dir)
+        if _test_gate_required(bundle) and bundle.get("verdict") == "PASS":
+            _write_test_report(bundle, bundle_dir)
+        return ve.validate_bundle(bundle, _SCHEMA, bundle_dir=bundle_dir, **validate_kwargs)
     if isinstance(bundle.get("fail_first"), dict):
         with tempfile.TemporaryDirectory() as d:
             _write_junit_reports(bundle, Path(d))
-            return ve.validate_bundle(bundle, _SCHEMA, bundle_dir=Path(d))
-    return ve.validate_bundle(bundle, _SCHEMA)
+            if _test_gate_required(bundle) and bundle.get("verdict") == "PASS":
+                _write_test_report(bundle, Path(d))
+            return ve.validate_bundle(bundle, _SCHEMA, bundle_dir=Path(d), **validate_kwargs)
+    return ve.validate_bundle(bundle, _SCHEMA, **validate_kwargs)
 
 
 # The real commands the fixture's checks are recorded with: trivial
@@ -648,12 +688,26 @@ def test_validator_is_self_contained_outside_the_repo(tmp_path):
     # with no repo checkout.
     _recorded_bundle(b, elsewhere)
     _write_junit_reports(b, elsewhere)
+    _write_test_report(b, elsewhere)
+    # FND-004 (round 8): the bundle revision is the recording
+    # repo's HEAD, so the checks' revisions agree with it.
+    b["revision"] = subprocess.run(
+        ["git", "-C", str(_recording_repo(elsewhere)), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     bundle.write_text(json.dumps(b), encoding="utf-8")
     result = subprocess.run(
         [
             sys.executable,
             str(elsewhere / "orcinus-verify" / "scripts" / "validate_evidence.py"),
             str(bundle),
+            # FND-004 (round 8): the CLI binds to a repo by default
+            # (cwd), and the copied skill runs from a non-repo dir —
+            # so the run names the repo the captures bind to.
+            "--repo",
+            str(_recording_repo(elsewhere)),
         ],
         capture_output=True,
         text=True,
@@ -791,6 +845,7 @@ def test_missing_stdout_artifact_fails(tmp_path):
     (tmp_path / "logs" / "pytest-stdout.log").write_bytes((tmp_path / "test.stdout").read_bytes())
     (tmp_path / "logs" / "pytest-stderr.log").write_bytes((tmp_path / "test.stderr").read_bytes())
     _write_junit_reports(b, tmp_path)
+    _write_test_report(b, tmp_path)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
 
@@ -931,6 +986,7 @@ def test_artifact_with_correct_sha256_passes(tmp_path):
     # — the bytes on disk would no longer match the recorded hash.
     (tmp_path / "logs" / "pytest-stdout.log").write_bytes((tmp_path / "test.stdout").read_bytes())
     _write_junit_reports(b, tmp_path)
+    _write_test_report(b, tmp_path)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
 
@@ -1478,11 +1534,33 @@ def _run_cli_with_verdict_block(bundle, block_text):
         # the CLI run tests the block comparison — not the recording.
         _recorded_bundle(bundle, Path(d))
         _write_junit_reports(bundle, Path(d))
+        _write_test_report(bundle, Path(d))
         bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
         block_path = Path(d) / "response.md"
         block_path.write_text(block_text, encoding="utf-8")
+        # FND-004 (round 8): the CLI binds the bundle to a repo by
+        # default, so the run names the repo the captures were
+        # recorded against — the checkout cwd is a different repo —
+        # and the bundle revision is that repo's HEAD, so the
+        # checks' revisions agree with it.
+        repo = _recording_repo(Path(d))
+        bundle["revision"] = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
         proc = subprocess.run(
-            [sys.executable, str(validator), str(bundle_path), "--verdict-block", str(block_path)],
+            [
+                sys.executable,
+                str(validator),
+                str(bundle_path),
+                "--repo",
+                str(repo),
+                "--verdict-block",
+                str(block_path),
+            ],
             capture_output=True,
             text=True,
         )
@@ -1742,6 +1820,7 @@ def test_fail_first_real_junit_report_accepted(tmp_path):
     b = _good_bundle()
     _recorded_bundle(b, tmp_path)
     _write_junit_reports(b, tmp_path)
+    _write_test_report(b, tmp_path)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
 
@@ -1837,6 +1916,7 @@ def test_fail_first_class_nodeid_links_by_classname(tmp_path):
         red_cases=[("tests.test_capture.TestCapture", _CANONICAL_NAME, "failed")],
         green_cases=[("tests.test_capture.TestCapture", _CANONICAL_NAME, "passed")],
     )
+    _write_test_report(b, tmp_path)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
 
@@ -1920,3 +2000,380 @@ def test_fail_bundle_with_unrecorded_checks_is_valid():
     b["checks"][0]["verdict"] = "FAIL"
     b["checks"][0]["exit_code"] = 1
     assert _problems(b) == []
+
+
+# --- Round-8 regression tests (FND-004, FND-005, FND-006).
+# Each of these passed on the v0.10.1 validator; they are the
+# red-first tests for this fix pass. ---
+
+import record_check as rc  # noqa: E402
+
+
+def _head_sha_of(repo):
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _bound_bundle(tmp_path, repo=None):
+    """A good bundle recorded against a throwaway repo, with its
+    revision set to that repo's HEAD and its JUnit reports written:
+    the fixture a tree-binding test starts from."""
+    if repo is None:
+        repo = _recording_repo(tmp_path)
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path, repo=repo)
+    b["revision"] = _head_sha_of(repo)
+    _write_junit_reports(b, tmp_path)
+    _write_test_report(b, tmp_path)
+    return b, repo
+
+
+def _reforge(check, bundle_dir):
+    """Recompute capture_sha256 after editing a recorded check's
+    fields, so the binding hash still recomputes and only the
+    edited field is under test."""
+    import hashlib
+
+    bundle_dir = Path(bundle_dir)
+    stdout_hash = hashlib.sha256(
+        (bundle_dir / check["stdout_artifact"]).read_bytes()
+    ).hexdigest()
+    stderr_hash = hashlib.sha256(
+        (bundle_dir / check["stderr_artifact"]).read_bytes()
+    ).hexdigest()
+    check["capture_sha256"] = rc.capture_binding_hash(
+        command_argv=check["command_argv"],
+        shell=check["shell"],
+        cwd=check["cwd"],
+        started_at=check["started_at"],
+        finished_at=check["finished_at"],
+        exit_code=check["exit_code"],
+        stdout_sha256=stdout_hash,
+        stderr_sha256=stderr_hash,
+        content_digest=check["content_digest"],
+        revision=check["revision"],
+    )
+
+
+def _retime(bundle, bundle_dir, started, finished):
+    """Move every recorded timestamp, reforging the capture hashes
+    so a timestamp edit is the only difference under test."""
+    for c in bundle.get("checks") or []:
+        c["started_at"] = started
+        c["finished_at"] = finished
+        _reforge(c, bundle_dir)
+    ff = bundle.get("fail_first")
+    if isinstance(ff, dict) and isinstance(ff.get("red_check"), dict):
+        red = ff["red_check"]
+        red["started_at"] = started
+        red["finished_at"] = finished
+        _reforge(red, bundle_dir)
+
+
+def _second_commit(repo):
+    """A second commit on the recording repo; returns its HEAD."""
+    (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "second")
+    return _head_sha_of(repo)
+
+
+def _run_cli_in(bundle_path, cwd, extra=()):
+    """Run the validator CLI on a bundle file, from `cwd`."""
+    import subprocess
+
+    validator = Path(__file__).resolve().parent / "validate_evidence.py"
+    return subprocess.run(
+        [sys.executable, str(validator), str(bundle_path), *extra],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        timeout=60,
+    )
+
+
+def test_tree_binding_passes_with_matching_repo(tmp_path):
+    # FND-004: a bundle recorded against a repo validates when the
+    # validator is given that repo: every check revision equals the
+    # bundle revision and every digest recomputes at it.
+    b, repo = _bound_bundle(tmp_path)
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo) == []
+
+
+def test_tree_binding_rejects_forged_bundle_revision(tmp_path):
+    # FND-004 (a): the bundle revision swapped to another SHA —
+    # the checks were recorded on the real HEAD.
+    b, repo = _bound_bundle(tmp_path)
+    b["revision"] = "f" * 40
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("revision" in p for p in problems)
+
+
+def test_tree_binding_rejects_forged_check_revision(tmp_path):
+    # FND-004: a check revision forged to a different real commit,
+    # with the capture hash recomputed consistently — the capture
+    # recompute passes, the tree binding must not.
+    b, repo = _bound_bundle(tmp_path)
+    head2 = _second_commit(repo)
+    b["checks"][0]["revision"] = head2
+    _reforge(b["checks"][0], tmp_path)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("revision" in p for p in problems)
+
+
+def test_tree_binding_rejects_forged_check_digest(tmp_path):
+    # FND-004 (c): a check digest forged with a consistently
+    # recomputed capture hash — the digest must equal the digest
+    # recomputed from the tree at the bundle revision.
+    b, repo = _bound_bundle(tmp_path)
+    b["checks"][0]["content_digest"] = "sha256:" + "f" * 64
+    _reforge(b["checks"][0], tmp_path)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("content_digest" in p for p in problems)
+
+
+def test_tree_binding_rejects_wrong_expected_revision(tmp_path):
+    # FND-004: --expected-revision names the revision the caller
+    # expects; a bundle for another revision must fail.
+    b, repo = _bound_bundle(tmp_path)
+    head2 = _second_commit(repo)
+    problems = ve.validate_bundle(
+        b, _SCHEMA, bundle_dir=tmp_path, repo=repo, expected_revision=head2
+    )
+    assert any("expected_revision" in p or "revision" in p for p in problems)
+
+
+def test_tree_binding_expected_revision_matching_passes(tmp_path):
+    # FND-004 control: the expected revision equal to the bundle
+    # revision passes.
+    b, repo = _bound_bundle(tmp_path)
+    assert (
+        ve.validate_bundle(
+            b, _SCHEMA, bundle_dir=tmp_path, repo=repo, expected_revision=b["revision"]
+        )
+        == []
+    )
+
+
+def test_tree_binding_dirty_diff_passes_and_wrong_diff_fails(tmp_path):
+    # FND-004 (d): a dirty-tree PASS binds the diff: the recorded
+    # sha256 of `git diff HEAD` validates, an invented one does not.
+    import hashlib
+    import subprocess
+
+    b, repo = _bound_bundle(tmp_path)
+    (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
+    diff = subprocess.run(
+        ["git", "-C", str(repo), "diff", "HEAD"], check=True, capture_output=True
+    ).stdout
+    diff_hash = hashlib.sha256(diff).hexdigest()
+    b["working_tree_state"] = "dirty"
+    b["dirty_files"] = ["code.py"]
+    b["revision"] = "working-tree"
+    b["diff_sha256"] = diff_hash
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo) == []
+    assert (
+        ve.validate_bundle(
+            b,
+            _SCHEMA,
+            bundle_dir=tmp_path,
+            repo=repo,
+            expected_diff_sha256=diff_hash,
+        )
+        == []
+    )
+    b["diff_sha256"] = "0" * 64
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("diff" in p for p in problems)
+    b["diff_sha256"] = diff_hash
+    problems = ve.validate_bundle(
+        b, _SCHEMA, bundle_dir=tmp_path, repo=repo, expected_diff_sha256="0" * 64
+    )
+    assert any("diff" in p for p in problems)
+
+
+def test_tree_binding_repo_none_is_legacy(tmp_path):
+    # FND-004: validate_bundle with repo=None performs no tree
+    # binding (legacy/in-process behaviour, documented): a forged
+    # bundle revision still validates in-process.
+    b, repo = _bound_bundle(tmp_path)
+    b["revision"] = "f" * 40
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
+
+
+def test_tree_binding_no_repo_fails_closed_via_cli(tmp_path):
+    # FND-004: with no repo present, a PASS bundle claiming a
+    # revision FAILS CLOSED — never silently passes. The CLI
+    # defaults --repo to cwd, so a non-repo cwd fails it; an
+    # explicit --repo naming a non-repo fails it too.
+    import json
+
+    b, repo = _bound_bundle(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps(b), encoding="utf-8")
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    proc = _run_cli_in(bundle_path, plain)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "repo" in proc.stdout.lower() or "repo" in proc.stderr.lower()
+    proc = _run_cli_in(bundle_path, tmp_path, extra=("--repo", str(plain)))
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+
+
+def test_tree_binding_cli_repo_and_expected_revision(tmp_path):
+    # FND-004: the CLI --repo / --expected-revision flags.
+    import json
+
+    b, repo = _bound_bundle(tmp_path)
+    bundle_path = tmp_path / "bundle.json"
+    bundle_path.write_text(json.dumps(b), encoding="utf-8")
+    proc = _run_cli_in(bundle_path, tmp_path, extra=("--repo", str(repo)))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    head2 = _second_commit(repo)
+    proc = _run_cli_in(
+        bundle_path, tmp_path, extra=("--repo", str(repo), "--expected-revision", head2)
+    )
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "revision" in proc.stdout
+
+
+def test_test_gate_without_junit_report_fails(tmp_path):
+    # FND-005: a PASS with a required test gate and no JUnit report
+    # is a vacuous pass — a command printing "no tests ran" used to
+    # validate.
+    b, repo = _bound_bundle(tmp_path)
+    del b["test_report"]
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("test_report" in p for p in problems)
+
+
+def _test_report_with_cases(bundle, directory, cases):
+    """Replace the bundle's test_report with a report for `cases`."""
+    import hashlib
+
+    directory = Path(directory)
+    data = _junit_xml(cases)
+    (directory / "test-report.xml").write_bytes(data)
+    bundle["test_report"] = {
+        "artifact": "test-report.xml",
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "format": "junit-xml",
+    }
+
+
+def test_test_gate_with_zero_test_report_fails(tmp_path):
+    # FND-005: a JUnit report with zero tests is not a test run.
+    b, repo = _bound_bundle(tmp_path)
+    _test_report_with_cases(b, tmp_path, [])
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("test_report" in p for p in problems)
+
+
+def test_test_gate_with_all_skipped_report_fails(tmp_path):
+    # FND-005: an all-skipped suite ran no test — passed>0 is
+    # required, not just tests>0.
+    b, repo = _bound_bundle(tmp_path)
+    _test_report_with_cases(
+        b, tmp_path, [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "skipped")]
+    )
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("test_report" in p for p in problems)
+
+
+def test_test_gate_with_failing_only_report_fails(tmp_path):
+    # FND-005: a report with tests but zero passed is not a passing
+    # gate (the check itself would already be FAIL, but the report
+    # rule must say so too).
+    b, repo = _bound_bundle(tmp_path)
+    _test_report_with_cases(
+        b, tmp_path, [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "failed")]
+    )
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("test_report" in p for p in problems)
+
+
+def test_test_gate_report_hash_mismatch_fails(tmp_path):
+    # FND-005: the report artifact must match its recorded sha256.
+    b, repo = _bound_bundle(tmp_path)
+    (tmp_path / "test-report.xml").write_bytes(b"tampered")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("test_report" in p for p in problems)
+
+
+def test_test_gate_report_not_required_when_verdict_not_pass(tmp_path):
+    # FND-005: the report rule is a PASS rule, not a validity rule —
+    # an honest FAIL bundle with a required test gate and no report
+    # is still a valid bundle.
+    b = _good_bundle()
+    b["verdict"] = "FAIL"
+    b["checks"][0]["verdict"] = "FAIL"
+    b["checks"][0]["exit_code"] = 1
+    assert _problems(b) == []
+
+
+def test_future_timestamps_rejected(tmp_path):
+    # FND-006: every timestamp in 2099 — checks and red_check —
+    # must be rejected, not accepted as the verifier's "now".
+    b, repo = _bound_bundle(tmp_path)
+    _retime(b, tmp_path, "2099-06-01T10:00:00Z", "2099-06-01T10:00:12Z")
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("future" in p for p in problems)
+
+
+def test_future_red_check_timestamp_rejected(tmp_path):
+    # FND-006: the red run's timestamps are checked the same way.
+    b, repo = _bound_bundle(tmp_path)
+    red = b["fail_first"]["red_check"]
+    red["started_at"] = "2099-06-01T10:00:00Z"
+    red["finished_at"] = "2099-06-01T10:00:12Z"
+    _reforge(red, tmp_path)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("future" in p and "red_check" in p for p in problems)
+
+
+def test_future_timestamps_within_tolerance_pass(tmp_path):
+    # FND-006: a 5-minute clock-skew tolerance — a run recorded a
+    # few minutes ahead of the validator's clock still validates.
+    from datetime import datetime, timedelta, timezone
+
+    b, repo = _bound_bundle(tmp_path)
+    now = datetime.now(timezone.utc)
+    started = (now + timedelta(minutes=4)).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+    finished = (now + timedelta(minutes=4, seconds=12)).isoformat(
+        timespec="microseconds"
+    ).replace("+00:00", "Z")
+    _retime(b, tmp_path, started, finished)
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
+
+
+def test_future_timestamps_beyond_tolerance_fail(tmp_path):
+    # FND-006: beyond the 5-minute tolerance the same run fails.
+    from datetime import datetime, timedelta, timezone
+
+    b, repo = _bound_bundle(tmp_path)
+    now = datetime.now(timezone.utc)
+    started = (now + timedelta(minutes=6)).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+    finished = (now + timedelta(minutes=6, seconds=12)).isoformat(
+        timespec="microseconds"
+    ).replace("+00:00", "Z")
+    _retime(b, tmp_path, started, finished)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("future" in p for p in problems)
+
+
+def test_historical_timestamps_still_valid(tmp_path):
+    # FND-006: no lower bound — a bundle recorded in 2000 must keep
+    # validating; only the future is rejected.
+    b, repo = _bound_bundle(tmp_path)
+    _retime(b, tmp_path, "2000-01-01T10:00:00Z", "2000-01-01T10:00:12Z")
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
