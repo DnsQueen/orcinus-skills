@@ -120,15 +120,48 @@ _RED_COMMAND = [
 ]
 
 
-def _run_record_check(directory, name, argv, shell=False):
-    """Run record_check.py once, in `directory`, and return the
-    fragment it prints. The command runs for real; the fragment is
-    the wrapper's own record of it."""
+def _git(repo, *args):
+    import subprocess
+
+    subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+
+
+def _recording_repo(directory):
+    """A throwaway git repo to record captures against, beside the
+    bundle directory. record_check.py binds every capture to a
+    revision + content digest, so it needs a git repo — but the
+    checkout the tests run in is not one they may use: a git-archive
+    clean copy has no .git, so recording against the checkout fails
+    there (24 failures in the CI clean-install job) while the same
+    tests pass in the working tree. The same pattern as
+    test_record_check.py's _repo, for the validator tests. The repo
+    is a sibling of the bundle directory, never inside it, so the
+    validator — which reads named artifacts from the bundle
+    directory — never sees it."""
+    directory = Path(directory)
+    repo = directory.parent / (directory.name + "-repo")
+    if (repo / ".git").exists():
+        return repo
+    repo.mkdir(parents=True, exist_ok=True)
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "test@orcinus.local")
+    _git(repo, "config", "user.name", "ORCINUS Test")
+    (repo / "code.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "code")
+    return repo
+
+
+def _run_record_check(directory, name, argv, repo, shell=False):
+    """Run record_check.py once, in `directory`, against `repo`,
+    and return the fragment it prints. The command runs for real;
+    the fragment is the wrapper's own record of it. `repo` is the
+    throwaway repo from _recording_repo — never the checkout the
+    tests run in (see _recording_repo)."""
     import json
     import subprocess
 
     record_check = Path(__file__).resolve().parent / "record_check.py"
-    repo = Path(__file__).resolve().parent.parent.parent.parent
     args = [
         sys.executable,
         str(record_check),
@@ -149,15 +182,19 @@ def _run_record_check(directory, name, argv, shell=False):
     return json.loads(proc.stdout)
 
 
-def _recorded_bundle(bundle, directory, commands=None):
+def _recorded_bundle(bundle, directory, commands=None, repo=None):
     """Record every check in `bundle` (and fail_first.red_check) by
     running record_check.py for real, writing the capture files into
     `directory` and merging each fragment into the check. A bundle is
     a PASS bundle only after this: under schema v6 hand-written checks
     do not validate. `commands` maps a check name (or "red_check") to
     the argv to actually run — a list for argv mode, or a string for
-    --shell mode; the default is the fixture's trivial commands above."""
+    --shell mode; the default is the fixture's trivial commands above.
+    `repo` is the git repo the captures bind to; the default is a
+    throwaway repo beside `directory` (see _recording_repo)."""
     directory = Path(directory)
+    if repo is None:
+        repo = _recording_repo(directory)
     directory.mkdir(parents=True, exist_ok=True)
     cmds = dict(_RECORD_COMMANDS)
     if commands:
@@ -167,9 +204,9 @@ def _recorded_bundle(bundle, directory, commands=None):
         if cmd is None:
             continue
         if isinstance(cmd, str):
-            fragment = _run_record_check(directory, check["name"], [cmd], shell=True)
+            fragment = _run_record_check(directory, check["name"], [cmd], repo, shell=True)
         else:
-            fragment = _run_record_check(directory, check["name"], cmd)
+            fragment = _run_record_check(directory, check["name"], cmd, repo)
         check.update(fragment)
         check.pop("stdout_text", None)
         check.pop("stderr_text", None)
@@ -177,9 +214,9 @@ def _recorded_bundle(bundle, directory, commands=None):
     if isinstance(ff, dict) and isinstance(ff.get("red_check"), dict):
         cmd = cmds.get("red_check", _RED_COMMAND)
         if isinstance(cmd, str):
-            fragment = _run_record_check(directory, "red_check", [cmd], shell=True)
+            fragment = _run_record_check(directory, "red_check", [cmd], repo, shell=True)
         else:
-            fragment = _run_record_check(directory, "red_check", cmd)
+            fragment = _run_record_check(directory, "red_check", cmd, repo)
         # The red run has no name in the schema (additionalProperties
         # is false): the fragment's name is the capture filename stem.
         fragment.pop("name", None)
@@ -255,6 +292,53 @@ def test_good_bundle_passes(tmp_path):
     b = _good_bundle()
     _recorded_bundle(b, tmp_path)
     assert _problems(b, tmp_path) == []
+
+
+def test_recorded_bundle_binds_to_the_given_repo_not_the_checkout(tmp_path):
+    """The validator tests record captures against a throwaway git
+    repo, never against the checkout they run in: a git-archive
+    clean copy has no .git, so recording against the checkout fails
+    there — 24 failures in the CI clean-install job — while the same
+    tests pass in the working tree. The recorded fragment must bind
+    to the repo it was given: its revision is that repo's HEAD and
+    the bundle still validates."""
+    import subprocess
+
+    repo = _recording_repo(tmp_path)
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path, repo=repo)
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert b["checks"][0]["revision"] == head
+    assert b["checks"][0]["content_digest"].startswith("sha256:")
+    assert _problems(b, tmp_path) == []
+
+
+def test_recorded_bundle_default_repo_is_not_the_checkout(tmp_path):
+    """The default recording repo is a throwaway repo beside the
+    bundle directory, not the checkout: when the checkout has a
+    HEAD, the recorded revision must differ from it (the throwaway
+    repo is a different repo with its own commit). When there is no
+    checkout HEAD at all — a git-archive clean copy — recording
+    must still succeed and the bundle must still validate."""
+    import subprocess
+
+    checkout = Path(__file__).resolve().parent.parent.parent.parent
+    head = subprocess.run(
+        ["git", "-C", str(checkout), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    checkout_head = head.stdout.strip() if head.returncode == 0 else None
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    assert _problems(b, tmp_path) == []
+    if checkout_head is not None:
+        assert b["checks"][0]["revision"] != checkout_head
 
 
 def test_pass_hiding_a_failed_check_fails():
