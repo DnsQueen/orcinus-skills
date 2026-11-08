@@ -3,6 +3,30 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.7] — 2026-11-09
+
+CI fix for the 0.10.6 Windows failure (run 42520748232:
+`test (windows-latest, 3.12)` failed at "Run the script tests" —
+12 failed, 770 passed, 11 skipped).
+
+### Fixed
+
+- The round-9 two-target binding false-rejected genuine Windows
+  recordings: the fixture writes the test file with `write_text`,
+  which translates LF to CRLF on Windows, so the recorded
+  `test_file_sha256` was the CRLF hash while the green tree holds
+  the LF blob (git normalises on commit). The validator now
+  compares under git's line-ending canonicalisation — the LF hash
+  or the CRLF hash of the same file. Any other byte change still
+  fails, so the material binding is not weakened.
+- `test_pid_is_alive_posix` is POSIX-only (a reaped child still
+  reads alive on Windows while its Popen holds a handle) and is
+  now skipped on win32, the repo's established pattern.
+- `test_stale_lock_note_still_fires_after_contention` simulated
+  contention from another fd in the same process, which does not
+  conflict on Windows (msvcrt locking is per-process); it now
+  holds the lock from a separate process, the production shape.
+
 ## [0.10.6] — 2026-11-09
 
 CI fix for the 0.10.5 Windows failure (run 42518738682:
