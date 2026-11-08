@@ -1065,6 +1065,34 @@ def test_empty_checks_with_pass_verdict_fails():
     assert problems
 
 
+def test_stop_reason_only_for_incomplete_with_no_checks():
+    # FND-006 (round 9) + N-F6x: stop_reason says why the
+    # verification stopped before any check ran (schema: required
+    # when checks is empty and the verdict is INCOMPLETE). A
+    # non-empty stop_reason on any other shape is a
+    # self-contradiction: a PASS or FAIL ran to a verdict, and an
+    # INCOMPLETE with checks ran checks. Only the genuine
+    # INCOMPLETE-with-empty-checks shape (see
+    # test_incomplete_with_no_checks_and_stop_reason_is_valid) may
+    # carry one.
+    b = _good_bundle()
+    b["stop_reason"] = "gave up before the checks"
+    problems = _problems(b)
+    assert any("stop_reason" in p for p in problems), problems
+    b = _good_bundle()
+    b["verdict"] = "FAIL"
+    b["findings"] = [{"file": "src/x.py", "line": 1, "evidence": "crash", "severity": "blocking"}]
+    b["stop_reason"] = "gave up before the checks"
+    problems = _problems(b)
+    assert any("stop_reason" in p for p in problems), problems
+    b = _good_bundle()
+    b["verdict"] = "INCOMPLETE"
+    b["unverified_items"] = ["the test gate could not run"]
+    b["stop_reason"] = "gave up before the checks"
+    problems = _problems(b)
+    assert any("stop_reason" in p for p in problems), problems
+
+
 # --- Round-6 regression tests (M5–M8). Each of these passed on the
 # old validator; they are the red-first tests for this fix pass. ---
 
@@ -1447,6 +1475,13 @@ def test_security_finding_cannot_be_non_blocking():
     # PASS — the findings schema had no category, so severity was
     # purely self-declared. Security / data-loss categories are
     # automatically blocking.
+    # FND-003 (round 9): the old assertion — the substring
+    # "blocking" in ANY problem — was satisfied by
+    # check_finding_categories' own message even with the rule
+    # deleted, so the M2 mutant (delete the auto-blocking rule)
+    # survived with all 144 tests green. The test pins the rule
+    # itself: the computed verdict must be FAIL, and the specific
+    # verdict-consistency problem must be present.
     for category in ("security", "data-loss"):
         b = _good_bundle()
         b["findings"] = [
@@ -1458,8 +1493,12 @@ def test_security_finding_cannot_be_non_blocking():
                 "category": category,
             }
         ]
+        assert ve.expected_verdict(b) == "FAIL", category
         problems = _problems(b)
-        assert any("blocking" in p for p in problems), category
+        assert any("verdict is PASS but there is a blocking finding" in p for p in problems), (
+            category,
+            problems,
+        )
 
 
 def test_non_blocking_finding_needs_a_category():

@@ -1546,6 +1546,30 @@ def check_empty_checks(bundle, problems):
         )
 
 
+def check_stop_reason(bundle, problems):
+    """stop_reason is reserved for a genuine stop (round 9,
+    FND-006 + N-F6x): it records why the verification stopped
+    before any check ran, so it is accepted only on an
+    INCOMPLETE bundle with no checks. A non-empty stop_reason
+    on any other shape is a self-contradiction — a PASS or FAIL
+    ran to a verdict, and an INCOMPLETE with checks ran checks —
+    so it is rejected on all three verdicts except that one
+    shape. The check is a dedicated rule, not part of
+    expected_verdict: folding it into the verdict computation
+    would misclassify a genuine FAIL carrying one as INCOMPLETE."""
+    reason = bundle.get("stop_reason")
+    if not isinstance(reason, str) or not reason:
+        return
+    checks = bundle.get("checks")
+    if bundle.get("verdict") == "INCOMPLETE" and isinstance(checks, list) and not checks:
+        return
+    problems.append(
+        "stop_reason is set but the bundle is not an INCOMPLETE "
+        "stop with no checks: stop_reason records why the "
+        "verification stopped before any check ran"
+    )
+
+
 def check_dirty_files(bundle, problems):
     """dirty_files is listed when the tree is dirty and empty when
     it is clean (a conditional rule the schema cannot express). A
@@ -1865,6 +1889,7 @@ def validate_bundle(
     check_recorded_checks(bundle, problems, bundle_dir)
     check_output_present(bundle, problems)
     check_empty_checks(bundle, problems)
+    check_stop_reason(bundle, problems)
     check_dirty_files(bundle, problems)
     check_tree_binding(bundle, problems, repo, expected_revision, expected_diff_sha256)
     return problems
