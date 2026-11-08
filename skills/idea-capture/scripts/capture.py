@@ -59,7 +59,12 @@ did not intend):
   match its filename is reported as malformed.
 - The raw text is stored exactly as given (only the emptiness check
   strips whitespace, and CRLF line endings are normalised to LF so the
-  stored length is unambiguous). The source, the note and the reason
+  stored length is unambiguous). The one exception is a secret-shaped
+  value: a capture whose text matches a high-confidence secret
+  pattern is refused (exit 1, no file created) unless --allow-secret
+  is given, and the slug is always derived from the redacted form,
+  so no secret fragment lands in the filename or id even on an
+  allowed capture. The source, the note and the reason
   must not contain a newline — a newline in the source would inject a
   new frontmatter field, and a newline in a note or reason would break
   the single-line History entry.
@@ -70,14 +75,15 @@ did not intend):
   everything).
 
 Usage:
-    capture.py capture --store <dir> --text <text> [--source <who>]
+    capture.py capture --store <dir> --text <text> [--source <who>] [--allow-secret]
     capture.py list --store <dir> [--status <status>]
     capture.py search --store <dir> <query>
     capture.py show --store <dir> <id>
     capture.py promote --store <dir> <id> calibrated|scoped [--note <note>]
     capture.py drop --store <dir> <id> --reason <reason>
 
-Exit 0 on success, 1 on error (empty text, unknown id, illegal
+Exit 0 on success, 1 on error (empty text, secret-like text without
+--allow-secret, unknown id, illegal
 transition, missing reason, invalid id, malformed file, a status
 change on a file with no status recorded). Exit 2 when a list or a
 search skipped malformed files: the result is partial, and a machine
@@ -122,6 +128,48 @@ def slugify(text: str) -> str:
     words = re.findall(r"[a-z0-9]+", text.lower())
     slug = "-".join(words[:5])[:40].strip("-")
     return slug or "idea"
+
+
+# Key-shaped values that are almost certainly a secret, not prose —
+# the same shapes the security-review thin scan looks for, minus the
+# assignment pattern (password/token/secret/api_key = value), which
+# also matches ordinary prose about config. A match refuses the
+# capture unless --allow-secret is given; the slug is always built
+# from the redacted form, so no secret fragment lands in the id or
+# filename even on an allowed capture.
+SECRET_PATTERNS = (
+    ("OpenAI-style key", re.compile(r"\bsk-[A-Za-z0-9_-]{16,}")),
+    ("Stripe-style key", re.compile(r"\bsk_(?:live|test)_[A-Za-z0-9]{10,}")),
+    ("GitHub token", re.compile(r"\b(?:ghp_|gho_|ghs_|github_pat_)[A-Za-z0-9_]{20,}")),
+    ("AWS access key", re.compile(r"\bAKIA[0-9A-Z]{16}")),
+    ("Google API key", re.compile(r"\bAIza[A-Za-z0-9_-]{35}")),
+    ("Slack token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}")),
+    ("npm token", re.compile(r"\bnpm_[A-Za-z0-9]{36}")),
+    ("Replicate key", re.compile(r"\brk_live_[A-Za-z0-9]{20,}")),
+    ("private key", re.compile(r"BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY")),
+    ("JWT", re.compile(r"\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+")),
+    ("Bearer token", re.compile(r"\bBearer [A-Za-z0-9._~+/=-]{20,}")),
+)
+
+
+def find_secret(text: str) -> str | None:
+    """The name of the first high-confidence secret pattern the text
+    matches, or None. Only the pattern name is ever returned: callers
+    must not print the matched value."""
+    for name, pattern in SECRET_PATTERNS:
+        if pattern.search(text):
+            return name
+    return None
+
+
+def redact_secrets(text: str) -> str:
+    """The text with every key-shaped value replaced by <redacted>.
+    Used for the slug only: the stored text stays verbatim (or the
+    capture is refused) — redaction never rewrites what is stored."""
+    redacted = text
+    for _name, pattern in SECRET_PATTERNS:
+        redacted = pattern.sub("<redacted>", redacted)
+    return redacted
 
 
 def validate_id(idea_id: str) -> None:
@@ -239,7 +287,20 @@ def cmd_capture(args) -> int:
     # valid id; the raw text itself is preserved verbatim. Line endings
     # are normalised to LF so raw_length is unambiguous.
     text = args.text.replace("\r\n", "\n")
-    base = f"{stamp}-{slugify(text)}"
+    # A key-shaped value refuses the capture unless the caller
+    # explicitly overrides: an idea must never store a secret by
+    # accident. The refusal names the pattern, never the value.
+    secret = find_secret(text)
+    if secret is not None and not args.allow_secret:
+        print(
+            f"error: the idea looks like it contains a secret ({secret}); "
+            "capture refused — remove the secret or re-run with --allow-secret",
+            file=sys.stderr,
+        )
+        return 1
+    # The slug is built from the redacted form, so even an allowed
+    # capture never leaks a secret fragment into the id or filename.
+    base = f"{stamp}-{slugify(redact_secrets(text))}"
     # Store the idea exactly as given — only the emptiness check strips.
     n = 1
     while True:
@@ -744,6 +805,12 @@ def main() -> int:
     p.add_argument("--store", required=True)
     p.add_argument("--text", required=True)
     p.add_argument("--source", default="user")
+    p.add_argument(
+        "--allow-secret",
+        action="store_true",
+        help="capture even when the text looks like it contains a secret "
+        "(the slug is still built from the redacted form)",
+    )
     p.set_defaults(func=cmd_capture)
 
     p = sub.add_parser("list", help="list ideas")

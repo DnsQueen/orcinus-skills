@@ -1150,3 +1150,69 @@ def test_concurrent_recovery_of_killed_holder_lock(tmp_path):
     fd, _, _ = cap._acquire_lock(idea_path)
     assert fd is not None, "the lock was not reacquirable after the race"
     cap._release_lock(fd, lock_path)
+
+
+# --- Round 8 (2026-11-08): FND-013 / N-C2 — secret-like text must not be
+# captured verbatim, and the slug must not leak a secret fragment. ---
+
+# Built by concatenation: a literal key-shaped token would trip the
+# repo's own no-secret-shape guard (scripts/test_readme_table.py).
+CANARY = "sk-" + "test-" + "FAKECANARY7X9Q2W4R6T8"
+GH_CANARY = "ghp_" + "abcdefghij1234567890"
+
+
+def test_capture_refuses_secret_like_text(tmp_path):
+    """FND-013: a capture whose text contains a key-shaped value is
+    refused (exit 1, no file) — the refusal names the pattern, never
+    the value, so the secret is not echoed to stderr either."""
+    store = tmp_path / "ideas"
+    text = "use api key " + CANARY + " for the demo"
+    rc, out, err = capture(store, text)
+    assert rc == 1, out
+    assert "secret" in err
+    assert "--allow-secret" in err
+    assert CANARY not in err
+    assert "FAKECANARY" not in err
+    assert out == ""
+    assert list(store.glob("*.md")) == []
+    # A second key shape is refused the same way.
+    rc, out, err = capture(store, "token " + GH_CANARY + " here")
+    assert rc == 1
+    assert GH_CANARY not in err
+    assert list(store.glob("*.md")) == []
+
+
+def test_capture_allow_secret_stores_verbatim_but_slug_is_redacted(tmp_path):
+    """FND-013 + N-C2: with the explicit --allow-secret override the
+    text is still stored verbatim — but the slug is derived from the
+    redacted form, so no secret fragment lands in the id/filename."""
+    store = tmp_path / "ideas"
+    text = "use api key " + CANARY + " for the demo"
+    rc, out, err = run(store, "capture", "--store", str(store), "--text", text, "--allow-secret")
+    assert rc == 0, err
+    idea_id = out.strip()
+    assert "sk-test" not in idea_id
+    assert "fakecanary" not in idea_id.lower()
+    assert "redacted" in idea_id, idea_id
+    content = (store / f"{idea_id}.md").read_text(encoding="utf-8")
+    assert cap.raw_text_of(content) == text
+
+
+def test_capture_prose_about_keys_is_allowed(tmp_path):
+    """The refusal is for key-shaped values, not for prose about
+    secrets: an idea that merely mentions keys must still capture."""
+    store = tmp_path / "ideas"
+    rc, out, err = capture(store, "rotate the api key process next week")
+    assert rc == 0, err
+    rc, out, err = capture(store, "disk-usage-monitor idea")
+    assert rc == 0, err
+
+
+def test_redact_secrets_replaces_key_shaped_values():
+    """Unit: redact_secrets replaces the token with <redacted> and
+    leaves ordinary prose untouched."""
+    redacted = cap.redact_secrets("use api key " + CANARY + " for the demo")
+    assert CANARY not in redacted
+    assert "FAKECANARY" not in redacted
+    assert "<redacted>" in redacted
+    assert cap.redact_secrets("rotate the api key process") == "rotate the api key process"
