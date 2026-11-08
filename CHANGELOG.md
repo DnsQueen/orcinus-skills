@@ -3,6 +3,21 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.11] — 2026-11-09
+
+CI fix for the 0.10.10 failures (run 42534376893: 7 of 14 jobs,
+all failing on one test only).
+
+### Fixed
+
+- The round-6 Windows simulation patched `tempfile._rmtree`, a
+  private alias that exists on Ubuntu's Python 3.12.3 but not on
+  the setup-python 3.11/3.12/3.13 builds CI uses, so every CI
+  job failed at the test's first line with `AttributeError`. The
+  test now patches the stable seam instead —
+  `TemporaryDirectory.cleanup`, the public method `__exit__`
+  calls — and still proves the cwd is restored before cleanup.
+
 ## [0.10.10] — 2026-11-09
 
 CI fix for the 0.10.9 macOS and Windows failures (run 42532295528:
