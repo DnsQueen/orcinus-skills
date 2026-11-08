@@ -65,7 +65,17 @@ content_digest module). The stdout/stderr cap is the validator's
 10 MiB (MAX_CAPTURE_BYTES must equal validate_evidence.MAX_ARTIFACT_BYTES;
 a test pins the agreement). A capture over the cap is a recording
 failure, not a truncation: a truncated artifact would hash cleanly
-while hiding output.
+while hiding output. The cap is enforced live, during receipt
+(round 9, F2): each stream is pumped to a temp file by its own
+reader thread and the command is killed as soon as either stream
+exceeds the cap, so the wrapper's memory stays bounded however
+much the command emits. The captures are written atomically
+(round 9, F3): the streams land in temp files and are renamed
+into place, and a pre-planted symlink — as the bundle directory
+itself, or as either destination file — is refused before the
+command runs, so a capture can never overwrite a file outside
+the bundle directory through a link. A pre-existing regular
+capture file is still replaced (re-recording a gate is normal).
 
 The content digest is computed by the existing content_digest
 function (skills/orcinus-verify/scripts/content_digest.py — a
@@ -81,10 +91,14 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shlex
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -300,6 +314,126 @@ def _resolve_revision(repo):
     return revision
 
 
+def _pump(stream, path, cap, state):
+    """Drain one pipe to `path`, hashing as it goes (round 9, F2):
+    one reader thread per stream, so neither pipe can block the
+    command while the other fills. Stops at the first chunk that
+    would take the total past `cap` — the over-cap chunk is not
+    written — and records the breach in `state` for the main
+    thread to act on. `state` ends with the bytes written and
+    their sha256 when the stream ends cleanly."""
+    hasher = hashlib.sha256()
+    written = 0
+    try:
+        with open(path, "wb") as f:
+            while True:
+                chunk = stream.read(65536)
+                if not chunk:
+                    break
+                if written + len(chunk) > cap:
+                    state["exceeded"] = True
+                    return
+                f.write(chunk)
+                hasher.update(chunk)
+                written += len(chunk)
+    except OSError:
+        state["error"] = True
+        return
+    state["bytes"] = written
+    state["sha256"] = hasher.hexdigest()
+
+
+def _run_capped(command_argv, cwd, timeout, out_dir, name):
+    """Run the command, streaming its stdout/stderr to temp files
+    in `out_dir` with a LIVE cap (round 9, F2): the cap is enforced
+    during receipt, not after — as soon as either stream exceeds
+    MAX_CAPTURE_BYTES the process is killed and RecordError is
+    raised, so the wrapper's memory stays bounded however much the
+    command emits (the old capture_output=True buffered the whole
+    output in RAM first and checked afterwards). Returns
+    (exit_code, stdout_tmp, stderr_tmp, stdout_sha256,
+    stderr_sha256) for the two temp files; the caller atomically
+    renames them to their final names. On any failure the temp
+    files are removed here, so a refused capture leaves nothing
+    behind. Raises RecordError on a cap breach, a timeout (same
+    message as before), or a missing command."""
+    stdout_fd, stdout_tmp = tempfile.mkstemp(prefix=f".{name}.stdout.", dir=out_dir)
+    stderr_fd, stderr_tmp = tempfile.mkstemp(prefix=f".{name}.stderr.", dir=out_dir)
+    os.close(stdout_fd)
+    os.close(stderr_fd)
+    try:
+        return _run_capped_inner(
+            command_argv, cwd, timeout, out_dir, Path(stdout_tmp), Path(stderr_tmp)
+        )
+    except RecordError:
+        for tmp in (stdout_tmp, stderr_tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+        raise
+
+
+def _run_capped_inner(command_argv, cwd, timeout, out_dir, stdout_tmp, stderr_tmp):
+    """The run itself; _run_capped owns the temp files' lifetime."""
+    try:
+        proc = subprocess.Popen(
+            command_argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd
+        )
+    except FileNotFoundError as e:
+        raise RecordError(f"command not found: {command_argv[0]!r}") from e
+    stdout_state: dict = {}
+    stderr_state: dict = {}
+    out_thread = threading.Thread(
+        target=_pump, args=(proc.stdout, stdout_tmp, MAX_CAPTURE_BYTES, stdout_state)
+    )
+    err_thread = threading.Thread(
+        target=_pump, args=(proc.stderr, stderr_tmp, MAX_CAPTURE_BYTES, stderr_state)
+    )
+    out_thread.start()
+    err_thread.start()
+    deadline = time.monotonic() + timeout
+    exit_code = None
+    try:
+        while True:
+            exit_code = proc.poll()
+            if exit_code is not None:
+                break
+            if stdout_state.get("exceeded") or stderr_state.get("exceeded"):
+                proc.kill()
+                break
+            if time.monotonic() > deadline:
+                proc.kill()
+                exit_code = proc.wait()
+                out_thread.join(timeout=5)
+                err_thread.join(timeout=5)
+                raise RecordError(f"command timed out after {timeout}s")
+            time.sleep(0.02)
+    finally:
+        # Reap the process even on the kill paths above.
+        if exit_code is None:
+            exit_code = proc.wait()
+    out_thread.join()
+    err_thread.join()
+    if stdout_state.get("error") or stderr_state.get("error"):
+        raise RecordError(f"cannot write the capture files in {out_dir}")
+    if stdout_state.get("exceeded"):
+        stream = "stdout"
+    elif stderr_state.get("exceeded"):
+        stream = "stderr"
+    else:
+        stream = None
+    if stream is not None:
+        raise RecordError(f"{stream} is larger than the {MAX_CAPTURE_BYTES}-byte artifact cap")
+    return (
+        exit_code,
+        stdout_tmp,
+        stderr_tmp,
+        stdout_state["sha256"],
+        stderr_state["sha256"],
+    )
+
+
 def record(name, argv, shell, out_dir, cwd, repo, digest_module, timeout):
     """Run one command and record it. Returns (fragment, exit_code):
     the check fragment for the bundle, and the command's exit code.
@@ -323,6 +457,30 @@ def record(name, argv, shell, out_dir, cwd, repo, digest_module, timeout):
     if not cwd.is_dir():
         raise RecordError(f"--cwd {cwd} is not a directory")
     out_dir = Path(out_dir)
+    # Round 9, F3: refuse to write through a symlink, before the
+    # command even runs. A bundle directory that is itself a
+    # symlink would land the captures wherever the link points, and
+    # a symlinked destination file would be overwritten through the
+    # link (write_bytes follows it). A pre-existing REGULAR file is
+    # still replaced atomically below — re-recording a gate is
+    # normal — only links are refused. The atomic rename below is
+    # the second layer: even a link planted between this check and
+    # the rename is replaced, never followed. A symlink in a
+    # PARENT component of out_dir is out of scope: the caller
+    # chooses out_dir, as with --cwd and --repo.
+    if out_dir.is_symlink():
+        raise RecordError(
+            f"--out-dir {out_dir} is a symlink: captures must land in the directory "
+            "named, not wherever the link points"
+        )
+    stdout_path = out_dir / f"{name}.stdout"
+    stderr_path = out_dir / f"{name}.stderr"
+    for dest in (stdout_path, stderr_path):
+        if dest.is_symlink():
+            raise RecordError(
+                f"refusing to write through a symlink: {dest} already exists as a "
+                "symlink — remove it, or record under another --name"
+            )
     out_dir.mkdir(parents=True, exist_ok=True)
     repo = _resolve_repo(cwd, repo)
     revision = _resolve_revision(repo)
@@ -332,33 +490,27 @@ def record(name, argv, shell, out_dir, cwd, repo, digest_module, timeout):
     except Exception as e:
         raise RecordError(f"cannot compute the content digest of {repo}: {e}") from e
     started_at = _utc_now()
-    try:
-        proc = subprocess.run(command_argv, capture_output=True, cwd=cwd, timeout=timeout)
-    except FileNotFoundError as e:
-        raise RecordError(f"command not found: {command_argv[0]!r}") from e
-    except subprocess.TimeoutExpired:
-        raise RecordError(f"command timed out after {timeout}s") from None
+    exit_code, stdout_tmp, stderr_tmp, stdout_sha256, stderr_sha256 = _run_capped(
+        command_argv, cwd, timeout, out_dir, name
+    )
     finished_at = _utc_now()
-    if len(proc.stdout) > MAX_CAPTURE_BYTES:
-        raise RecordError(f"stdout is larger than the {MAX_CAPTURE_BYTES}-byte artifact cap")
-    if len(proc.stderr) > MAX_CAPTURE_BYTES:
-        raise RecordError(f"stderr is larger than the {MAX_CAPTURE_BYTES}-byte artifact cap")
-    stdout_path = out_dir / f"{name}.stdout"
-    stderr_path = out_dir / f"{name}.stderr"
     try:
-        stdout_path.write_bytes(proc.stdout)
-        stderr_path.write_bytes(proc.stderr)
+        os.replace(stdout_tmp, stdout_path)
+        os.replace(stderr_tmp, stderr_path)
     except OSError as e:
+        for tmp in (stdout_tmp, stderr_tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
         raise RecordError(f"cannot write the capture files in {out_dir}: {e}") from e
-    stdout_sha256 = hashlib.sha256(proc.stdout).hexdigest()
-    stderr_sha256 = hashlib.sha256(proc.stderr).hexdigest()
     fragment = {
         "name": name,
         "command": command,
         "command_argv": command_argv,
         "shell": shell,
         "cwd": str(cwd),
-        "exit_code": proc.returncode,
+        "exit_code": exit_code,
         "started_at": started_at,
         "finished_at": finished_at,
         "stdout_artifact": stdout_path.name,
@@ -375,13 +527,13 @@ def record(name, argv, shell, out_dir, cwd, repo, digest_module, timeout):
         cwd=str(cwd),
         started_at=started_at,
         finished_at=finished_at,
-        exit_code=proc.returncode,
+        exit_code=exit_code,
         stdout_sha256=stdout_sha256,
         stderr_sha256=stderr_sha256,
         content_digest=digest,
         revision=revision,
     )
-    return fragment, proc.returncode
+    return fragment, exit_code
 
 
 def main(argv):

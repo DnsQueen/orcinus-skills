@@ -366,6 +366,101 @@ def test_output_over_cap_fails_without_fragment(tmp_path):
     assert not (out_dir / "test.stderr").exists()
 
 
+def test_output_over_cap_does_not_buffer_unboundedly(tmp_path):
+    """F2 (friend's review): the 10 MiB cap was checked only after
+    subprocess.run buffered the whole output in RAM, so it was not
+    a memory cap. The wrapper must stream to disk and kill the
+    command as soon as the cap is exceeded: a producer emitting
+    200 MiB must be refused with the wrapper's own peak RSS far
+    below 200 MiB. Proven through a driver process — its
+    RUSAGE_CHILDREN is the wrapper alone (the producer is the
+    wrapper's child, not the driver's), so there is no polling race
+    and no suite-wide max to pollute the reading. Linux only:
+    ru_maxrss is KiB there (bytes on macOS) and the driver uses
+    the resource module, which Windows does not have."""
+    import pytest
+
+    if sys.platform != "linux":
+        pytest.skip("peak-RSS proof needs Linux resource.ru_maxrss (KiB)")
+    repo = _repo(tmp_path)
+    out_dir = tmp_path / "bundle"
+    driver = tmp_path / "measure_rss.py"
+    driver.write_text(
+        "import resource, subprocess, sys\n"
+        "proc = subprocess.run([sys.executable, sys.argv[1], '--name', 'test',"
+        " '--out-dir', sys.argv[2], '--repo', sys.argv[3], '--', sys.executable,"
+        " '-c', sys.argv[4]], capture_output=True, text=True)\n"
+        "print('RC:', proc.returncode)\n"
+        "print('ERR:', proc.stderr.strip().replace(chr(10), ' | '))\n"
+        "print('RSS_KB:', resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss)\n",
+        encoding="utf-8",
+    )
+    producer = "import sys; [sys.stdout.buffer.write(b'x' * (1024 * 1024)) for _ in range(200)]"
+    proc = subprocess.run(
+        [sys.executable, str(driver), str(_RECORD_CHECK), str(out_dir), str(repo), producer],
+        capture_output=True,
+        text=True,
+        cwd=repo,
+        timeout=120,
+    )
+    lines = proc.stdout.strip().splitlines()
+    assert proc.returncode == 0, proc.stderr
+    assert lines[0] == "RC: 2", lines
+    assert "larger than" in lines[1], lines
+    peak_kb = int(lines[2].split(":", 1)[1].strip())
+    assert peak_kb < 100 * 1024, f"wrapper peak RSS {peak_kb} KiB exceeds 100 MiB"
+    assert not (out_dir / "test.stdout").exists()
+    assert not (out_dir / "test.stderr").exists()
+
+
+def test_symlink_capture_destination_is_refused(tmp_path):
+    """F3 (friend's review): stdout_path.write_bytes follows a
+    pre-planted symlink, so a capture could overwrite a file
+    outside the bundle dir. A symlinked destination is refused
+    before the command runs, and the link's target is untouched."""
+    repo = _repo(tmp_path)
+    out_dir = tmp_path / "bundle"
+    out_dir.mkdir()
+    victim = tmp_path / "victim.txt"
+    victim.write_text("untouched\n", encoding="utf-8")
+    (out_dir / "test.stdout").symlink_to(victim)
+    proc, fragment = _run_record(repo, out_dir, "test", _OK_ARGV)
+    assert proc.returncode == 2, proc.stderr
+    assert fragment is None
+    assert "symlink" in proc.stderr
+    assert victim.read_text(encoding="utf-8") == "untouched\n"
+    assert not (out_dir / "test.stderr").exists()
+
+
+def test_symlink_out_dir_is_refused(tmp_path):
+    """F3: a bundle directory that is itself a symlink is refused
+    — captures must land in the directory named, not wherever the
+    link points."""
+    repo = _repo(tmp_path)
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    out_dir = tmp_path / "bundle"
+    out_dir.symlink_to(target, target_is_directory=True)
+    proc, fragment = _run_record(repo, out_dir, "test", _OK_ARGV)
+    assert proc.returncode == 2, proc.stderr
+    assert fragment is None
+    assert "symlink" in proc.stderr
+    assert not (target / "test.stdout").exists()
+
+
+def test_rerecord_same_name_replaces_regular_capture(tmp_path):
+    """F3: a pre-existing REGULAR capture file is replaced atomically
+    (re-recording a gate is normal); only symlinks are refused."""
+    repo = _repo(tmp_path)
+    out_dir = tmp_path / "bundle"
+    proc, fragment = _run_record(repo, out_dir, "test", _OK_ARGV)
+    assert proc.returncode == 0, proc.stderr
+    proc, fragment2 = _run_record(repo, out_dir, "test", _OK_ARGV)
+    assert proc.returncode == 0, proc.stderr
+    assert fragment2 is not None
+    assert (out_dir / "test.stdout").read_bytes() == b"ok\n"
+
+
 def test_timestamps_are_utc(tmp_path):
     repo = _repo(tmp_path)
     out_dir = tmp_path / "bundle"
