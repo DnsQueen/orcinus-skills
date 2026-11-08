@@ -3,6 +3,75 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.2] — 2026-11-08
+
+Round-8 fix pass for the second independent audit of v0.10.1
+(27 findings: 24 confirmed, 2 partial, 1 not reproducible here,
+0 refuted; plus 9 new findings found during verification and 17
+auditor corrections). Every confirmed defect is fixed, each with
+a red-first regression test.
+
+### Fixed
+
+- Evidence binding (FND-004, High): the validator gains `--repo`
+  (defaults to the working directory), `--expected-revision` and
+  `--expected-diff`, and recomputes `content_digest` and
+  `git diff HEAD` at validation time. A PASS bundle whose revision,
+  check digests, or diff do not match the tree is rejected; with
+  no repo resolvable a PASS bundle fails closed. The schema stays
+  at v6. `state.py` passes the resolved repo to the validator, and
+  the bundle must also have been recorded on the state's own
+  revision. The trust boundary is unchanged and documented (ADR
+  0006): this binds a bundle to a tree; it does not prove the
+  command ran.
+- Skills-only installs (FND-003, High): `content_digest.py` is
+  bundled beside `record_check.py`, so the Verifier's mandatory
+  recording step works with the documented command and no
+  `--digest-module` flag; a test pins the two copies byte-identical.
+- `content_digest.py` CLI (FND-001): the entry point no longer
+  passes `argv[0]` as the repo argument; a test now exercises the
+  real entry point via subprocess.
+- Vacuous passes (FND-005): a required `test` gate needs a JUnit
+  report with tests > 0 and passed > 0 (new optional bundle field
+  `test_report`); an all-skipped suite cannot pass. A lying command
+  printing fake output is still not detectable — documented, not
+  claimed fixed.
+- Future timestamps (FND-006): timestamps more than 5 minutes in
+  the future are rejected.
+- `state.py` (FND-007/008/009): `--repo` defaults to the caller's
+  working directory (also for `transition`); `validate` gains
+  `--require-head` (default on) and transitions to VERIFIED /
+  RELEASE_READY at a stale revision are refused; concurrent
+  transitions are serialised with a lockfile + flock, and the
+  dirty-tree gate no longer skips non-HEAD revisions.
+- `record_check.py` git validation (FND-023): empty or garbage
+  `git` output is rejected at the revision layer
+  (`rev-parse --verify`, full-SHA shape, existing toplevel);
+  `content_digest()` confirms the tree object exists before
+  accepting empty `ls-tree` output, so a genuinely empty tree
+  still digests.
+- Monitoring `verify.sh` (FND-012): a runbook is now required per
+  alert, not haystack-wide; `--require-config` makes a target with
+  no monitoring candidates INCOMPLETE instead of a vacuous PASS.
+- `doctor.py` (FND-025): git and node versions are parsed, and an
+  unreadable version is incompatible instead of `[ok]`.
+- `clean_copy_check.py` (FND-024): SIGTERM now cleans up the temp
+  copy (handler + `atexit`); SIGKILL still cannot be caught.
+- `idea-capture` (FND-013): secret-like text is refused unless
+  `--allow-secret` is given, and the slug is derived from the
+  redacted form so no secret fragment leaks into the filename.
+- Docs and install (FND-002/010/011/014/015/016/017/018/019/020/
+  026/027/028): the invalid-`--agent` exit code is corrected to 1
+  (verified by a real `npx skills@1.7.6` run); `hermes curator
+  lock` is version-scoped (new in Hermes 0.23.0, not in 0.19.0);
+  stale v0.9 mentions updated to v0.10 with historical items
+  labelled; the state-machine wording is explicit-invocation-only;
+  the dead `${CLAUDE_PLUGIN_ROOT}` links are removed; the
+  installer is pinned to `skills@1.7.6`; the demo log is
+  regenerated (8 tests).
+- Pinned pytest 8.4.2 → 9.0.3 (FND-021, PYSEC-2026-1845), with
+  regenerated hashes in `requirements-ci.txt`.
+
 ## [0.10.1] — 2026-11-08
 
 CI fixes for the 0.10.0 head: the first CI run on the round-7
