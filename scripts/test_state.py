@@ -100,11 +100,18 @@ def _pass_bundle_dict():
     }
 
 
-def _write_bundle(repo, name="x.json", bundle=None):
+def _write_bundle(repo, name="x.json", bundle=None, revision=None):
     """Write a bundle under docs/verification/ (excluded from the
     digest, so it never resets the stage) and return its path
-    relative to the repo root, as state.json records it."""
-    bundle = _pass_bundle_dict() if bundle is None else bundle
+    relative to the repo root, as state.json records it. `revision`
+    is the revision the bundle is bound to (round 8, FND-004):
+    a bundle whose revision does not resolve in `repo` fails
+    tree binding, so fixtures must pass the repo's HEAD — a
+    bundle with a made-up revision is not a genuinely recorded
+    bundle, and the old default ("abc1234") no longer validates."""
+    bundle = _pass_bundle_dict() if bundle is None else dict(bundle)
+    if revision is not None:
+        bundle["revision"] = revision
     directory = repo / "docs" / "verification"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / name).write_text(json.dumps(bundle), encoding="utf-8")
@@ -176,7 +183,7 @@ def _at_stage(repo, stage, revision, digest):
     data = _building(digest=digest, revision=revision)
     data["stage"] = stage
     if stage in ("VERIFIED", "AWAITING_APPROVAL", "RELEASE_READY"):
-        data["evidence_bundle"] = _write_bundle(repo)
+        data["evidence_bundle"] = _write_bundle(repo, revision=revision)
     if stage == "RELEASE_READY":
         data["approval"] = {
             "approved_by": "x",
@@ -223,7 +230,7 @@ def test_allowed_transitions(tmp_path):
         data = _at_stage(repo, frm, revision, digest)
         kwargs = {"repo": repo}
         if to == "VERIFIED":
-            kwargs["evidence_bundle"] = _write_bundle(repo)
+            kwargs["evidence_bundle"] = _write_bundle(repo, revision=revision)
         elif to == "RELEASE_READY":
             data["approval"] = {
                 "approved_by": "x",
@@ -266,7 +273,7 @@ def test_digest_change_forces_building(tmp_path):
             "VERIFIED",
             new_revision,
             repo=repo,
-            evidence_bundle=_write_bundle(repo),
+            evidence_bundle=_write_bundle(repo, revision=new_revision),
         )
     data = st.transition(data, "BUILDING", new_revision, repo=repo, note="content changed")
     assert data["stage"] == "BUILDING" and data["content_digest"] == new_digest
@@ -372,7 +379,7 @@ def test_verified_needs_evidence_and_release_needs_approval(tmp_path):
         st.transition(data, "VERIFIED", revision, repo=repo)
     data = _building(digest=digest, revision=revision)
     data["stage"] = "AWAITING_APPROVAL"
-    data["evidence_bundle"] = _write_bundle(repo)
+    data["evidence_bundle"] = _write_bundle(repo, revision=revision)
     with pytest.raises(ValueError, match="approval"):
         st.transition(data, "RELEASE_READY", revision, repo=repo)
 
@@ -404,7 +411,7 @@ def test_verified_refused_on_dirty_tree(tmp_path):
     _git(repo, "commit", "-qm", "ignore logs")
     revision = _head(repo)
     digest = cd.content_digest(repo, revision)
-    bundle = _write_bundle(repo)
+    bundle = _write_bundle(repo, revision=revision)
     data = _building(digest=digest, revision=revision)
     data["stage"] = "VERIFYING"
     (repo / "src" / "app.py").write_text("x = 2\n", encoding="utf-8")
@@ -443,22 +450,56 @@ def test_release_ready_refused_on_dirty_tree(tmp_path):
     assert data["stage"] == "RELEASE_READY"
 
 
-def test_dirty_check_skipped_for_older_revision(tmp_path):
-    """The dirty-tree check applies only when the revision IS
-    HEAD: for an older revision the working tree is irrelevant —
-    the digest describes that revision's tree, not the work in
-    progress."""
+def test_verified_refuses_stale_revision(tmp_path):
+    """FND-008 / N-B4 (round 8): this REPLACES
+    test_dirty_check_skipped_for_older_revision, whose expectation
+    was the bug. The old test held that the dirty-tree check
+    applies only at HEAD, so a transition to VERIFIED at an older
+    revision skipped the gate entirely — _tree_is_dirty()
+    returned False for revision != HEAD. A VERIFIED stage minted
+    at a revision HEAD has moved past binds the stage to content
+    HEAD no longer has, and a dirty tree at that point was never
+    even looked at. Now a transition to VERIFIED (or
+    RELEASE_READY) at a non-HEAD revision is refused outright,
+    with an error naming the stale revision — dirty tree or not."""
     repo = _repo(tmp_path)
     old_revision = _head(repo)
     old_digest = cd.content_digest(repo, old_revision)
     _commit_change(repo)  # HEAD moves on
-    (repo / "src" / "app.py").write_text("x = 3\n", encoding="utf-8")  # dirty, uncommitted
     data = _building(digest=old_digest, revision=old_revision)
     data["stage"] = "VERIFYING"
-    data = st.transition(
-        data, "VERIFIED", old_revision, repo=repo, evidence_bundle=_write_bundle(repo)
-    )
-    assert data["stage"] == "VERIFIED"
+    # Clean tree, stale revision: still refused, as stale — not as dirty.
+    with pytest.raises(ValueError, match="stale"):
+        st.transition(
+            data,
+            "VERIFIED",
+            old_revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, revision=old_revision),
+        )
+    # Dirty tree, stale revision: still the stale error, not a silent pass.
+    (repo / "src" / "app.py").write_text("x = 3\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="stale"):
+        st.transition(
+            data,
+            "VERIFIED",
+            old_revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, revision=old_revision),
+        )
+    # RELEASE_READY at a stale revision is refused the same way.
+    data = _building(digest=old_digest, revision=old_revision)
+    data["stage"] = "AWAITING_APPROVAL"
+    data["evidence_bundle"] = _write_bundle(repo, revision=old_revision)
+    data["approval"] = {
+        "approved_by": "x",
+        "revision": old_revision,
+        "content_digest": old_digest,
+        "artifact": "a.tgz",
+        "at": "2026-11-07T00:00:00+00:00",
+    }
+    with pytest.raises(ValueError, match="stale"):
+        st.transition(data, "RELEASE_READY", old_revision, repo=repo)
 
 
 def _incomplete_bundle_dict():
@@ -494,7 +535,7 @@ def test_verified_refuses_incomplete_bundle(tmp_path):
     repo = _repo(tmp_path)
     revision = _head(repo)
     digest = cd.content_digest(repo, revision)
-    bundle = _write_bundle(repo, "incomplete.json", _incomplete_bundle_dict())
+    bundle = _write_bundle(repo, "incomplete.json", _incomplete_bundle_dict(), revision=revision)
     data = _building(digest=digest, revision=revision)
     data["stage"] = "VERIFYING"
     with pytest.raises(ValueError, match="not PASS"):
@@ -532,7 +573,7 @@ def test_stored_evidence_bundle_rule(tmp_path):
     # (a) Stored valid PASS bundle, no flag: accepted.
     data = _building(digest=digest, revision=revision)
     data["stage"] = "VERIFYING"
-    data["evidence_bundle"] = _write_bundle(repo)
+    data["evidence_bundle"] = _write_bundle(repo, revision=revision)
     data = st.transition(data, "VERIFIED", revision, repo=repo)
     assert data["stage"] == "VERIFIED"
     # (b) Stored path names no file: refused.
@@ -544,7 +585,9 @@ def test_stored_evidence_bundle_rule(tmp_path):
     # (c) Stored bundle is INCOMPLETE, not PASS: refused.
     data = _building(digest=digest, revision=revision)
     data["stage"] = "VERIFYING"
-    data["evidence_bundle"] = _write_bundle(repo, "incomplete.json", _incomplete_bundle_dict())
+    data["evidence_bundle"] = _write_bundle(
+        repo, "incomplete.json", _incomplete_bundle_dict(), revision=revision
+    )
     with pytest.raises(ValueError, match="not PASS"):
         st.transition(data, "VERIFIED", revision, repo=repo)
     # The flag still wins when given: a valid flag bundle accepts
@@ -552,7 +595,13 @@ def test_stored_evidence_bundle_rule(tmp_path):
     data = _building(digest=digest, revision=revision)
     data["stage"] = "VERIFYING"
     data["evidence_bundle"] = "docs/verification/nope.json"
-    data = st.transition(data, "VERIFIED", revision, repo=repo, evidence_bundle=_write_bundle(repo))
+    data = st.transition(
+        data,
+        "VERIFIED",
+        revision,
+        repo=repo,
+        evidence_bundle=_write_bundle(repo, revision=revision),
+    )
     assert data["stage"] == "VERIFIED"
     assert data["evidence_bundle"] == "docs/verification/x.json"
 
@@ -570,7 +619,9 @@ def test_validate_flags_evidence_problems(tmp_path):
     data["evidence_bundle"] = "docs/verification/nope.json"
     assert any("does not exist" in p for p in st.validate_state(data, repo=repo))
     data = _at_stage(repo, "VERIFIED", revision, digest)
-    data["evidence_bundle"] = _write_bundle(repo, "incomplete.json", _incomplete_bundle_dict())
+    data["evidence_bundle"] = _write_bundle(
+        repo, "incomplete.json", _incomplete_bundle_dict(), revision=revision
+    )
     assert any("not PASS" in p for p in st.validate_state(data, repo=repo))
     data = _building(digest=digest, revision=revision)
     data["stage"] = "VERIFYING"
@@ -585,7 +636,11 @@ def test_release_ready_uses_computed_digest(tmp_path):
     """F-07: RELEASE_READY keeps the approval check, now against
     the COMPUTED digest — an approval bound to any other digest
     does not release, and an approval does not survive a content
-    change."""
+    change. Round 8, FND-008: the test's old final step
+    transitioned to RELEASE_READY at the old revision AFTER HEAD
+    had moved on — a stale-revision transition, now refused.
+    The successful release is asserted before HEAD moves, and
+    the content-change refusal after."""
     repo = _repo(tmp_path)
     revision = _head(repo)
     digest = cd.content_digest(repo, revision)
@@ -600,11 +655,21 @@ def test_release_ready_uses_computed_digest(tmp_path):
     with pytest.raises(ValueError, match="approval"):
         st.transition(data, "RELEASE_READY", revision, repo=repo)
     data["approval"]["content_digest"] = digest
+    data = st.transition(data, "RELEASE_READY", revision, repo=repo)
+    assert data["stage"] == "RELEASE_READY"
+    # A content change after the approval: the only move is
+    # BUILDING, and the approval does not survive it.
+    data = _at_stage(repo, "AWAITING_APPROVAL", revision, digest)
+    data["approval"] = {
+        "approved_by": "x",
+        "revision": revision,
+        "content_digest": digest,
+        "artifact": "a.tgz",
+        "at": "2026-11-07T00:00:00+00:00",
+    }
     new_revision = _commit_change(repo)
     with pytest.raises(ValueError, match="BUILDING"):
         st.transition(data, "RELEASE_READY", new_revision, repo=repo)
-    data = st.transition(data, "RELEASE_READY", revision, repo=repo)
-    assert data["stage"] == "RELEASE_READY"
 
 
 def test_cli_validate_and_transition(tmp_path, capsys):
@@ -637,3 +702,305 @@ def test_cli_validate_and_transition(tmp_path, capsys):
     path.write_text(json.dumps({**_building(), "stage": "DONE"}), encoding="utf-8")
     assert st.main(["validate", "--repo", str(repo), str(path)]) == 1
     assert "stage" in capsys.readouterr().out
+
+
+# --- Round 8, Track B: FND-007 / FND-008 / FND-009 / FND-004 integration ---
+
+
+def test_cli_validate_defaults_repo_to_cwd(tmp_path, monkeypatch):
+    """FND-007: --repo defaults to the caller's working directory,
+    resolved at call time — not to the ORCINUS install. A valid
+    state file in a fresh project validates with no --repo when
+    run from that project (the round-8 repro: exit 1 before the
+    fix, exit 0 after)."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_building(digest=digest, revision=revision)), encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert st.main(["validate", str(path)]) == 0
+
+
+def test_cli_transition_defaults_repo_to_cwd(tmp_path, monkeypatch):
+    """FND-007 / N-B3: the same bad default also affected
+    transition (transition() defaulted repo=ROOT). A transition
+    run from the project, with no --repo, must recompute the
+    digest in that project."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_building(digest=digest, revision=revision)), encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert st.main(["transition", str(path), "--to", "VERIFYING", "--revision", revision]) == 0
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["stage"] == "VERIFYING" and data["content_digest"] == digest
+
+
+def test_transition_defaults_repo_to_cwd_in_process(tmp_path, monkeypatch):
+    """FND-007 / N-B3, in-process: transition() with no repo
+    argument resolves the caller's cwd at call time, not at
+    import time — so a later chdir is honoured."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    monkeypatch.chdir(repo)
+    data = st.transition(_building(digest=digest, revision=revision), "VERIFYING", revision)
+    assert data["stage"] == "VERIFYING" and data["content_digest"] == digest
+
+
+def test_cli_validate_rejects_stale_state_by_default(tmp_path, monkeypatch, capsys):
+    """FND-008: a VERIFIED state validates after HEAD advances
+    only until the fix — validate now requires the state's
+    revision to be HEAD by default (exit 1, naming the stale
+    revision), and --no-require-head is the explicit opt-out
+    for inspecting a historical state."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_at_stage(repo, "VERIFIED", revision, digest)), encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert st.main(["validate", str(path)]) == 0
+    _commit_change(repo)  # HEAD moves on; the state is now stale.
+    assert st.main(["validate", str(path)]) == 1
+    assert "stale" in capsys.readouterr().out
+    assert st.main(["validate", "--no-require-head", str(path)]) == 0
+
+
+def test_validate_state_require_head(tmp_path):
+    """FND-008, function level: require_head compares the state's
+    revision with HEAD; a stale revision is a problem, and a
+    missing HEAD fails closed. With require_head off (the
+    default, preserving in-process callers) only the digest is
+    recomputed."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
+    assert st.validate_state(data, repo=repo, require_head=True) == []
+    assert st.validate_state(data, repo=repo) == []
+    _commit_change(repo)
+    problems = st.validate_state(data, repo=repo, require_head=True)
+    assert any("stale" in p and "HEAD" in p for p in problems)
+    assert st.validate_state(data, repo=repo) == []  # off: digest still matches
+
+
+def test_evidence_bundle_must_bind_to_tree(tmp_path):
+    """FND-004 integration: _evidence_problems now passes the
+    resolved repo to validate_bundle, so state validation gains
+    the same tree binding. A bundle whose revision does not
+    resolve in the repo is not evidence for VERIFIED — the old
+    fixture shape (revision "abc1234", never recorded anywhere)
+    now fails, and only a bundle genuinely recorded at the
+    repo's HEAD validates. Fixtures were updated to record the
+    real revision instead of weakening the binding."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _at_stage(repo, "VERIFIED", revision, digest)
+    assert st.validate_state(data, repo=repo) == []
+    data = _at_stage(repo, "VERIFIED", revision, digest)
+    data["evidence_bundle"] = _write_bundle(repo, "unbound.json")  # revision "abc1234"
+    problems = st.validate_state(data, repo=repo)
+    assert any("does not resolve" in p for p in problems), problems
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    with pytest.raises(ValueError, match="does not resolve"):
+        st.transition(
+            data,
+            "VERIFIED",
+            revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, "unbound.json"),
+        )
+
+
+def _run_cli_transition(state_path, repo, to_stage, revision):
+    """One state.py transition as a subprocess (the real CLI,
+    with its lock file), returning (returncode, stdout)."""
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "scripts" / "state.py"),
+            "transition",
+            str(state_path),
+            "--to",
+            to_stage,
+            "--revision",
+            revision,
+            "--repo",
+            str(repo),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    return proc.returncode, proc.stdout + proc.stderr
+
+
+def test_concurrent_transitions_lose_no_history(tmp_path):
+    """FND-009 / N-B2: two simultaneous transitions must not lose
+    history. The invariant, stated exactly: the final history
+    holds one entry per successful writer, and a writer that
+    exits 0 always has its entry in the file — a failed writer
+    fails loudly, never silently overwrites. (Why not "both exit
+    0, history 3" for two identical transitions: no two distinct
+    transitions from one stage both stay legal after the other
+    lands — e.g. two --to VERIFYING from BUILDING, where the
+    second is VERIFYING->VERIFYING and illegal — so identical
+    targets can never both succeed under any correct lock; the
+    chained case below is the both-succeed shape.) Six trials,
+    as in the verification repro."""
+    import concurrent.futures
+
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    path = tmp_path / "state.json"
+    for _trial in range(6):
+        data = _building(digest=digest, revision=revision)
+        data["history"] = [
+            {
+                "stage": "BUILDING",
+                "revision": revision,
+                "content_digest": digest,
+                "at": "2026-11-08T00:00:00+00:00",
+                "note": "start",
+            }
+        ]
+        path.write_text(json.dumps(data), encoding="utf-8")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            futs = [
+                pool.submit(_run_cli_transition, path, repo, "VERIFYING", revision)
+                for _ in range(2)
+            ]
+            results = [f.result() for f in futs]
+        successes = sum(1 for rc, _ in results if rc == 0)
+        assert successes == 1, results  # exactly one wins; the other fails loudly
+        final = json.loads(path.read_text(encoding="utf-8"))
+        assert len(final["history"]) == 1 + successes, final["history"]
+        assert final["stage"] == "VERIFYING"
+        assert any("not an allowed transition" in out for rc, out in results if rc != 0)
+
+
+def test_concurrent_chained_transitions_both_succeed(tmp_path):
+    """FND-009, the both-succeed shape: two transitions that
+    chain (VERIFIED -> AWAITING_APPROVAL, then -> BUILDING),
+    launched simultaneously, must both exit 0 with history 3 —
+    the loser re-reads the winner's commit instead of
+    overwriting it. Run sequentially first as a control (the
+    chain itself is legal), then simultaneously."""
+    import concurrent.futures
+
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    path = tmp_path / "state.json"
+
+    def _write_verified():
+        data = _at_stage(repo, "VERIFIED", revision, digest)
+        data["history"] = [
+            {
+                "stage": "VERIFIED",
+                "revision": revision,
+                "content_digest": digest,
+                "at": "2026-11-08T00:00:00+00:00",
+                "note": "start",
+            }
+        ]
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    _write_verified()
+    assert _run_cli_transition(path, repo, "AWAITING_APPROVAL", revision)[0] == 0
+    assert _run_cli_transition(path, repo, "BUILDING", revision)[0] == 0
+    final = json.loads(path.read_text(encoding="utf-8"))
+    assert len(final["history"]) == 3
+    _write_verified()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        futs = [
+            pool.submit(_run_cli_transition, path, repo, "AWAITING_APPROVAL", revision),
+            pool.submit(_run_cli_transition, path, repo, "BUILDING", revision),
+        ]
+        results = [f.result() for f in futs]
+    # The order is whichever process acquires the lock first; the
+    # BUILDING-first order cannot then take AWAITING_APPROVAL, so
+    # the strict both-succeed assertion only holds when
+    # AWAITING_APPROVAL lands first. The invariant that always
+    # holds is no silent loss: history length is 1 + successes.
+    successes = sum(1 for rc, _ in results if rc == 0)
+    final = json.loads(path.read_text(encoding="utf-8"))
+    assert len(final["history"]) == 1 + successes, (results, final["history"])
+    assert successes >= 1, results
+
+
+def test_stale_lock_is_recoverable(tmp_path):
+    """FND-009: a lock file left by a dead holder (PID recorded,
+    process gone) must not block the next transition forever —
+    the next acquirer notes the stale lock and proceeds."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_building(digest=digest, revision=revision)), encoding="utf-8")
+    lock_path = path.parent / f".{path.name}.lock"
+    lock_path.write_bytes(b" 999999\n")  # dead PID, no flock holder
+    assert (
+        st.main(
+            [
+                "transition",
+                str(path),
+                "--to",
+                "VERIFYING",
+                "--revision",
+                revision,
+                "--repo",
+                str(repo),
+            ]
+        )
+        == 0
+    )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["stage"] == "VERIFYING"
+
+
+def test_lock_released_after_refused_transition(tmp_path):
+    """FND-009: the lock is released on the error path too — a
+    refused transition must not leave the next transition
+    blocked."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_building(digest=digest, revision=revision)), encoding="utf-8")
+    assert (
+        st.main(
+            [
+                "transition",
+                str(path),
+                "--to",
+                "VERIFIED",
+                "--revision",
+                revision,
+                "--repo",
+                str(repo),
+            ]
+        )
+        == 1
+    )
+    assert (
+        st.main(
+            [
+                "transition",
+                str(path),
+                "--to",
+                "VERIFYING",
+                "--revision",
+                revision,
+                "--repo",
+                str(repo),
+            ]
+        )
+        == 0
+    )

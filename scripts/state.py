@@ -29,7 +29,7 @@ one. Rewritten history yields a new revision (and digest), which
 correctly fires Rule 2 rather than bypassing it.
 
 Usage:
-    python3 scripts/state.py validate <state.json> [--repo <repo>]
+    python3 scripts/state.py validate <state.json> [--repo <repo>] [--no-require-head]
     python3 scripts/state.py transition <state.json> --to STAGE
         --revision <sha> [--expect-digest sha256:<hex>]
         [--evidence <bundle path>] [--note <text>] [--repo <repo>]
@@ -39,9 +39,11 @@ Stdlib only.
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import types
 from datetime import datetime, timezone
 from pathlib import Path
@@ -118,7 +120,7 @@ def load_state(path):
     return data
 
 
-def validate_state(data, repo=None):
+def validate_state(data, repo=None, require_head=False):
     """Problems with a state dict, [] when valid. Mirrors
     scripts/state_schema.json (hand-rolled, stdlib only — the repo
     has no jsonschema dependency). With `repo` given, the stored
@@ -126,7 +128,16 @@ def validate_state(data, repo=None):
     compared: a stored digest that does not match the tree it
     claims to describe is corrupt, not verified (F-07) — this is
     what detects a hand-edited state file. With `repo` None only
-    the structural checks run."""
+    the structural checks run. With `require_head` (round 8,
+    FND-008; the `validate` CLI passes it by default) the state's
+    revision must also be HEAD: a state for a revision HEAD has
+    moved past is stale, not valid — the digest may still match
+    its own revision, but the stage no longer describes the
+    current tree. `require_head` defaults off for in-process
+    callers (transition() has its own stage-specific staleness
+    refusal); pass it explicitly to inspect a state as the CLI
+    does, or --no-require-head on the CLI to inspect a
+    historical state on purpose."""
     problems = []
     if not isinstance(data, dict):
         return ["state is not an object"]
@@ -212,6 +223,27 @@ def validate_state(data, repo=None):
                         f"for revision {revision!r} (recomputed {recomputed}): "
                         "the state file was edited by hand, or history was rewritten"
                     )
+        if require_head:
+            # FND-008: the digest above proves the state matches
+            # its own revision, not that the revision is current.
+            # A stale revision is a problem, not a pass.
+            head = _head_revision(repo)
+            if head is None:
+                problems.append(
+                    f"cannot resolve HEAD in {repo}: --require-head cannot "
+                    "prove the state revision is current"
+                )
+            elif (
+                isinstance(revision, str)
+                and _SHA_RE.match(revision)
+                and _resolve_revision(repo, revision) not in (None, head)
+            ):
+                problems.append(
+                    f"state revision {revision!r} is stale: HEAD is {head} — "
+                    "the state describes a revision HEAD has moved past "
+                    "(move the state to HEAD first, or pass "
+                    "--no-require-head to inspect a historical state)"
+                )
     return problems
 
 
@@ -243,7 +275,16 @@ def _evidence_problems(value, repo, require_valid):
         return [f"evidence_bundle {value!r} is not a JSON object"]
     try:
         schema = _validate_evidence.load_schema(_validate_evidence.SCHEMA_PATH)
-        problems = _validate_evidence.validate_bundle(bundle, schema, bundle_dir=path.parent)
+        # Round 8, FND-004: pass the resolved repo so state
+        # validation gains the same tree binding the validator
+        # CLI has — the bundle's revision must resolve in this
+        # repo and its checks must match that tree. The state's
+        # own revision is NOT passed as expected_revision: that
+        # cross-check (bundle recorded on the state's revision)
+        # is a separate decision, not part of this binding.
+        problems = _validate_evidence.validate_bundle(
+            bundle, schema, bundle_dir=path.parent, repo=repo
+        )
     except (ValueError, OSError, RecursionError) as e:
         return [f"evidence_bundle {value!r}: validator error: {e}"]
     if problems:
@@ -253,18 +294,55 @@ def _evidence_problems(value, repo, require_valid):
     return []
 
 
+def _git_output(repo, *args):
+    """One git command's stdout, stripped — or None when git
+    fails, times out, or cannot run. None is never a value to
+    trust: every caller fails closed on it."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def _head_revision(repo):
+    """The full SHA of HEAD in `repo`, or None when HEAD does
+    not resolve (empty repo, not a repo, git broken)."""
+    return _git_output(repo, "rev-parse", "HEAD")
+
+
+def _resolve_revision(repo, revision):
+    """The full SHA `revision` resolves to in `repo`, or None
+    when it does not resolve. `--verify ...^{commit}` is git's
+    verifying form: a bare `rev-parse` would echo an unknown
+    revision back instead of failing."""
+    return _git_output(repo, "rev-parse", "--verify", f"{revision}^{{commit}}")
+
+
 def _tree_is_dirty(repo, revision):
     """True when the working tree has uncommitted changes outside
     the two excluded dirs. Applies only when `revision` is HEAD:
-    for an older revision the working tree is irrelevant — the
-    digest describes that revision's tree, not the work in
-    progress. `git ls-tree` cannot see untracked files, so this is
-    a separate check from the digest. A git failure counts as
-    dirty, never "clean by accident". `--untracked-files=normal`
-    excludes ignored files; the `:(exclude)` pathspecs exclude the
-    two places where recording verification itself writes, so
-    committing the state file or an evidence bundle never counts
-    as dirt (the same exclusions as the digest)."""
+    for an older revision the working tree cannot be proven clean
+    for that revision, so it now fails closed (round 8, N-B4 —
+    the old code returned False there, so a stale-revision
+    transition skipped the dirty-tree gate entirely). The
+    transition refuses stale revisions before this gate, so True
+    here is defence-in-depth for any future caller, never a
+    silent pass. `git ls-tree` cannot see untracked files, so
+    this is a separate check from the digest. A git failure
+    counts as dirty, never "clean by accident".
+    `--untracked-files=normal` excludes ignored files; the
+    `:(exclude)` pathspecs exclude the two places where recording
+    verification itself writes, so committing the state file or
+    an evidence bundle never counts as dirt (the same exclusions
+    as the digest)."""
     try:
         head = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
@@ -275,7 +353,7 @@ def _tree_is_dirty(repo, revision):
         if head.returncode != 0:
             return True
         if not head.stdout.strip().startswith(revision):
-            return False
+            return True
         status = subprocess.run(
             [
                 "git",
@@ -300,8 +378,191 @@ def _tree_is_dirty(repo, revision):
         return True
 
 
+# --- Round 8, FND-009: mutual exclusion for the read-modify-write ---
+# Pattern: skills/idea-capture/scripts/capture.py — a durable lock
+# file (never unlinked: unlinking is what made the old stale-lock
+# recovery racy) plus an OS advisory lock (flock / msvcrt) on it.
+# The lock file is created with O_EXCL when absent, opened when
+# present; the lock is the flock, not the file's existence, so a
+# leftover file from a dead holder never blocks anyone — the OS
+# releases the flock when the holder dies, even on SIGKILL — and
+# the recorded PID is diagnostic only. NOTE (N-B2): writing via
+# a temp file + os.replace alone does NOT fix lost updates — it
+# only prevents torn writes; both writers would still read the
+# same base and last-rename-wins. The lock is the fix.
+
+
+def _lock_path(path):
+    return Path(path).parent / f".{Path(path).name}.lock"
+
+
+def _try_lock(fd):
+    """Take the OS advisory lock on an open fd, non-blocking.
+    POSIX uses fcntl.flock; Windows uses msvcrt.locking on one
+    byte at offset 0. Raises RuntimeError when no locking
+    primitive exists — the caller must fail closed, never
+    proceed unlocked."""
+    if sys.platform == "win32":
+        import msvcrt
+
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        return True
+    try:
+        import fcntl
+    except ImportError:
+        raise RuntimeError("no advisory file-locking primitive on this platform")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(fd):
+    """Release the OS advisory lock on an open fd. Closing the fd
+    releases it too; this is belt-and-braces, and it never fails
+    the caller."""
+    try:
+        if sys.platform == "win32":
+            import msvcrt
+
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        else:
+            import fcntl
+
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+    except ImportError:
+        pass
+
+
+def _read_lock_pid(lock_path):
+    """The PID recorded in a lock file, or None when it cannot be
+    read. The PID starts at offset 1 (byte 0 is the locked
+    region), and the read starts there too, so a contender can
+    read it without touching the locked byte. A missing PID means
+    the lock cannot be proven stale, so the caller must treat it
+    as held."""
+    try:
+        fd = os.open(lock_path, os.O_RDONLY)
+    except OSError:
+        return None
+    try:
+        os.lseek(fd, 1, os.SEEK_SET)
+        data = os.read(fd, 32)
+    except OSError:
+        return None
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    try:
+        pid = int(data.decode("utf-8").strip())
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _pid_is_alive(pid):
+    """True when the process exists. A PermissionError means the
+    process exists but belongs to another user — alive, so the
+    lock is held. On Windows there is no portable probe here, so
+    the PID is never declared dead: the stale note is
+    diagnostic only, and recovery never depends on it (the flock
+    is the lock)."""
+    if sys.platform == "win32":
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _acquire_lock(path, timeout_s=10.0):
+    """Take the lock for `path`'s read-modify-write. Returns (fd,
+    lock_path, holder_pid): fd is None when the lock is still
+    held after the timeout, and holder_pid is then the recorded
+    PID when it could be read, else None. The caller must
+    release it (unlock + close) in a finally block, on every
+    path including errors. The lock file is never unlinked."""
+    import time
+
+    lock_path = _lock_path(path)
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o644)
+    except FileExistsError:
+        try:
+            fd = os.open(lock_path, os.O_RDWR)
+        except OSError:
+            return None, lock_path, None
+    except OSError:
+        return None, lock_path, None
+    deadline = time.monotonic() + timeout_s
+    holder_pid = None
+    while True:
+        if _try_lock(fd):
+            break
+        pid = _read_lock_pid(lock_path)
+        if pid is not None:
+            holder_pid = pid
+        if time.monotonic() >= deadline:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            return None, lock_path, holder_pid
+        time.sleep(0.05)
+    # We hold the lock. The recorded PID may name a dead process
+    # (the previous holder died; the OS released the lock and the
+    # file stayed): note it, then overwrite it with ours.
+    old_pid = _read_lock_pid(lock_path)
+    if old_pid is not None and not _pid_is_alive(old_pid):
+        print(
+            f"note: stale lock {lock_path.name} recovered "
+            f"(holder process {old_pid} no longer exists)",
+            file=sys.stderr,
+        )
+    try:
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)
+        # Byte 0 is the locked region: the PID starts at offset 1.
+        os.write(fd, f" {os.getpid()}\n".encode("utf-8"))
+        try:
+            os.fsync(fd)
+        except OSError:
+            pass
+    except OSError:
+        _release_lock(fd, lock_path)
+        return None, lock_path, None
+    return fd, lock_path, None
+
+
+def _release_lock(fd, lock_path) -> None:
+    """Release the advisory lock and close the fd. The lock file
+    is NEVER unlinked."""
+    _unlock(fd)
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
 def transition(
-    data, to_stage, revision, evidence_bundle=None, note="", repo=ROOT, expect_digest=None
+    data, to_stage, revision, evidence_bundle=None, note="", repo=None, expect_digest=None
 ):
     """Move a state dict to `to_stage`, returning a new dict (the
     input is not mutated). The content digest is recomputed here,
@@ -326,6 +587,11 @@ def transition(
     untracked files, so the tree is checked separately. The history
     is append-only: the old entries are kept verbatim and one entry
     is added."""
+    # Round 8, FND-007 / N-B3: `repo` defaults to the caller's
+    # working directory, resolved at call time — not to the
+    # ORCINUS install (the old `repo=ROOT` default) and not at
+    # import time, so a later chdir is honoured.
+    repo = Path.cwd() if repo is None else repo
     problems = validate_state(data, repo=repo)
     if evidence_bundle is not None:
         # The flag replaces the stored bundle: a stale stored path
@@ -363,6 +629,23 @@ def transition(
             f"not an allowed transition: {current} -> {to_stage} "
             f"(allowed: {', '.join(sorted(ALLOWED_TRANSITIONS[current])) or 'none'})"
         )
+    if to_stage in ("VERIFIED", "RELEASE_READY"):
+        # Round 8, FND-008 / N-B4: a VERIFIED or RELEASE_READY
+        # stage minted at a revision HEAD has moved past binds
+        # the stage to content HEAD no longer has — and the old
+        # _tree_is_dirty() returned False for a non-HEAD revision,
+        # so the dirty-tree gate was skipped too. Refuse outright,
+        # naming the stale revision. (An unresolvable HEAD falls
+        # through to the dirty gate, which fails closed.)
+        head = _head_revision(repo)
+        if head is not None:
+            resolved = _resolve_revision(repo, revision)
+            if resolved is not None and resolved != head:
+                raise ValueError(
+                    f"cannot transition to {to_stage} at stale revision "
+                    f"{revision!r}: HEAD is {head} — move the state to "
+                    "HEAD first"
+                )
     if to_stage in ("VERIFIED", "RELEASE_READY") and _tree_is_dirty(repo, revision):
         raise ValueError(
             "working tree is dirty: VERIFIED and RELEASE_READY require a clean tree "
@@ -423,7 +706,13 @@ def main(argv):
     validate.add_argument(
         "--repo",
         default=None,
-        help="the repo the digest is recomputed in (default: this repo)",
+        help="the repo the digest is recomputed in (default: current working directory)",
+    )
+    validate.add_argument(
+        "--no-require-head",
+        action="store_true",
+        help="do not require the state revision to be HEAD "
+        "(default: require HEAD; use this only to inspect a historical state)",
     )
     move = sub.add_parser("transition", help="move a state file to a new stage")
     move.add_argument("path")
@@ -439,39 +728,85 @@ def main(argv):
     move.add_argument(
         "--repo",
         default=None,
-        help="the repo the digest is recomputed in (default: this repo)",
+        help="the repo the digest is recomputed in (default: current working directory)",
     )
     args = parser.parse_args(argv)
-    repo = Path(args.repo) if args.repo else ROOT
-    try:
-        data = load_state(args.path)
-    except ValueError as e:
-        print(f"invalid: {e}")
-        return 1
+    # Round 8, FND-007: --repo defaults to the caller's working
+    # directory, resolved at call time — not to the ORCINUS
+    # install (the old `ROOT` default).
+    repo = Path(args.repo).resolve() if args.repo else Path.cwd()
     if args.command == "validate":
-        problems = validate_state(data, repo=repo)
+        try:
+            data = load_state(args.path)
+        except ValueError as e:
+            print(f"invalid: {e}")
+            return 1
+        problems = validate_state(data, repo=repo, require_head=not args.no_require_head)
         if problems:
             for problem in problems:
                 print(f"invalid: {problem}")
             return 1
         print("OK: state is valid")
         return 0
+    # Transition is a read-modify-write: the lock (round 8,
+    # FND-009) covers load, transition, and write, so two
+    # simultaneous transitions cannot read the same base and
+    # lose each other's history entry. The write goes through a
+    # temp file + os.replace for atomicity — but os.replace alone
+    # does NOT fix lost updates (N-B2); the lock is the fix.
+    # The lock is released in `finally`, on every path including
+    # a refused transition; the lock file itself is never
+    # unlinked, so a dead holder never blocks the next writer.
+    path = Path(args.path)
     try:
-        new = transition(
-            data,
-            args.to,
-            args.revision,
-            args.evidence,
-            args.note,
-            repo=repo,
-            expect_digest=args.expect_digest,
-        )
-    except ValueError as e:
-        print(f"refused: {e}")
+        fd, lock_path, holder_pid = _acquire_lock(path)
+    except RuntimeError as e:
+        print(f"refused: cannot lock the state file: {e}")
         return 1
-    Path(args.path).write_text(json.dumps(new, indent=2) + "\n", encoding="utf-8")
-    print(f"OK: stage is now {args.to}")
-    return 0
+    if fd is None:
+        if holder_pid is not None:
+            print(
+                f"refused: the state file is being changed by another process "
+                f"(pid {holder_pid}) — try again"
+            )
+        else:
+            print("refused: the state file is being changed by another process — try again")
+        return 1
+    try:
+        try:
+            data = load_state(args.path)
+        except ValueError as e:
+            print(f"invalid: {e}")
+            return 1
+        try:
+            new = transition(
+                data,
+                args.to,
+                args.revision,
+                args.evidence,
+                args.note,
+                repo=repo,
+                expect_digest=args.expect_digest,
+            )
+        except ValueError as e:
+            print(f"refused: {e}")
+            return 1
+        tmp_fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=".state-", suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(new, indent=2) + "\n")
+            os.replace(tmp_name, path)
+        except OSError as e:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            print(f"refused: cannot write the state file: {e}")
+            return 1
+        print(f"OK: stage is now {args.to}")
+        return 0
+    finally:
+        _release_lock(fd, lock_path)
 
 
 if __name__ == "__main__":
