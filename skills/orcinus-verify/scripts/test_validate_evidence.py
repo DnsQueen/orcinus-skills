@@ -2460,6 +2460,27 @@ def test_tree_binding_rejects_red_test_file_mismatch(tmp_path):
     assert any("test_file_sha256" in p for p in problems), problems
 
 
+def test_tree_binding_accepts_crlf_test_file_sha256(tmp_path):
+    # CI fix round 4 (0.10.6, windows job): a bundle recorded on
+    # Windows failed with "the red run did not run the test that
+    # passes green" — the fixture writes the test file with
+    # write_text, which translates \n to \r\n on Windows, so the
+    # recorded sha256 is of the CRLF bytes while the green tree
+    # holds the LF blob (git normalises on commit). The recorded
+    # hash must match the green file under git's line-ending
+    # canonicalisation: the LF hash or the CRLF hash of the same
+    # file. A hash of different content still fails (see
+    # test_tree_binding_rejects_red_test_file_mismatch).
+    import hashlib
+
+    b, repo = _bound_bundle(tmp_path)
+    green = (repo / "tests" / "test_capture.py").read_bytes()
+    crlf = green.replace(b"\n", b"\r\n")
+    assert crlf != green  # the fixture file is LF; the CRLF form differs
+    b["fail_first"]["test_file_sha256"] = hashlib.sha256(crlf).hexdigest()
+    assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo) == []
+
+
 def test_tree_binding_requires_red_test_file_sha256(tmp_path):
     # FND-002: a PASS for a behaviour change with method worktree
     # must record the test file's sha256 — without it the red run

@@ -1736,18 +1736,18 @@ def _is_ancestor(repo, ancestor, descendant):
     return proc.returncode == 0
 
 
-def _git_file_sha256(repo, rev, path, working_tree=False):
-    """The sha256 of `path` at `rev` in `repo`, or None when it
+def _git_file_bytes(repo, rev, path, working_tree=False):
+    """The bytes of `path` at `rev` in `repo`, or None when they
     cannot be read. The committed bytes come from `git show
     <rev>:<path>`; when the green tree is the working tree
-    (bundle revision \"working-tree\"), the file is read from disk
+    (bundle revision "working-tree"), the file is read from disk
     instead — an uncommitted new test file has no committed bytes
     to show."""
     if working_tree:
         try:
             target = Path(repo) / path
             if target.is_file():
-                return hashlib.sha256(target.read_bytes()).hexdigest()
+                return target.read_bytes()
         except OSError:
             pass
         return None
@@ -1761,7 +1761,28 @@ def _git_file_sha256(repo, rev, path, working_tree=False):
         return None
     if proc.returncode != 0:
         return None
-    return hashlib.sha256(proc.stdout).hexdigest()
+    return proc.stdout
+
+
+def _git_file_sha256(repo, rev, path, working_tree=False):
+    """The sha256 of `path` at `rev` in `repo`, or None when it
+    cannot be read (see _git_file_bytes)."""
+    data = _git_file_bytes(repo, rev, path, working_tree)
+    return None if data is None else hashlib.sha256(data).hexdigest()
+
+
+def _line_ending_hashes(data):
+    """The sha256s of `data` in its two git line-ending forms: as
+    stored (LF, the committed blob) and with LF expanded to CRLF
+    (the file as copied on Windows). Git treats a text file and
+    its CRLF checkout as the same file, so a recorded hash of
+    either form is the same test — but any other byte change
+    still fails, so the material binding is not weakened."""
+    lf = data.replace(b"\r\n", b"\n")
+    return {
+        hashlib.sha256(lf).hexdigest(),
+        hashlib.sha256(lf.replace(b"\n", b"\r\n")).hexdigest(),
+    }
 
 
 def _check_red_test_file(bundle, ff, repo, target, problems, require_presence):
@@ -1776,16 +1797,22 @@ def _check_red_test_file(bundle, ff, repo, target, problems, require_presence):
     if not isinstance(test_id, str) or "::" not in test_id:
         return  # the nodeid rule in check_fail_first already reports it
     test_path = test_id.split("::", 1)[0]
-    actual = _git_file_sha256(
+    data = _git_file_bytes(
         repo, target, test_path, working_tree=bundle.get("revision") == "working-tree"
     )
-    if actual is None:
+    if data is None:
         problems.append(
             f"fail_first.test {test_id!r} test file {test_path!r} does not exist "
             f"in the green tree at revision {target}: the red run cannot be "
             "tied to the test that passes green"
         )
         return
+    # CI fix round 4 (0.10.6, windows job): the recorded hash is of
+    # the file as copied into the red worktree, which on Windows has
+    # CRLF line endings while the green tree holds the LF blob — so
+    # the hash must match under git's line-ending canonicalisation
+    # (see _line_ending_hashes), not byte-for-byte.
+    actual = _line_ending_hashes(data)
     recorded = ff.get("test_file_sha256")
     if not isinstance(recorded, str) or not recorded:
         if require_presence:
@@ -1795,11 +1822,11 @@ def _check_red_test_file(bundle, ff, repo, target, problems, require_presence):
                 "run is tied to the test that passes green"
             )
         return
-    if recorded != actual:
+    if recorded not in actual:
         problems.append(
             f"fail_first.test_file_sha256 {recorded} does not match the sha256 "
-            f"of {test_path} in the green tree ({actual}): the red run did not "
-            "run the test that passes green"
+            f"of {test_path} in the green tree ({sorted(actual)[0]}): the red "
+            "run did not run the test that passes green"
         )
 
 

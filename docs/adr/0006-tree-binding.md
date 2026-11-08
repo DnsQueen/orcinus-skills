@@ -276,6 +276,16 @@ optional base_revision — pattern only, no code copied):
   file when the bundle revision is "working-tree"). The committed
   content digest does not cover the copied-in file, so without
   this the red run is not tied to any test file.
+
+  Amendment (CI fix round 4, 2026-11-09): the match is under git's
+  line-ending canonicalisation, not byte-for-byte. A file copied
+  on Windows has CRLF line endings while the green tree holds the
+  LF blob (git normalises on commit), so a byte comparison false-
+  rejected every genuine Windows recording (CI 0.10.6, 10 tests).
+  The validator now accepts the LF hash or the CRLF hash of the
+  same file — git treats those as the same text file, and any
+  other byte change still fails, so the material binding is not
+  weakened.
 - For method "revert-at-smallest-scope" the red run sits on the
   bundle revision itself (the revert is a dirty-tree change and
   the digest covers committed content only), so its revision must
