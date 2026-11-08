@@ -126,11 +126,21 @@ def test_cli_bare_rev_rejected(capsys, monkeypatch):
 
     with tempfile.TemporaryDirectory() as d:
         repo = _repo(Path(d))
-        monkeypatch.chdir(repo)
-        assert cd.main(["HEAD"]) == 2
-        err = capsys.readouterr().err
-        assert "--rev" in err
-        assert cd.main(["HEAD", "--rev", "HEAD"]) == 2
+        # monkeypatch teardown runs only after this `with` block exits,
+        # so a plain monkeypatch.chdir(repo) would leave the cwd inside
+        # the temp dir while it is deleted — WinError 32 on Windows.
+        # The context restores the cwd before the directory goes away.
+        with monkeypatch.context() as m:
+            m.chdir(repo)
+            assert cd.main(["HEAD"]) == 2
+            err = capsys.readouterr().err
+            assert "--rev" in err
+            assert cd.main(["HEAD", "--rev", "HEAD"]) == 2
+    # Regression (Windows WinError 32): the cwd must be back outside
+    # the (now deleted) temp dir. On Linux the old code left it
+    # pointing at the deleted dir (getcwd raises FileNotFoundError);
+    # on Windows it failed earlier, at the TemporaryDirectory exit.
+    assert Path.cwd().is_dir()
 
 
 def test_cli_repo_rev_positionals_still_work(capsys):
