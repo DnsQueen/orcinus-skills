@@ -201,9 +201,7 @@ def validate_state(data, repo=None, require_head=False):
                 repo,
                 require_valid=(stage == "VERIFIED"),
                 expected_revision=(
-                    revision
-                    if isinstance(revision, str) and _SHA_RE.match(revision)
-                    else None
+                    revision if isinstance(revision, str) and _SHA_RE.match(revision) else None
                 ),
             )
         )
