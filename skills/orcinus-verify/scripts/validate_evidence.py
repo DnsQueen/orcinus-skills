@@ -1617,6 +1617,32 @@ def _git_output(repo, *args):
     return proc.returncode, proc.stdout
 
 
+def _git_common_dir(directory):
+    """The resolved common git dir of `directory` (the `.git` dir
+    its work tree shares), or None when it cannot be established:
+    the directory is gone, is not in a repo, or git cannot run.
+    `--git-common-dir` prints a path relative to the directory git
+    ran in (".git", "../.git"), or an absolute one for a worktree,
+    so a relative result is joined to the directory before it is
+    resolved. Two directories share a repo exactly when their
+    common dirs are equal — a subdirectory, the repo root, and a
+    live worktree of the repo all match; a nested repo, a bare
+    repo, and a scratch directory do not."""
+    rc, out = _git_output(directory, "rev-parse", "--git-common-dir")
+    if rc != 0:
+        return None
+    raw = out.strip()
+    if not raw or "\n" in raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path(directory) / path
+    try:
+        return path.resolve()
+    except OSError:
+        return None
+
+
 def _resolve_commit(repo, rev):
     """The full SHA `rev` names in `repo`, or None when it names
     nothing: `git rev-parse --verify <rev>^{commit}` must succeed
@@ -1657,6 +1683,13 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
       check's revision (including fail_first.red_check) must resolve
       to that same commit; a bundle revision of "working-tree"
       binds to HEAD, the commit its diff applies to;
+    - every check's cwd (including fail_first.red_check) must be in
+      that repo — same git common dir — when the directory still
+      exists (round 9, FND-001): a command recorded in a scratch
+      directory cannot validate a bundle for this tree. A cwd that
+      no longer exists (a worktree removed after recording) cannot
+      be checked this way; the record-time containment in
+      record_check.py is the control there;
     - every check's content_digest must equal the digest recomputed
       from the tree at that revision;
     - a PASS on a dirty tree must pin the diff it ran on: the sha256
@@ -1684,6 +1717,7 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
             )
         return
     repo = Path(top)
+    repo_common = _git_common_dir(repo)
     head = _resolve_commit(repo, "HEAD")
     if head is None:
         if verdict == "PASS":
@@ -1731,6 +1765,30 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
     if isinstance(ff, dict) and isinstance(ff.get("red_check"), dict):
         targets.append((ff["red_check"], "fail_first.red_check"))
     for check, label in targets:
+        # Round 9, FND-001: a check's cwd must be in the repo the
+        # bundle is bound to — the command ran on this tree, not
+        # on a scratch directory elsewhere (record_check.py refuses
+        # such a recording; the validator mirrors it for bundles
+        # whose cwd still exists). A cwd that no longer exists (a
+        # worktree removed after recording) cannot be checked this
+        # way: the record-time containment is the control there,
+        # and the revision/digest binding below still applies.
+        cwd = check.get("cwd")
+        if isinstance(cwd, str) and cwd and repo_common is not None:
+            check_common = _git_common_dir(cwd)
+            if check_common is None:
+                if Path(cwd).exists():
+                    problems.append(
+                        f"{label} cwd {cwd!r} is not inside the git "
+                        f"repository {repo}: the command did not run in "
+                        f"the tree this bundle is bound to"
+                    )
+            elif check_common != repo_common:
+                problems.append(
+                    f"{label} cwd {cwd!r} is in a different repository "
+                    f"than {repo}: the command did not run in the tree "
+                    f"this bundle is bound to"
+                )
         revision = check.get("revision")
         if isinstance(revision, str) and revision:
             resolved = _resolve_commit(repo, revision)

@@ -441,6 +441,201 @@ def test_not_a_git_repo_fails(tmp_path):
     assert not proc.stdout.strip()
 
 
+def test_cwd_outside_repo_is_refused(tmp_path):
+    """FND-001 (round 9): --cwd in a scratch directory outside any
+    repo, with --repo naming a real repo, used to record a capture
+    bound to that repo's tree — a fake command in the scratch dir
+    could file a PASS for code it never ran against. The wrapper
+    must refuse: the repo is derived from the cwd, and an explicit
+    --repo must be that repo."""
+    repo = _repo(tmp_path)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(_RECORD_CHECK),
+            "--name",
+            "test",
+            "--out-dir",
+            str(tmp_path / "bundle"),
+            "--repo",
+            str(repo),
+            "--",
+            *_OK_ARGV,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=scratch,
+        timeout=60,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert not proc.stdout.strip()
+    # The refusal comes from deriving the repo from the cwd (the
+    # scratch dir is in no repo at all), before --repo is even
+    # compared: no tree means no capture to bind.
+    assert "not inside a git repository" in proc.stderr, proc.stderr
+
+
+def test_repo_must_be_the_repo_containing_cwd(tmp_path):
+    """FND-001 (round 9): --repo naming a different real repo than
+    the one containing --cwd is refused, even when both exist."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    repo_a = _repo(tmp_path / "a")
+    repo_b = _repo(tmp_path / "b")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(_RECORD_CHECK),
+            "--name",
+            "test",
+            "--out-dir",
+            str(tmp_path / "bundle"),
+            "--repo",
+            str(repo_b),
+            "--",
+            *_OK_ARGV,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=repo_a,
+        timeout=60,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert not proc.stdout.strip()
+    assert "not the repository containing" in proc.stderr, proc.stderr
+
+
+def test_bare_repo_is_refused(tmp_path):
+    """N-B (round 9): a bare repo has no work tree, so
+    --show-toplevel fails there — an explicit --repo naming one
+    must be refused, not bound to. Both directions: --repo a bare
+    repo, and no --repo with the cwd inside a bare repo."""
+    repo = _repo(tmp_path)
+    bare = tmp_path / "bare.git"
+    subprocess.run(
+        ["git", "clone", "-q", "--bare", str(repo), str(bare)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(_RECORD_CHECK),
+            "--name",
+            "test",
+            "--out-dir",
+            str(tmp_path / "bundle"),
+            "--repo",
+            str(bare),
+            "--",
+            *_OK_ARGV,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=repo,
+        timeout=60,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert not proc.stdout.strip()
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(_RECORD_CHECK),
+            "--name",
+            "test",
+            "--out-dir",
+            str(tmp_path / "bundle2"),
+            "--",
+            *_OK_ARGV,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=bare,
+        timeout=60,
+    )
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert not proc.stdout.strip()
+
+
+def test_worktree_cwd_records_against_base_commit(tmp_path):
+    """FND-001 control: a --cwd inside a worktree still records —
+    the derived repo is the worktree, and the revision is the base
+    commit the worktree is checked out at."""
+    repo = _repo(tmp_path)
+    base = _head_sha(repo)
+    (repo / "src" / "app.py").write_text("x = 2\n", encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "fix")
+    wt = tmp_path / "wt"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", str(wt), "HEAD~1"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(_RECORD_CHECK),
+            "--name",
+            "test",
+            "--out-dir",
+            str(tmp_path / "bundle"),
+            "--cwd",
+            str(wt),
+            "--",
+            *_OK_ARGV,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=wt,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    fragment = json.loads(proc.stdout)
+    assert fragment["revision"] == base
+    assert fragment["cwd"] == str(wt.resolve())
+    assert fragment["content_digest"].startswith("sha256:")
+
+
+def test_cwd_subdir_with_repo_root_passes(tmp_path):
+    """FND-001 control: a --cwd in a subdirectory of the repo, with
+    --repo naming the repo root, still records — the explicit repo
+    is the repo containing the cwd."""
+    repo = _repo(tmp_path)
+    proc, fragment = _run_record(repo, tmp_path / "bundle", "test", _OK_ARGV)
+    assert proc.returncode == 0, proc.stderr
+    assert fragment is not None
+    sub = repo / "src"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(_RECORD_CHECK),
+            "--name",
+            "test",
+            "--out-dir",
+            str(tmp_path / "bundle2"),
+            "--cwd",
+            str(sub),
+            "--repo",
+            str(repo),
+            "--",
+            *_OK_ARGV,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=sub,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    fragment = json.loads(proc.stdout)
+    assert fragment["cwd"] == str(sub.resolve())
+    assert fragment["revision"] == _head_sha(repo)
+
+
 def test_binding_hash_is_canonical_and_field_sensitive():
     fields = {
         "command_argv": [sys.executable, "-c", "print('ok')"],

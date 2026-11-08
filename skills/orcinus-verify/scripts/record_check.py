@@ -213,21 +213,19 @@ def _load_content_digest(digest_module):
     return content_digest
 
 
-def _resolve_repo(cwd, repo_arg):
-    """The git repo the digest is taken from: --repo, or the repo
-    containing the command's cwd. Raises RecordError outside a repo.
+def _repo_from_cwd(directory):
+    """The work-tree root git names for `directory` (`rev-parse
+    --show-toplevel`), resolved. Raises RecordError outside a repo,
+    when git is absent, or when git's output cannot be trusted.
     The git-derived path is validated like an explicit --repo: git
     printing nothing with exit 0 used to resolve to Path("") = ".",
     binding a capture to whatever directory happened to be current
-    (round 8, FND-023)."""
-    if repo_arg is not None:
-        repo = Path(repo_arg)
-        if not repo.is_dir():
-            raise RecordError(f"--repo {repo_arg!r} is not a directory")
-        return repo
+    (round 8, FND-023). A bare repo has no work tree, so
+    --show-toplevel fails there (round 9, N-B) — a bare repo can
+    never be the repo a capture is bound to."""
     try:
         proc = subprocess.run(
-            ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -236,16 +234,46 @@ def _resolve_repo(cwd, repo_arg):
         raise RecordError("git is not installed: cannot find the repository") from e
     if proc.returncode != 0:
         raise RecordError(
-            f"{cwd} is not inside a git repository: there is no tree "
+            f"{directory} is not inside a git repository: there is no tree "
             f"digest to bind the capture to — pass --repo <repo>"
         )
     top = proc.stdout.strip()
     if not top or "\n" in top or not Path(top).is_dir():
         raise RecordError(
-            f"git did not name a repository for {cwd}: --show-toplevel "
+            f"git did not name a repository for {directory}: --show-toplevel "
             f"printed {proc.stdout!r} — pass --repo <repo>"
         )
     return Path(top)
+
+
+def _resolve_repo(cwd, repo_arg):
+    """The git repo the digest is taken from: the repo containing
+    the command's cwd — always derived from the cwd first. An
+    explicit --repo is accepted only when it names that same repo:
+    the capture's tree is the tree the command ran on, never a
+    tree named independently of it (round 9, FND-001: --cwd in a
+    scratch directory with --repo at a real repo used to record a
+    capture bound to that repo's tree, so a fake command could
+    file a PASS for code it never ran against). A worktree's root
+    is its own repo for this purpose: --cwd in a worktree binds
+    to the worktree (its base commit), and --repo naming the main
+    checkout does not match it. Raises RecordError outside a repo
+    or on a mismatch."""
+    derived = _repo_from_cwd(cwd)
+    if repo_arg is None:
+        return derived
+    repo = Path(repo_arg)
+    if not repo.is_dir():
+        raise RecordError(f"--repo {repo_arg!r} is not a directory")
+    explicit = _repo_from_cwd(repo)
+    if explicit.resolve() != derived.resolve():
+        raise RecordError(
+            f"--repo {repo_arg!r} is not the repository containing "
+            f"--cwd {cwd}: the capture's tree is the tree the command "
+            f"ran on — record the command inside {repo_arg!r}, or pass "
+            f"--repo {derived}"
+        )
+    return derived
 
 
 def _resolve_revision(repo):
@@ -375,7 +403,8 @@ def main(argv):
     parser.add_argument(
         "--repo",
         default=None,
-        help="the git repo the digest is taken from (default: the repo containing --cwd)",
+        help="the git repo the digest is taken from (default: the repo "
+        "containing --cwd; an explicit --repo must be that repo)",
     )
     parser.add_argument(
         "--digest-module",

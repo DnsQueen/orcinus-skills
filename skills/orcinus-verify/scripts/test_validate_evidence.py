@@ -215,7 +215,15 @@ def _run_record_check(directory, name, argv, repo, shell=False):
     if shell:
         args.append("--shell")
     args += ["--", *argv]
-    proc = subprocess.run(args, capture_output=True, text=True, cwd=directory, timeout=60)
+    # The command runs inside the repo it binds to (round 9,
+    # FND-001): record_check.py derives the repo from the cwd and
+    # refuses a --repo that is not that repo, so a recording with
+    # cwd=directory (the bundle dir, outside the throwaway repo)
+    # is refused. The old cwd=directory recorded exactly the shape
+    # the new rule rejects — a capture whose cwd is outside its
+    # repo — so the fixture records inside the repo instead. The
+    # capture files still land in `directory` (--out-dir).
+    proc = subprocess.run(args, capture_output=True, text=True, cwd=repo, timeout=60)
     # 0 for a passing command, 1 for the red run (sys.exit(1)); 2
     # would be a recording failure, and then there is no fragment.
     assert proc.returncode in (0, 1), proc.stderr
@@ -2237,6 +2245,55 @@ def test_tree_binding_cli_repo_and_expected_revision(tmp_path):
     )
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "revision" in proc.stdout
+
+
+def test_tree_binding_rejects_check_cwd_outside_repo(tmp_path):
+    # FND-001 (round 9): the validator mirrors the recorder's
+    # containment — a check whose cwd is a scratch directory that
+    # still exists, outside the repo the bundle is bound to, is
+    # rejected even when its revision, digest, and capture hash all
+    # recompute (the capture was forged consistently, the run was
+    # not on this tree).
+    b, repo = _bound_bundle(tmp_path)
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    b["checks"][0]["cwd"] = str(scratch)
+    _reforge(b["checks"][0], tmp_path)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert any("cwd" in p and "not inside" in p for p in problems), problems
+
+
+def test_tree_binding_accepts_check_cwd_in_worktree(tmp_path):
+    # FND-001 control: a check recorded in a live worktree of the
+    # repo validates against that repo — a worktree shares the
+    # repo's git common dir, so it is the same repo, not another.
+    import subprocess
+
+    b, repo = _bound_bundle(tmp_path)
+    wt = tmp_path / "wt"
+    subprocess.run(
+        ["git", "-C", str(repo), "worktree", "add", "-q", str(wt), "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    b["checks"][0]["cwd"] = str(wt)
+    _reforge(b["checks"][0], tmp_path)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert problems == [], problems
+
+
+def test_tree_binding_ignores_missing_check_cwd(tmp_path):
+    # FND-001: a check whose cwd no longer exists (a worktree
+    # removed after recording, as SKILL.md step 3 instructs) cannot
+    # be checked this way — the record-time containment is the
+    # control there, and the revision/digest binding still applies.
+    # The bundle must still validate on its other bindings.
+    b, repo = _bound_bundle(tmp_path)
+    b["checks"][0]["cwd"] = str(tmp_path / "gone-worktree")
+    _reforge(b["checks"][0], tmp_path)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
+    assert problems == [], problems
 
 
 def test_test_gate_without_junit_report_fails(tmp_path):

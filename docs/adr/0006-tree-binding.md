@@ -47,9 +47,11 @@ or vendored.
   CLI gains `--repo` (default: the working directory),
   `--expected-revision`, and `--expected-diff`. When `repo` is
   None, no tree binding is performed (legacy / in-process
-  behaviour, documented as such): `state.py` keeps calling
-  `validate_bundle` without a repo until it passes one, and the
-  in-process API is unchanged for existing callers.
+  behaviour, documented as such): the in-process API is unchanged
+  for existing callers. (`state.py` passes the resolved repo since
+  round 8, FND-007 — an earlier draft of this ADR said it "keeps
+  calling without a repo until it passes one"; corrected in round
+  9, N-R9-2.)
 - When a repo is given, the binding checks are: the bundle revision
   must resolve to a commit in that repo (`git rev-parse --verify
   <rev>^{commit}`, single full SHA); every check's revision —
@@ -173,3 +175,58 @@ or vendored.
   were evaluated against red-first tests; FND-001 was applied as
   proposed, FND-003 was applied with the bundled copy taken from
   the fixed file, not the patch's stale copy.
+
+## Round 9 — containment: the command must run in the tree (FND-001)
+
+Date: 2026-11-08
+Status: accepted
+
+The round-9 audit (FND-001, High) showed the round-8 binding still
+has a seam: `record_check.py` accepted `--repo` naming any repo
+while running the command wherever `--cwd` pointed, and the
+validator never compared a check's `cwd` against the repo. A fake
+`pytest` in a scratch directory outside every repo, with `--repo`
+at the real repo, produced a PASS bundle that validated with exit
+0. The general lying-command hole was already documented (see
+"The honest limit" above) — this is a narrower, fixable mechanism
+inside it: the validator already held the exposing data (the
+recorded `cwd`) and never used it.
+
+Decision (pattern: in-toto's Link records the `workdir` the command
+ran in, and verification checks it against the layout; REAPI keys a
+result by the input-root digest the worker actually materialised —
+pattern only, no code copied):
+
+- `record_check.py` derives the repo from the command's cwd first
+  (`rev-parse --show-toplevel`, with the round-8 FND-023
+  discipline: non-zero exit, empty, or multi-line output is a
+  refusal). An explicit `--repo` is accepted only when it names
+  that same repo (resolved paths compared) — a bare repo is
+  refused, because `--show-toplevel` fails in one (round 9, N-B:
+  the auditor's hardening patch had a bare-repo bypass through an
+  unguarded `rev-parse --show-toplevel` whose empty output became
+  `Path("") = "."`; this implementation reuses the guarded
+  resolver for both paths, so the bypass cannot recur). A
+  worktree's root is its own repo here: `--cwd` in a worktree
+  binds to the worktree (its base commit).
+- The validator mirrors it in `check_tree_binding`: every check's
+  `cwd` (including `fail_first.red_check`) must share the repo's
+  git common dir when the directory still exists — a subdirectory,
+  the repo root, and a live worktree all match; a nested repo, a
+  bare repo, and a scratch directory do not. A `cwd` that no
+  longer exists (a worktree removed after recording, as SKILL.md
+  step 3 instructs) cannot be checked this way: the record-time
+  containment is the control there, and the revision/digest
+  binding still applies.
+- The auditor's hardening patch was evaluated and NOT applied
+  verbatim (bare-repo bypass, unguarded git calls, no-git
+  traceback); the containment here was designed and tested here
+  instead.
+
+Residual, stated honestly (N-R9-1): this narrows FND-001, it does
+not close fabrication. A fake command run *inside* the repo still
+records and validates — including an untracked fake binary placed
+in the repo, which the committed-tree digest does not cover. The
+claim stays "tamper-evident recording bound to a tree", never
+"proof of execution"; only a trust boundary the job cannot touch
+closes the lying-command half.
