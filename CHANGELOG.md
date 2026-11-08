@@ -3,6 +3,27 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.4] — 2026-11-08
+
+CI fix, round 2, for the 0.10.3 Windows failure (run 42501954616:
+`test (windows-latest, 3.12)` still failed at "Run the script tests"
+— the same 3 stub-git tests; the 2 signal tests now skip correctly).
+
+### Fixed
+
+- The round-1 fix's premise was wrong: it planted a `git.bat` stub
+  on the claim that CreateProcess consults PATHEXT. It does not —
+  CreateProcess appends only `.exe` to an extensionless name and a
+  batch file needs cmd.exe to run it, so the stub was silently
+  ignored and the real `git.exe` ran (both CI logs show this). The
+  tests now stub git by faking `subprocess.run` instead — a canned
+  `CompletedProcess` for `argv[0] == "git"`, with every other call
+  delegated to the real run, so the check command still executes
+  for real. One mechanism on every platform; no production code
+  changed. The three tests also pin which git calls were made and
+  which guard rejected the output, so they cannot pass without
+  reaching the code they claim to test.
+
 ## [0.10.3] — 2026-11-08
 
 CI fix for the 0.10.2 Windows failure (run 42499224528: `test
