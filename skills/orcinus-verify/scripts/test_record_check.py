@@ -89,6 +89,129 @@ def _run_record(repo, out_dir, name, argv, extra=()):
     return proc, fragment
 
 
+def test_bundled_content_digest_is_byte_identical():
+    """FND-003 (round 8): the copy beside record_check.py must be
+    byte-identical to scripts/content_digest.py — a drifted copy
+    would bind captures to a different digest algorithm."""
+    skill_copy = Path(__file__).resolve().parent / "content_digest.py"
+    repo_copy = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "content_digest.py"
+    assert skill_copy.is_file(), "bundled content_digest.py is missing from the skill folder"
+    assert skill_copy.read_bytes() == repo_copy.read_bytes()
+
+
+def test_load_content_digest_prefers_beside_self():
+    """FND-003 (round 8): _load_content_digest searches beside
+    itself FIRST — before the repo-root scripts/ — so a skills-only
+    install (no repo checkout) finds its bundled copy."""
+    fn = rc._load_content_digest(None)
+    assert Path(fn.__code__.co_filename).resolve() == (
+        Path(__file__).resolve().parent / "content_digest.py"
+    ).resolve()
+
+
+def test_skills_only_install_records_without_digest_module(tmp_path):
+    """FND-003 (round 8): a copy of just the skill folder, run with
+    the documented step-4 command (no --digest-module), records a
+    check: the bundled content_digest.py beside record_check.py is
+    found. The copied skill's ancestor chain holds no repo-root
+    scripts/, so the repo install path cannot rescue it."""
+    import shutil
+
+    skill = Path(__file__).resolve().parent.parent
+    elsewhere = tmp_path / "skill-only"
+    shutil.copytree(skill, elsewhere)
+    repo = _repo(tmp_path)
+    out_dir = tmp_path / "bundle"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(elsewhere / "scripts" / "record_check.py"),
+            "--name",
+            "test",
+            "--out-dir",
+            str(out_dir),
+            "--repo",
+            str(repo),
+            "--",
+            *_OK_ARGV,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=repo,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    fragment = json.loads(proc.stdout)
+    assert fragment["content_digest"].startswith("sha256:")
+    assert fragment["revision"] == _head_sha(repo)
+
+
+def _stub_git(tmp_path, name, body):
+    """An executable `git` stub on PATH printing `body` behaviour."""
+    import os
+    import stat
+
+    stubdir = tmp_path / name
+    stubdir.mkdir()
+    stub = stubdir / "git"
+    stub.write_text(body, encoding="utf-8")
+    stub.chmod(stat.S_IRWXU)
+    return stubdir
+
+
+def test_empty_git_output_fails_closed(tmp_path, monkeypatch):
+    """FND-023 (round 8): git printing nothing with exit 0 used to
+    bind a capture to revision "" and the empty digest. _resolve_repo
+    must require --show-toplevel to name an existing directory."""
+    import os
+
+    repo = _repo(tmp_path)
+    stubdir = _stub_git(tmp_path, "stubbin-empty", "#!/bin/sh\nexit 0\n")
+    monkeypatch.setenv("PATH", str(stubdir) + os.pathsep + os.environ["PATH"])
+    try:
+        rc.record("test", _OK_ARGV, False, tmp_path / "bundle", repo, None, None, 60)
+    except rc.RecordError as e:
+        assert "repo" in str(e).lower() or "git" in str(e).lower()
+        return
+    raise AssertionError("expected RecordError for empty git output")
+
+
+def test_revision_must_be_a_full_sha(tmp_path, monkeypatch):
+    """FND-023 (round 8): _resolve_revision must require rev-parse
+    --verify to succeed with a single-line full SHA (40 or 64 hex),
+    not any non-empty stdout."""
+    import os
+
+    repo = _repo(tmp_path)
+    stubdir = _stub_git(
+        tmp_path,
+        "stubbin-badsha",
+        "#!/bin/sh\n"
+        'if [ "$3" = "--show-toplevel" ]; then echo "' + str(repo) + '"; exit 0; fi\n'
+        'echo "not-a-sha!!"\nexit 0\n',
+    )
+    monkeypatch.setenv("PATH", str(stubdir) + os.pathsep + os.environ["PATH"])
+    try:
+        rc.record("test", _OK_ARGV, False, tmp_path / "bundle", repo, None, None, 60)
+    except rc.RecordError:
+        return
+    raise AssertionError("expected RecordError for a non-SHA revision")
+
+
+def test_bundled_content_digest_entry_point(tmp_path):
+    """FND-001/FND-003 (round 8): the bundled copy's real entry
+    point must work too — it is byte-identical to the repo script,
+    so its argv handling is the same; this pins it by execution."""
+    repo = _repo(tmp_path)
+    script = Path(__file__).resolve().parent / "content_digest.py"
+    proc = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, cwd=repo, timeout=60
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip().startswith("sha256:")
+    assert len(proc.stdout.strip()) == len("sha256:") + 64
+
+
 def test_recorded_check_fragment(tmp_path):
     repo = _repo(tmp_path)
     out_dir = tmp_path / "bundle"
@@ -325,6 +448,17 @@ def test_recorded_check_validates_in_a_pass_bundle(tmp_path):
     # the verdict and the tool version when pasting it into the bundle.
     check["tool_version"] = "python 3.12.3"
     check["verdict"] = "PASS"
+    # FND-005 (round 8): a PASS with a required test gate needs a
+    # JUnit test_report with tests>0 and passed>0.
+    import hashlib as _hashlib
+
+    report = (
+        b'<?xml version="1.0" encoding="utf-8"?><testsuites>'
+        b'<testsuite name="pytest" tests="1">'
+        b'<testcase classname="tests.test_x" name="test_ok" time="0.01" />'
+        b"</testsuite></testsuites>"
+    )
+    (out_dir / "test-report.xml").write_bytes(report)
     bundle = {
         "schema_version": _SCHEMA["properties"]["schema_version"]["const"],
         "revision": "working-tree",
@@ -333,6 +467,11 @@ def test_recorded_check_validates_in_a_pass_bundle(tmp_path):
         "acceptance_criteria": ["The recorded check validates."],
         "files_changed": ["README.md"],
         "checks": [check],
+        "test_report": {
+            "artifact": "test-report.xml",
+            "sha256": _hashlib.sha256(report).hexdigest(),
+            "format": "junit-xml",
+        },
         "findings": [],
         "unresolved_risks": [],
         "unverified_items": [],

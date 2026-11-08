@@ -52,6 +52,7 @@ repository, unknown revision).
 
 import argparse
 import hashlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -64,9 +65,34 @@ FORMAT_VERSION = 2
 
 EXCLUDED_PREFIXES = (b".orcinus/", b"docs/verification/")
 
+# A full commit/tree SHA in this repo's object format: SHA-1 (40
+# hex) or SHA-256 (64 hex). Used to tell a real git answer from
+# empty or garbage output (round 8, N-A1 / FND-023).
+_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
 
 class ContentDigestError(Exception):
     pass
+
+
+def _tree_exists(repo, rev):
+    """True when <rev>'s tree object exists: `git rev-parse
+    --verify <rev>^{tree}` must succeed and print a single full
+    SHA. An empty ls-tree output is only a genuinely empty tree
+    when this holds — a stubbed or broken git printing nothing
+    with exit 0 fails here instead of hashing to the empty digest."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "--verify", f"{rev}^{{tree}}"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+    if proc.returncode != 0:
+        return False
+    return _SHA_RE.fullmatch(proc.stdout.strip()) is not None
 
 
 def content_digest(repo, rev="HEAD"):
@@ -81,6 +107,13 @@ def content_digest(repo, rev="HEAD"):
         )
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as e:
         raise ContentDigestError(f"cannot list the tree of {rev!r} in {repo}: {e}")
+    if not proc.stdout and not _tree_exists(repo, rev):
+        # Empty output with no tree object behind it is broken git,
+        # not an empty tree — never hash it to the empty digest.
+        raise ContentDigestError(
+            f"cannot list the tree of {rev!r} in {repo}: git printed "
+            "nothing and the tree object does not exist"
+        )
     records = []
     for record in proc.stdout.split(b"\0"):
         if not record:
@@ -137,4 +170,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(main(sys.argv[1:]))

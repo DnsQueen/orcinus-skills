@@ -68,12 +68,13 @@ failure, not a truncation: a truncated artifact would hash cleanly
 while hiding output.
 
 The content digest is computed by the existing content_digest
-function (scripts/content_digest.py) — imported, never reimplemented.
-It is found, in order: --digest-module, the scripts/ directory beside
-the skill folder in a repo/plugin install, or an already-importable
-content_digest module. In an npx-skills install the repo-root
-scripts/ do not travel, so pass --digest-module with a path to a
-content_digest.py, or run from a repo/plugin checkout.
+function (skills/orcinus-verify/scripts/content_digest.py — a
+byte-identical copy of scripts/content_digest.py, bundled beside
+this file so skills-only installs can find it) — imported, never
+reimplemented. It is found, in order: --digest-module, the copy
+bundled beside this file, the scripts/ directory beside the skill
+folder in a repo/plugin install, or an already-importable
+content_digest module.
 """
 
 import argparse
@@ -110,6 +111,13 @@ DEFAULT_TIMEOUT_SECONDS = 600
 # must be a safe file stem: no separator, no leading dot (no "..",
 # no hidden file), at most 100 characters.
 _NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+
+
+# A full commit SHA in this repo's object format: SHA-1 (40 hex)
+# or SHA-256 (64 hex). A revision that is not one is not a
+# revision git resolved — it is empty or garbage output (round 8,
+# FND-023).
+_SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 
 class RecordError(Exception):
@@ -168,9 +176,12 @@ def _utc_now():
 
 def _load_content_digest(digest_module):
     """The content_digest function, imported — never reimplemented.
-    --digest-module wins; then the scripts/ directory beside the
-    skill folder in a repo/plugin install; then an already-importable
-    module. Raises RecordError when none is found."""
+    --digest-module wins; then the copy bundled beside this file
+    (skills-only installs have no repo checkout, so this is what
+    makes the documented step-4 command work there); then the
+    scripts/ directory beside the skill folder in a repo/plugin
+    install; then an already-importable module. Raises RecordError
+    when none is found."""
     if digest_module is not None:
         path = Path(digest_module)
         if not path.is_file():
@@ -178,6 +189,7 @@ def _load_content_digest(digest_module):
         candidates = [path]
     else:
         candidates = []
+    candidates.append(Path(__file__).resolve().parent / "content_digest.py")
     candidates.append(
         Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "content_digest.py"
     )
@@ -203,7 +215,11 @@ def _load_content_digest(digest_module):
 
 def _resolve_repo(cwd, repo_arg):
     """The git repo the digest is taken from: --repo, or the repo
-    containing the command's cwd. Raises RecordError outside a repo."""
+    containing the command's cwd. Raises RecordError outside a repo.
+    The git-derived path is validated like an explicit --repo: git
+    printing nothing with exit 0 used to resolve to Path("") = ".",
+    binding a capture to whatever directory happened to be current
+    (round 8, FND-023)."""
     if repo_arg is not None:
         repo = Path(repo_arg)
         if not repo.is_dir():
@@ -223,14 +239,23 @@ def _resolve_repo(cwd, repo_arg):
             f"{cwd} is not inside a git repository: there is no tree "
             f"digest to bind the capture to — pass --repo <repo>"
         )
-    return Path(proc.stdout.strip())
+    top = proc.stdout.strip()
+    if not top or "\n" in top or not Path(top).is_dir():
+        raise RecordError(
+            f"git did not name a repository for {cwd}: --show-toplevel "
+            f"printed {proc.stdout!r} — pass --repo <repo>"
+        )
+    return Path(top)
 
 
 def _resolve_revision(repo):
-    """The full SHA of the repo's HEAD at run time."""
+    """The full SHA of the repo's HEAD at run time. `rev-parse
+    --verify` must succeed and print a single full SHA — a bare
+    rev-parse echoing its input, or a stubbed git printing nothing
+    with exit 0, used to pass as a revision (round 8, FND-023)."""
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            ["git", "-C", str(repo), "rev-parse", "--verify", "HEAD"],
             capture_output=True,
             text=True,
             timeout=60,
@@ -239,7 +264,13 @@ def _resolve_revision(repo):
         raise RecordError("git is not installed: cannot resolve HEAD") from e
     if proc.returncode != 0:
         raise RecordError(f"cannot resolve HEAD in {repo}: {proc.stderr.strip()}")
-    return proc.stdout.strip()
+    revision = proc.stdout.strip()
+    if not _SHA_RE.fullmatch(revision):
+        raise RecordError(
+            f"cannot resolve HEAD in {repo}: git printed {proc.stdout!r}, "
+            "not a full commit SHA"
+        )
+    return revision
 
 
 def record(name, argv, shell, out_dir, cwd, repo, digest_module, timeout):
@@ -351,7 +382,7 @@ def main(argv):
         "--digest-module",
         default=None,
         help="path to a content_digest.py to import "
-        "(default: the repo/plugin install's scripts/content_digest.py)",
+        "(default: the copy bundled beside this file)",
     )
     parser.add_argument(
         "--shell",

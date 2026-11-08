@@ -178,6 +178,75 @@ def test_cli_git_failure_is_exit_1(capsys):
         assert cd.main(["/nonexistent-path-orcinus-xyz"]) == 2  # not a dir: usage, not a repo
 
 
+def test_cli_entry_point_via_subprocess(tmp_path):
+    """FND-001 (round 8): the real entry point — `sys.exit(main(sys.argv))`
+    passed argv[0] (the script path) as the positional repo, so every
+    documented invocation exited 2. main([...]) without argv[0] never
+    caught it; only running the script as a script does."""
+    repo = _repo(tmp_path)
+    script = Path(__file__).resolve().parent / "content_digest.py"
+    proc = subprocess.run(
+        [sys.executable, str(script)], capture_output=True, text=True, cwd=repo, timeout=60
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == cd.content_digest(repo)
+    proc = subprocess.run(
+        [sys.executable, str(script), "--rev", "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=repo,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == cd.content_digest(repo)
+    proc = subprocess.run(
+        [sys.executable, str(script), str(repo)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == cd.content_digest(repo)
+
+
+def test_content_digest_empty_tree_is_genuine_not_broken_git(tmp_path):
+    """N-A1 (round 8): an empty tree hashes to the empty digest — but
+    so does stubbed/broken git printing nothing with exit 0. A
+    genuinely empty tree (an --allow-empty commit) must still digest;
+    empty ls-tree output with no tree object behind it must fail."""
+    import os
+
+    repo = tmp_path / "proj"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "test@orcinus.local")
+    _git(repo, "config", "user.name", "ORCINUS Test")
+    _git(repo, "commit", "-q", "--allow-empty", "-m", "empty")
+    assert cd.content_digest(repo) == "sha256:" + "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def test_content_digest_empty_git_output_fails(tmp_path, monkeypatch):
+    """N-A1 (round 8): git printing nothing with exit 0 is broken git,
+    not an empty tree — the tree object must be confirmed to exist
+    before empty ls-tree output is accepted."""
+    import os
+    import stat
+
+    repo = _repo(tmp_path)
+    stubdir = tmp_path / "stubbin"
+    stubdir.mkdir()
+    stub = stubdir / "git"
+    stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    stub.chmod(stat.S_IRWXU)
+    monkeypatch.setenv("PATH", str(stubdir) + os.pathsep + os.environ["PATH"])
+    try:
+        cd.content_digest(repo)
+    except cd.ContentDigestError:
+        return
+    raise AssertionError("expected ContentDigestError for empty git output")
+
+
 def _repo_with_persian_code(tmp_path):
     """A repo whose tree contains a non-ASCII path: the case the
     v1 digest got wrong (git quotes such paths unless -z is used)."""
