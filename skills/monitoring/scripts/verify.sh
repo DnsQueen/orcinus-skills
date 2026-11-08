@@ -3,10 +3,11 @@
 # point it at a monitoring config/spec dir or file. CI runs the same file (parity).
 #
 # ORCINUS change notice (2026-11-07, round 6, 2-S3 / 3-F2-04 / 3-F2-05):
-# the checks below are HEURISTIC, haystack-wide keyword checks over
-# non-comment lines — not per-alert parsing. A runbook reference
-# anywhere in the alert rules passes check 4; it does not prove every
-# alert has one. Full-line comments (^[[:space:]]*#) are stripped
+# most checks below are HEURISTIC, haystack-wide keyword checks over
+# non-comment lines — not per-alert parsing — EXCEPT check 4, which
+# since round 8 (FND-012) parses alert blocks (`- name:` / `- alert:`)
+# and requires a runbook reference in EVERY alert: one reference
+# anywhere in the file no longer passes. Full-line comments (^[[:space:]]*#) are stripped
 # before any check, because comment keywords used to PASS the gate
 # vacuously (a config whose only mention of burn-rate/runbook was in
 # a comment passed). Inline trailing comments are NOT stripped — a
@@ -15,26 +16,46 @@
 # nothing was checked, which is not a clean config.
 #
 # Usage:
-#   bash scripts/verify.sh [PATH]    # PATH defaults to "."
+#   bash scripts/verify.sh [--require-config] [PATH]    # PATH defaults to "."
+#   --require-config: a target with no monitoring candidates exits 2
+#   (INCOMPLETE) instead of the default exit 0 "nothing to gate" —
+#   the opt-in strict mode for a project that must have monitoring.
+#   The default stays exit 0: an existing path with no monitoring
+#   candidates is a clean target, never a failure (deliberate,
+#   documented policy).
 #
 # What it checks, against the load-bearing rules of the monitoring skill:
 #   1. Discover candidate monitoring files (alert rules, health specs, monitor configs).
-#      No candidates -> nothing to gate -> exit 0 (clean target is never a failure).
+#      No candidates -> nothing to gate -> exit 0 (clean target is never a failure),
+#      or exit 2 (INCOMPLETE) with --require-config.
 #   2. Health endpoints separate liveness from readiness (livez/liveness AND readyz/readiness).
 #   3. At least one alert is symptom/SLO/burn-rate based with TWO windows — FAIL only if
 #      alert rules exist and the ONLY thresholds are bare cpu/memory.
-#   4. At least one runbook reference (runbook / runbook_url) appears in the alert
-#      rules — haystack-wide, NOT one per alert (see the notice above).
+#   4. Every alert has a runbook reference (runbook / runbook_url) —
+#      parsed per alert block, NOT haystack-wide (see the notice above).
+#      When no alert block can be parsed at all, the check falls back
+#      to the haystack and says so — a format the parser does not
+#      understand is reported, not silently passed as per-alert.
 #   5. Banlist: Opsgenie introduced as a NEW setup; a monitor whose only target is "/".
 #
 # Dependency-light: bash + grep + find only. Portable to macOS bash 3.2 and CI bash 5.
 # Read-only: never writes, never mutates. Exits nonzero only on a real FAIL,
-# except exit 2 when the target does not exist (nothing could be checked).
+# except exit 2 when the target does not exist (nothing could be checked)
+# or with --require-config when the target has no monitoring candidates.
 #
 # Env: NO_COLOR=1 to disable color.
 set -euo pipefail
 
-TARGET="${1:-.}"
+REQUIRE_CONFIG=0
+TARGET=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --require-config) REQUIRE_CONFIG=1 ;;
+    *) if [[ -z "$TARGET" ]]; then TARGET="$1"; fi ;;
+  esac
+  shift
+done
+TARGET="${TARGET:-.}"
 
 if [[ -n "${NO_COLOR:-}" ]]; then YEL=""; GRN=""; RED=""; RST=""
 else YEL=$'\033[33m'; GRN=$'\033[32m'; RED=$'\033[31m'; RST=$'\033[0m'; fi
@@ -75,6 +96,10 @@ for f in ${FILES[@]+"${FILES[@]}"}; do
 done
 
 if [[ ${#CAND[@]} -eq 0 ]]; then
+  if [[ $REQUIRE_CONFIG -eq 1 ]]; then
+    incomplete "no monitoring config/spec files found under $TARGET (--require-config: a target with no monitoring config is incomplete, not clean)"
+    exit 2
+  fi
   printf 'No monitoring config/spec files found under %s — nothing to gate.\n' "$TARGET"
   exit 0
 fi
@@ -131,14 +156,63 @@ if has 'alert|expr|burn|rate\(|error[_ ]?rate|severity'; then
     FAILED=1
   fi
 
-  # 4. runbook reference on alerts — haystack-wide: one reference
-  # anywhere in the alert rules passes. That is NOT one per alert;
-  # the script does not parse alert blocks.
-  if has 'runbook'; then
-    ok "a runbook reference is present in the alert rules (haystack-wide — not proven per alert)"
-  else
-    fail "alert rules carry no runbook/runbook_url reference"
+  # 4. runbook reference on EVERY alert — parsed per alert block
+  # (round 8, FND-012), not haystack-wide: one reference anywhere
+  # in the file no longer passes. Blocks start at `- name:` /
+  # `- alert:`; a top-level key ends the current block. A block
+  # counts as an alert only when it carries alert content
+  # (expr/severity/burn-rate) — so a Prometheus `groups: - name:`
+  # header is not mistaken for an alert. When no alert block can
+  # be parsed at all, the check falls back to the haystack and
+  # says so — a format the parser does not understand is
+  # reported, not silently passed as per-alert.
+  ALERT_TOTAL=0
+  ALERT_MISSING=""
+  BLOCK=""
+  BLOCK_NAME=""
+  flush_block() {
+    if [[ -z "$BLOCK" ]]; then return; fi
+    if printf '%s' "$BLOCK" | grep -qiE 'expr|severity|burn[_-]?rate'; then
+      ALERT_TOTAL=$((ALERT_TOTAL + 1))
+      if ! printf '%s' "$BLOCK" | grep -qiE 'runbook'; then
+        if [[ -z "$ALERT_MISSING" ]]; then
+          ALERT_MISSING="${BLOCK_NAME:-unnamed alert}"
+        else
+          ALERT_MISSING+=", ${BLOCK_NAME:-unnamed alert}"
+        fi
+      fi
+    fi
+    BLOCK=""
+    BLOCK_NAME=""
+  }
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[[:space:]]*-[[:space:]]*(alert|name)[[:space:]]*:[[:space:]]*(.*[^[:space:]])?[[:space:]]*$ ]]; then
+      flush_block
+      BLOCK_NAME="${BASH_REMATCH[2]:-}"
+      BLOCK_NAME="${BLOCK_NAME#\"}"; BLOCK_NAME="${BLOCK_NAME%\"}"
+      BLOCK_NAME="${BLOCK_NAME#\'}"; BLOCK_NAME="${BLOCK_NAME%\'}"
+      BLOCK="$line"$'\n'
+    elif [[ "$line" =~ ^[^[:space:]#] ]]; then
+      # A top-level key (alerts:, health:, monitors:, groups:)
+      # ends the current block; its own line belongs to no alert.
+      flush_block
+    elif [[ -n "$BLOCK" ]]; then
+      BLOCK+="$line"$'\n'
+    fi
+  done <<< "$HAY" || true
+  flush_block
+  if [[ $ALERT_TOTAL -eq 0 ]]; then
+    if has 'runbook'; then
+      ok "a runbook reference is present in the alert rules (no parseable alert blocks — haystack-wide fallback, not proven per alert)"
+    else
+      fail "alert rules carry no runbook/runbook_url reference"
+      FAILED=1
+    fi
+  elif [[ -n "$ALERT_MISSING" ]]; then
+    fail "alert(s) with no runbook/runbook_url reference: $ALERT_MISSING"
     FAILED=1
+  else
+    ok "every alert ($ALERT_TOTAL) has a runbook reference"
   fi
 else
   skip "no alert rules present — alert/runbook checks not applicable"

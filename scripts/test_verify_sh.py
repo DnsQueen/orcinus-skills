@@ -95,9 +95,9 @@ def _bash_exe() -> str:
     return "bash"
 
 
-def _run(target):
+def _run(*args):
     bash = _bash_exe()
-    argv = [bash, str(SCRIPT), str(target)]
+    argv = [bash, str(SCRIPT), *[str(a) for a in args]]
     if sys.platform == "win32" and os.path.splitext(bash)[1].lower() in (".bat", ".cmd"):
         # A batch-file bash cannot be started by CreateProcess
         # directly; it has to go through the command interpreter
@@ -107,7 +107,7 @@ def _run(target):
             comspec = os.path.join(
                 os.environ.get("SystemRoot", r"C:\Windows"), "System32", "cmd.exe"
             )
-        argv = [comspec, "/c", bash, str(SCRIPT), str(target)]
+        argv = [comspec, "/c", bash, str(SCRIPT), *[str(a) for a in args]]
     proc = subprocess.run(argv, capture_output=True, timeout=30)
     return proc.returncode, _decode_output(proc.stdout + proc.stderr)
 
@@ -373,3 +373,116 @@ def test_run_wraps_cmd_bash_via_comspec_on_windows(tmp_path, monkeypatch):
     assert "no installed distributions" in out
     assert "\ufeff" not in out
     assert "\ufffd" not in out
+
+
+# --- Round 8, Track B: FND-012 — per-alert runbooks, --require-config ---
+
+TWO_ALERTS_ONE_RUNBOOK = """\
+alerts:
+  - name: HighErrorRate
+    expr: error_rate > 0.05
+    windows: [5m, 1h]
+    burn_rate: 14.4
+    runbook: https://example.com/runbooks/high-error-rate
+  - name: HighLatency
+    expr: latency_p99 > 500
+    windows: [5m, 1h]
+    burn_rate: 14.4
+health:
+  livez: /livez
+  readyz: /readyz
+monitors:
+  - target: /api/checkout
+"""
+
+TWO_ALERTS_TWO_RUNBOOKS = """\
+alerts:
+  - name: HighErrorRate
+    expr: error_rate > 0.05
+    windows: [5m, 1h]
+    burn_rate: 14.4
+    runbook: https://example.com/runbooks/high-error-rate
+  - name: HighLatency
+    expr: latency_p99 > 500
+    windows: [5m, 1h]
+    burn_rate: 14.4
+    runbook: https://example.com/runbooks/high-latency
+health:
+  livez: /livez
+  readyz: /readyz
+monitors:
+  - target: /api/checkout
+"""
+
+TWO_ALERTS_PROMETHEUS_ONE_RUNBOOK = """\
+groups:
+  - name: slo
+    rules:
+      - alert: HighErrorRate
+        expr: error_rate > 0.05
+        annotations:
+          burn_rate: 14.4
+          runbook_url: https://example.com/runbooks/high-error-rate
+      - alert: HighLatency
+        expr: latency_p99 > 500
+        annotations:
+          burn_rate: 14.4
+"""
+
+
+def test_runbook_required_per_alert(tmp_path):
+    """FND-012 (1): two alerts, only one with a runbook — the
+    haystack-wide check PASSED this (one reference anywhere).
+    A PASS now requires a runbook reference per alert: FAIL,
+    naming the alert that has none."""
+    _write(tmp_path, "alerts.yml", TWO_ALERTS_ONE_RUNBOOK)
+    rc, out = _run(tmp_path)
+    assert rc == 1, out
+    assert "HighLatency" in out
+    assert "no runbook" in out
+    assert "haystack-wide" not in out
+
+
+def test_runbook_per_alert_all_present_passes(tmp_path):
+    """FND-012 (1), control: two alerts each with a runbook pass
+    — the per-alert check must not break a good config."""
+    _write(tmp_path, "alerts.yml", TWO_ALERTS_TWO_RUNBOOKS)
+    rc, out = _run(tmp_path)
+    assert rc == 0, out
+
+
+def test_runbook_per_alert_prometheus_style(tmp_path):
+    """FND-012 (1): Prometheus-style `- alert:` blocks are
+    parsed the same way as `- name:` blocks."""
+    _write(tmp_path, "alerts.yml", TWO_ALERTS_PROMETHEUS_ONE_RUNBOOK)
+    rc, out = _run(tmp_path)
+    assert rc == 1, out
+    assert "HighLatency" in out
+
+
+def test_require_config_no_candidates_is_incomplete(tmp_path):
+    """FND-012 (2): with --require-config, a target with no
+    monitoring candidates is INCOMPLETE (exit 2) instead of the
+    default exit 0 "nothing to gate". The default stays exit 0
+    (test_empty_dir_still_passes) — the flag is the opt-in
+    strict mode."""
+    rc, out = _run("--require-config", tmp_path)
+    assert rc == 2, out
+    assert "INCOMPLETE" in out
+    assert str(tmp_path) in out  # the real target, not the flag mistaken for one
+    assert "nothing to gate" not in out
+
+
+def test_require_config_good_config_still_passes(tmp_path):
+    """FND-012 (2), control: --require-config does not fail a
+    target that does have a config."""
+    _write(tmp_path, "alerts.yml", GOOD)
+    rc, out = _run("--require-config", tmp_path)
+    assert rc == 0, out
+
+
+def test_require_config_flag_after_target(tmp_path):
+    """--require-config is accepted after the target too (the
+    flag is parsed wherever it appears, not positionally)."""
+    rc, out = _run(tmp_path, "--require-config")
+    assert rc == 2, out
