@@ -383,14 +383,22 @@ def isolated_workdir(prefix="orcinus-router-eval-"):
     afterwards. This is the host-isolation half the harness can
     enforce: grading happens with a cwd that holds no project
     settings, no CLAUDE.md, no installed skills — and the grader
-    reads no files from the cwd at all."""
+    reads no files from the cwd at all.
+
+    Two platform rules, both learned from CI (round 6, 0.10.9):
+    the yielded path is resolved — on macOS $TMPDIR is a symlink
+    (/var -> /private/var), so tempfile returns an unresolved path
+    while Path.cwd() is resolved; and the cwd is restored BEFORE
+    the TemporaryDirectory exits — its cleanup deletes the dir,
+    and Windows cannot delete the process's current directory."""
     previous = Path.cwd()
-    try:
-        with tempfile.TemporaryDirectory(prefix=prefix) as tmp:
-            os.chdir(tmp)
-            yield Path(tmp)
-    finally:
-        os.chdir(previous)
+    with tempfile.TemporaryDirectory(prefix=prefix) as tmp:
+        workdir = Path(tmp).resolve()
+        os.chdir(workdir)
+        try:
+            yield workdir
+        finally:
+            os.chdir(previous)
 
 
 def grade_arms_isolated(run):

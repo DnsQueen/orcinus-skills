@@ -14,6 +14,7 @@ Run: python3 -m pytest scripts/test_router_eval.py -q
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -320,6 +321,49 @@ def test_isolated_workdir_is_empty_and_restores_cwd(tmp_path, monkeypatch):
         assert Path.cwd() == workdir
         assert not any(workdir.iterdir())
     assert Path.cwd() == tmp_path
+
+
+def test_isolated_workdir_yields_resolved_path_under_symlinked_tmpdir(tmp_path, monkeypatch):
+    """CI fix round 6 (0.10.9, macOS job): $TMPDIR on macOS is a
+    symlink (/var -> /private/var), so the temp dir path tempfile
+    returns is unresolved while Path.cwd() is resolved — the yielded
+    path must be the resolved one, or `Path.cwd() == workdir`
+    fails there. Simulate the macOS shape with a symlinked temp
+    parent: the link is what tempfile sees, the real dir is what
+    getcwd returns."""
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(link))
+    with rev.isolated_workdir() as workdir:
+        assert Path.cwd() == workdir
+        assert not any(workdir.iterdir())
+
+
+def test_isolated_workdir_restores_cwd_before_cleanup(monkeypatch):
+    """CI fix round 6 (0.10.9, Windows job): TemporaryDirectory
+    cleanup deletes the dir, and Windows cannot delete the
+    process's current directory — so the cwd must be restored
+    BEFORE the temp dir exits, not after. Simulate the Windows
+    rule: rmtree refuses any directory that is (or contains) the
+    current directory."""
+    real_rmtree = tempfile._rmtree
+
+    def windows_rmtree(path, *args, **kwargs):
+        target = Path(path).resolve()
+        cwd = Path.cwd().resolve()
+        if cwd == target or target in cwd.parents:
+            raise PermissionError(13, "simulated WinError 32", str(path))
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "_rmtree", windows_rmtree)
+    before = Path.cwd()
+    with rev.isolated_workdir() as workdir:
+        assert Path.cwd() == workdir
+        assert workdir.exists()
+    assert Path.cwd() == before
+    assert not workdir.exists()
 
 
 def test_isolated_grading_ignores_ambient_files(tmp_path, monkeypatch):
