@@ -94,7 +94,9 @@ def test_bundled_content_digest_is_byte_identical():
     byte-identical to scripts/content_digest.py — a drifted copy
     would bind captures to a different digest algorithm."""
     skill_copy = Path(__file__).resolve().parent / "content_digest.py"
-    repo_copy = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "content_digest.py"
+    repo_copy = (
+        Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "content_digest.py"
+    )
     assert skill_copy.is_file(), "bundled content_digest.py is missing from the skill folder"
     assert skill_copy.read_bytes() == repo_copy.read_bytes()
 
@@ -104,9 +106,10 @@ def test_load_content_digest_prefers_beside_self():
     itself FIRST — before the repo-root scripts/ — so a skills-only
     install (no repo checkout) finds its bundled copy."""
     fn = rc._load_content_digest(None)
-    assert Path(fn.__code__.co_filename).resolve() == (
-        Path(__file__).resolve().parent / "content_digest.py"
-    ).resolve()
+    assert (
+        Path(fn.__code__.co_filename).resolve()
+        == (Path(__file__).resolve().parent / "content_digest.py").resolve()
+    )
 
 
 def test_skills_only_install_records_without_digest_module(tmp_path):
@@ -148,7 +151,6 @@ def test_skills_only_install_records_without_digest_module(tmp_path):
 
 def _stub_git(tmp_path, name, body):
     """An executable `git` stub on PATH printing `body` behaviour."""
-    import os
     import stat
 
     stubdir = tmp_path / name

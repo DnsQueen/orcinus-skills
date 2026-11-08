@@ -267,8 +267,7 @@ def _resolve_revision(repo):
     revision = proc.stdout.strip()
     if not _SHA_RE.fullmatch(revision):
         raise RecordError(
-            f"cannot resolve HEAD in {repo}: git printed {proc.stdout!r}, "
-            "not a full commit SHA"
+            f"cannot resolve HEAD in {repo}: git printed {proc.stdout!r}, not a full commit SHA"
         )
     return revision
 
@@ -381,8 +380,7 @@ def main(argv):
     parser.add_argument(
         "--digest-module",
         default=None,
-        help="path to a content_digest.py to import "
-        "(default: the copy bundled beside this file)",
+        help="path to a content_digest.py to import (default: the copy bundled beside this file)",
     )
     parser.add_argument(
         "--shell",

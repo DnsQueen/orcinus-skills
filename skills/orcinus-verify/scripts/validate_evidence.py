@@ -564,8 +564,7 @@ def _load_junit_report(report, bundle_dir, label, problems):
         data = f.read(MAX_ARTIFACT_BYTES + 1)
     if len(data) > MAX_ARTIFACT_BYTES:
         problems.append(
-            f"{label} {artifact!r} is larger than the "
-            f"{MAX_ARTIFACT_BYTES}-byte artifact cap"
+            f"{label} {artifact!r} is larger than the {MAX_ARTIFACT_BYTES}-byte artifact cap"
         )
         return None
     recorded = report.get("sha256")
@@ -1725,9 +1724,7 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
     try:
         recomputed = _content_digest_fn(repo, target)
     except Exception as e:
-        problems.append(
-            f"cannot recompute the content digest for revision {target} in {repo}: {e}"
-        )
+        problems.append(f"cannot recompute the content digest for revision {target} in {repo}: {e}")
         return
     targets = [(c, f"check {c.get('name')!r}") for c in _checks(bundle)]
     ff = bundle.get("fail_first")
@@ -1775,7 +1772,9 @@ def check_tree_binding(bundle, problems, repo, expected_revision=None, expected_
                 )
 
 
-def validate_bundle(bundle, schema, bundle_dir=None, repo=None, expected_revision=None, expected_diff_sha256=None):
+def validate_bundle(
+    bundle, schema, bundle_dir=None, repo=None, expected_revision=None, expected_diff_sha256=None
+):
     """Both layers. Structural problems short-circuit the semantic
     checks, so a malformed bundle can never crash them. bundle_dir
     is the directory the bundle file lives in; artifact paths resolve

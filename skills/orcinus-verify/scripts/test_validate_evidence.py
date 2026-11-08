@@ -2041,12 +2041,8 @@ def _reforge(check, bundle_dir):
     import hashlib
 
     bundle_dir = Path(bundle_dir)
-    stdout_hash = hashlib.sha256(
-        (bundle_dir / check["stdout_artifact"]).read_bytes()
-    ).hexdigest()
-    stderr_hash = hashlib.sha256(
-        (bundle_dir / check["stderr_artifact"]).read_bytes()
-    ).hexdigest()
+    stdout_hash = hashlib.sha256((bundle_dir / check["stdout_artifact"]).read_bytes()).hexdigest()
+    stderr_hash = hashlib.sha256((bundle_dir / check["stderr_artifact"]).read_bytes()).hexdigest()
     check["capture_sha256"] = rc.capture_binding_hash(
         command_argv=check["command_argv"],
         shell=check["shell"],
@@ -2279,9 +2275,7 @@ def test_test_gate_with_all_skipped_report_fails(tmp_path):
     # FND-005: an all-skipped suite ran no test — passed>0 is
     # required, not just tests>0.
     b, repo = _bound_bundle(tmp_path)
-    _test_report_with_cases(
-        b, tmp_path, [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "skipped")]
-    )
+    _test_report_with_cases(b, tmp_path, [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "skipped")])
     problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
     assert any("test_report" in p for p in problems)
 
@@ -2291,9 +2285,7 @@ def test_test_gate_with_failing_only_report_fails(tmp_path):
     # gate (the check itself would already be FAIL, but the report
     # rule must say so too).
     b, repo = _bound_bundle(tmp_path)
-    _test_report_with_cases(
-        b, tmp_path, [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "failed")]
-    )
+    _test_report_with_cases(b, tmp_path, [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "failed")])
     problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
     assert any("test_report" in p for p in problems)
 
@@ -2344,12 +2336,12 @@ def test_future_timestamps_within_tolerance_pass(tmp_path):
 
     b, repo = _bound_bundle(tmp_path)
     now = datetime.now(timezone.utc)
-    started = (now + timedelta(minutes=4)).isoformat(timespec="microseconds").replace(
-        "+00:00", "Z"
+    started = (now + timedelta(minutes=4)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    finished = (
+        (now + timedelta(minutes=4, seconds=12))
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
     )
-    finished = (now + timedelta(minutes=4, seconds=12)).isoformat(
-        timespec="microseconds"
-    ).replace("+00:00", "Z")
     _retime(b, tmp_path, started, finished)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
 
@@ -2360,12 +2352,12 @@ def test_future_timestamps_beyond_tolerance_fail(tmp_path):
 
     b, repo = _bound_bundle(tmp_path)
     now = datetime.now(timezone.utc)
-    started = (now + timedelta(minutes=6)).isoformat(timespec="microseconds").replace(
-        "+00:00", "Z"
+    started = (now + timedelta(minutes=6)).isoformat(timespec="microseconds").replace("+00:00", "Z")
+    finished = (
+        (now + timedelta(minutes=6, seconds=12))
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
     )
-    finished = (now + timedelta(minutes=6, seconds=12)).isoformat(
-        timespec="microseconds"
-    ).replace("+00:00", "Z")
     _retime(b, tmp_path, started, finished)
     problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
     assert any("future" in p for p in problems)

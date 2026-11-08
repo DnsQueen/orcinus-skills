@@ -215,7 +215,6 @@ def test_content_digest_empty_tree_is_genuine_not_broken_git(tmp_path):
     so does stubbed/broken git printing nothing with exit 0. A
     genuinely empty tree (an --allow-empty commit) must still digest;
     empty ls-tree output with no tree object behind it must fail."""
-    import os
 
     repo = tmp_path / "proj"
     repo.mkdir()
@@ -223,7 +222,10 @@ def test_content_digest_empty_tree_is_genuine_not_broken_git(tmp_path):
     _git(repo, "config", "user.email", "test@orcinus.local")
     _git(repo, "config", "user.name", "ORCINUS Test")
     _git(repo, "commit", "-q", "--allow-empty", "-m", "empty")
-    assert cd.content_digest(repo) == "sha256:" + "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    assert (
+        cd.content_digest(repo)
+        == "sha256:" + "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    )
 
 
 def test_content_digest_empty_git_output_fails(tmp_path, monkeypatch):

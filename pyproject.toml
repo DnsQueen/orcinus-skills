@@ -98,4 +98,8 @@ files = [
     "skills/webapp-testing/scripts/test_with_server.py",
     "evals/waza-orcinus-verify-agent/test_graders.py",
 ]
+# The bundled copy of content_digest.py beside record_check.py (round 8,
+# FND-003) is byte-identical to scripts/content_digest.py, which is checked
+# above; without this mypy reports a duplicate module named "content_digest".
+exclude = "skills/orcinus-verify/scripts/content_digest.py"
 python_version = "3.11"
