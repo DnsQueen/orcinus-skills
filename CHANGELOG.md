@@ -3,6 +3,35 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.9] — 2026-11-09
+
+Two takeaways from the 15-repo evaluation (2026-11-09), implemented
+with attribution to their MIT/Apache sources.
+
+### Added
+
+- Validator hard limits, ported from Cloudflare's
+  `security-audit-skill` (MIT): bundle input capped at 5 MiB, JSON
+  nesting depth 64, 1000 array items, 100 validation errors; a
+  hostile bundle can no longer OOM the validator, recurse it to
+  death, or flood its output. Windows reserved names (`con`,
+  `prn`, `nul`, `com1`–`com9`, …) are rejected for artifact paths
+  and capture names, and diagnostics are escaped so terminal-control
+  or bidi characters cannot make a FAIL read as a PASS.
+- Three-verdict findings contract, adapted from Cloudflare's
+  `confirmed` / `needs_validation` / `rejected`: a finding that was
+  not validated is reported as `needs_validation` with no severity
+  and forces the bundle to INCOMPLETE — never PASS, never FAIL.
+  This is the machine-checked form of "a check that did not run is
+  never reported as passed" (schema stays v6).
+- Three-arm eval, adapted from caveman (Apache-2.0): every skill
+  claim is measured as baseline vs terse control vs skill, and the
+  honest delta is skill minus terse control, not skill minus
+  nothing. Runs are graded in host isolation with a committed
+  snapshot (`evals/snapshots/router-results.json`), and
+  `docs/verification/HONEST-NUMBERS.md` publishes wins and losses
+  side by side (no live-agent run exists yet — none fabricated).
+
 ## [0.10.8] — 2026-11-09
 
 CI fix for the 0.10.7 Windows failure (run 42523335956:
