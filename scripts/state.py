@@ -197,7 +197,14 @@ def validate_state(data, repo=None, require_head=False):
         # evidence_bundle that validates is corrupt, not verified).
         problems.extend(
             _evidence_problems(
-                data.get("evidence_bundle"), repo, require_valid=(stage == "VERIFIED")
+                data.get("evidence_bundle"),
+                repo,
+                require_valid=(stage == "VERIFIED"),
+                expected_revision=(
+                    revision
+                    if isinstance(revision, str) and _SHA_RE.match(revision)
+                    else None
+                ),
             )
         )
         # Recompute, never trust: the stored digest is compared
@@ -247,13 +254,16 @@ def validate_state(data, repo=None, require_head=False):
     return problems
 
 
-def _evidence_problems(value, repo, require_valid):
+def _evidence_problems(value, repo, require_valid, expected_revision=None):
     """Problems with an evidence_bundle value. [] when the value
     is None (no bundle recorded). A blank value, a path that names
     no file, an unreadable bundle, or — when `require_valid` — a
     bundle the validator rejects or one whose verdict is not PASS,
     is a problem. Paths resolve against `repo`, never the working
-    directory."""
+    directory. When `expected_revision` is given, the bundle must
+    also have been recorded on that revision (round 8, FND-004):
+    a bundle recorded at R1 is not evidence for a state pinned
+    at R2, even when R1 resolves in the repo."""
     if value is None:
         return []
     if not isinstance(value, str) or not value.strip():
@@ -278,12 +288,16 @@ def _evidence_problems(value, repo, require_valid):
         # Round 8, FND-004: pass the resolved repo so state
         # validation gains the same tree binding the validator
         # CLI has — the bundle's revision must resolve in this
-        # repo and its checks must match that tree. The state's
-        # own revision is NOT passed as expected_revision: that
-        # cross-check (bundle recorded on the state's revision)
-        # is a separate decision, not part of this binding.
+        # repo and its checks must match that tree — and pass
+        # the expected revision so the bundle must also have
+        # been recorded on that revision, not merely somewhere
+        # in this repo.
         problems = _validate_evidence.validate_bundle(
-            bundle, schema, bundle_dir=path.parent, repo=repo
+            bundle,
+            schema,
+            bundle_dir=path.parent,
+            repo=repo,
+            expected_revision=expected_revision,
         )
     except (ValueError, OSError, RecursionError) as e:
         return [f"evidence_bundle {value!r}: validator error: {e}"]
@@ -671,7 +685,9 @@ def transition(
                 "VERIFIED requires evidence_bundle (--evidence <bundle path>; "
                 "no bundle is recorded in the state)"
             )
-        problems = _evidence_problems(candidate, repo, require_valid=True)
+        problems = _evidence_problems(
+            candidate, repo, require_valid=True, expected_revision=revision
+        )
         if problems:
             raise ValueError(
                 f"VERIFIED requires a valid evidence bundle ({source} {candidate!r}): "

@@ -817,6 +817,33 @@ def test_evidence_bundle_must_bind_to_tree(tmp_path):
         )
 
 
+def test_evidence_bundle_must_match_state_revision(tmp_path):
+    """Round 8, FND-004 (coordinator reconciliation): binding the
+    bundle to the repo is not enough — a bundle recorded at R1
+    must not verify a state pinned at R2. The state's own
+    revision is passed as expected_revision, so a VERIFIED state
+    whose bundle was recorded on an older revision is a problem,
+    and a transition to VERIFIED with such a bundle is refused."""
+    repo = _repo(tmp_path)
+    old_revision = _head(repo)
+    new_revision = _commit_change(repo)
+    digest = cd.content_digest(repo, new_revision)
+    data = _at_stage(repo, "VERIFIED", new_revision, digest)
+    data["evidence_bundle"] = _write_bundle(repo, "old.json", revision=old_revision)
+    problems = st.validate_state(data, repo=repo, require_head=False)
+    assert any("revision" in p for p in problems), problems
+    data2 = _building(digest=digest, revision=new_revision)
+    data2["stage"] = "VERIFYING"
+    with pytest.raises(ValueError, match="revision"):
+        st.transition(
+            data2,
+            "VERIFIED",
+            new_revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, "old2.json", revision=old_revision),
+        )
+
+
 def _run_cli_transition(state_path, repo, to_stage, revision):
     """One state.py transition as a subprocess (the real CLI,
     with its lock file), returning (returncode, stdout)."""

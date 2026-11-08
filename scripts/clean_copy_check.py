@@ -233,7 +233,7 @@ def _gates(dest):
             results,
             "script tests",
             False,
-            "pytest is not installed in this Python; pip install pytest==8.4.2",
+            "pytest is not installed in this Python; pip install pytest==9.0.3",
         )
     else:
         _step(results, "script tests", rc == 0, out.splitlines()[-1] if out else "")

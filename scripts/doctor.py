@@ -34,7 +34,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# The minimum versions the gates need. pytest 8.4.2 and ruff 0.17.4
+# The minimum versions the gates need. pytest 9.0.3 and ruff 0.17.4
 # are the pinned versions in CI. Python 3.9 itself was dropped
 # 2026-11-06: it reached end-of-life 2025-10-31 and has no build for
 # Ubuntu 26.04, which is what the CI runner is now. Python 3.10 was
@@ -108,7 +108,7 @@ def check_pytest():
             "pytest",
             "incompatible",
             "pytest is not installed (the script tests cannot run without it)",
-            fix="pip install pytest==8.4.2",
+            fix="pip install pytest==9.0.3",
         )
     version = _version_tuple(out)
     if version is None:
@@ -121,7 +121,7 @@ def check_pytest():
         "pytest",
         "incompatible",
         f"pytest {'.'.join(map(str, version))} is below {'.'.join(map(str, MIN_PYTEST))}",
-        fix="pip install pytest==8.4.2",
+        fix="pip install pytest==9.0.3",
     )
 
 

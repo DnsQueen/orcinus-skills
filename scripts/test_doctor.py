@@ -251,6 +251,9 @@ def test_missing_mandatory_tools_are_incompatible(monkeypatch):
     _patched_run(monkeypatch, {})
     assert doctor.check_git()["status"] == "incompatible"
     assert doctor.check_pytest()["status"] == "incompatible"
+    # Round 8, FND-021: the missing-pytest fix hint must name the
+    # pinned version (9.0.3), not the advisory-affected 8.4.2.
+    assert doctor.check_pytest()["fix"] == "pip install pytest==9.0.3"
     assert doctor.check_ruff()["status"] == "incompatible"
 
 
