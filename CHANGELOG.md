@@ -3,6 +3,23 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.8] — 2026-11-09
+
+CI fix for the 0.10.7 Windows failure (run 42523335956:
+`test (windows-latest, 3.12)` failed at "Run the script tests" —
+1 failed, 781 passed, 12 skipped).
+
+### Fixed
+
+- The round-4 regression test itself double-converted line
+  endings on Windows: it built the CRLF form by expanding the
+  working-tree read, which is already CRLF there, so each CRLF
+  became CRCRLF and the recorded hash matched neither the LF nor
+  the CRLF form — the validator was right to reject it. The test
+  now normalises to LF first, then expands. A guard test pins the
+  equivalence class: a CRCRLF hash is still rejected, so the
+  round-4 canonicalisation cannot silently become a loosening.
+
 ## [0.10.7] — 2026-11-09
 
 CI fix for the 0.10.6 Windows failure (run 42520748232:
