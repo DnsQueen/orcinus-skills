@@ -3,6 +3,30 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.3] — 2026-11-08
+
+CI fix for the 0.10.2 Windows failure (run 42499224528: `test
+(windows-latest, 3.12)` failed at "Run the script tests" — 5 failed,
+745 passed). All 5 were round-8-new tests, never green on Windows.
+
+### Fixed
+
+- Stub `git` is now executable on Windows: the tests planted an
+  extensionless `git` file with a `#!/bin/sh` body on PATH, which
+  Windows never executes (CreateProcess only tries the exact name and
+  the PATHEXT extensions), so the real `git.exe` ran and the stub was
+  silently ignored. The stubs now write `git.bat` on win32 and the
+  extensionless `sh` stub elsewhere (same rule the repo documents for
+  `bash` in `test_verify_sh.py`). Also fixed the bad-SHA stub's
+  positional check: `--show-toplevel` is `$4`/`%4` (`git -C <repo>
+  rev-parse ...`), not `$3` — with `$3` the test passed via
+  `_resolve_repo` instead of exercising `_resolve_revision`.
+- The FND-024 signal guarantee is POSIX-only: on Windows
+  `Popen.send_signal(SIGTERM)` is TerminateProcess (returncode 1, no
+  handler/atexit/finally ever runs, so no cleanup is possible) and
+  `send_signal(SIGINT)` raises `ValueError` in the stdlib. Both
+  signal tests are now skipped on win32; POSIX coverage is unchanged.
+
 ## [0.10.2] — 2026-11-08
 
 Round-8 fix pass for the second independent audit of v0.10.1
