@@ -1,6 +1,6 @@
 # MAP — 0 to 100
 
-Every micro-step, its best proven source, its licence, and how it enters ORCINUS. Status: `built` (in v0.9), `external-optional` (not in this repo; the router has a fallback for the step), `todo` (to be written from scratch). A row is never marked `built` for a skill that is not in this repo — a skill that lives only on the builder's machine is not part of the one-install system.
+Every micro-step, its best proven source, its licence, and how it enters ORCINUS. Status: `built` (in v0.10), `external-optional` (not in this repo; the router has a fallback for the step), `todo` (to be written from scratch). A row is never marked `built` for a skill that is not in this repo — a skill that lives only on the builder's machine is not part of the one-install system.
 
 Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-SA is rewritten or bundled as a separate module, never copied verbatim into an MIT file. Proprietary is reimplemented, never copied. Unverified licence = rewrite until verified.
 
@@ -94,7 +94,7 @@ Integration rule: MIT/Apache-2.0 may be copied verbatim with attribution. CC-BY-
 | Clarification / escalation | sickn33/antigravity-awesome-skills: ask-questions-if-underspecified | MIT | copied verbatim (1 file, frontmatter adapted to spec only), licence verified from primary LICENSE, commit 739c841 | built |
 | Visual regression | microsoft/playwright | Apache-2.0 | own-words wrapper, Playwright used as-is, licence verified from primary LICENSE | built |
 
-## Must write from scratch (v0.9 or later)
+## Must write from scratch (v0.10 or later)
 
 (none remaining — every item on this list now has a proven answer.)
 

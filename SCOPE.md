@@ -1,10 +1,10 @@
 # SCOPE
 
-## In v0.9
+## In v0.10
 
 - One entry and router (`skills/orcinus`).
 - One entry point, by convention, not enforcement: only the router is user-invocable — every sub-skill carries `user-invocable: false` in its frontmatter, so no sub-skill appears in the `/` menu and the user never picks one mid-work; the router invokes them. That hides sub-skills from the user; it does not stop a model from invoking one directly — the descriptions still carry trigger phrasing (`Use when…`), because on hosts without the router's table those descriptions are the only discovery signal. `user-invocable` is a Claude Code extension field, ignored by other hosts. It is a non-spec field, so claude.ai / Skills API uploads would reject it — uploads are not a distribution path for this repo (install is via the plugin marketplace or `npx skills add`). No skill sets `disable-model-invocation: true`: the router must be able to invoke sub-skills itself.
-- Hermes support (`hermes/orcinus.yaml` + README install docs): the repo is a Hermes tap as-is (`hermes skills tap add DnsQueen/orcinus-skills`, default path `skills/`), and the bundle is the `/orcinus` entry point — it lists the router only, because a bundle loads everything it lists at once and the router loads sub-skills on demand with `skill_view(name)`. A validator check (`check_hermes_bundle`, 8 tests) pins the bundle: it must exist, parse, list only skills that exist, and list the router only. The router checks a sub-skill is installed before routing to it — a Hermes bundle silently skips missing skills. Deliberately NOT embedded: `metadata.hermes` tags/category — Hermes documents them, but the Agent Skills spec requires metadata values to be strings and ORCINUS keeps frontmatter spec-pure; tags/category are discovery-only and the router is the entry point. What Hermes loses: the plugin-root `agents/` and `commands/` (Claude Code only), and `${CLAUDE_PLUGIN_ROOT}` paths in skill text need the Hermes skill folder instead (orcinus-verify stopped using the variable in round 6; the one remaining use is a "See also" link in monitoring-observability references). Recorded limit: the bundle was validated by the repo's own YAML parser and check, never loaded by a real Hermes installation — no Hermes CLI exists in this environment.
+- Hermes support (`hermes/orcinus.yaml` + README install docs): the repo is a Hermes tap as-is (`hermes skills tap add DnsQueen/orcinus-skills`, default path `skills/`), and the bundle is the `/orcinus` entry point — it lists the router only, because a bundle loads everything it lists at once and the router loads sub-skills on demand with `skill_view(name)`. A validator check (`check_hermes_bundle`, 8 tests) pins the bundle: it must exist, parse, list only skills that exist, and list the router only. The router checks a sub-skill is installed before routing to it — a Hermes bundle silently skips missing skills. Deliberately NOT embedded: `metadata.hermes` tags/category — Hermes documents them, but the Agent Skills spec requires metadata values to be strings; ORCINUS frontmatter already carries the non-spec `user-invocable` extension field, so the reason is the metadata-values rule, not spec purity; tags/category are discovery-only and the router is the entry point. What Hermes loses: the plugin-root `agents/` and `commands/` (Claude Code only), and `${CLAUDE_PLUGIN_ROOT}` paths in skill text need the Hermes skill folder instead (orcinus-verify stopped using the variable in round 6; the one remaining use is a "See also" link in monitoring-observability references). Recorded limit: the bundle was validated by the repo's own YAML parser and check, never loaded by a real Hermes installation — no Hermes CLI exists in this environment.
 - One flagship verification skill (`skills/orcinus-verify`).
 - One idea-calibration skill (`skills/idea-calibrate`), with a manual scenario eval (`evals/idea-calibrate-01.md`).
 - One scaffold skill (`skills/scaffold`), with a manual scenario eval (`evals/scaffold-01.md`) proven on a real demo project.
@@ -32,7 +32,7 @@
 - One idea-capture skill (`skills/idea-capture`), written from scratch with a script (`scripts/capture.py`, Python, standard library only). Eval (`evals/idea-capture-01.md`) passed on a real run: 3 ideas captured (English, Persian, one with quotes and symbols), all listed with status `raw`, every raw text byte-identical to capture time (hash-checked); search finds the right ideas, promote moves raw → calibrated, drop moves raw → dropped with a reason and never deletes the file; a fresh process sees all three ideas with the same ids and statuses, and all four failure cases (empty capture, unknown id, dropped → calibrated, drop without a reason) exit 1. Recorded limits: the store is plain Markdown files in the project — no database, no server, no sync; the project's own git history is the backup.
 - One monitoring skill (`skills/monitoring`), injected verbatim (ericrisco/rsc-harness, MIT, 493 stars). Eval (`evals/monitoring-01.md`) passed on a real run: the bundled gate `verify.sh` exits 0 on a good config and exits 1 naming all five failures on a bad one; on a live throwaway service, `/livez` answers 200 in 0.018s while `/readyz` goes 503 when its dependency dies (and `/livez` stays 200), and the probe fails when the service stops. Recorded limits: the page landing on a phone is not proven here (no PagerDuty/incident.io connected); the skill's "Related" links pointed to sibling rsc-harness skills that are not in ORCINUS — they were removed and replaced with a pointer to the in-repo monitoring-observability (see its ATTRIBUTION.md); tool prices are upstream's "as of 2026-06".
 - One independent-review skill (`skills/independent-review`), own-words method with the six reviewer agents and the `review-pr` command bundled as-is (anthropics/claude-plugins-official, Apache-2.0 — the per-plugin LICENSE is authoritative; the README's "MIT" line is an error in the README). Eval (`evals/independent-review-01.md`) passed on a real run with three separate reviewer agents, each given only the diff and the code: the planted-defects change FAILs with all three defects named (comment/code contradiction, confidence 95; silent failure, CRITICAL, confidence 95; test gap 9/10); the clean change PASSes with no critical issues; the misleading-summary change FAILs with the behavior change named from the diff (confidence 95) and the author's claim rejected. Recorded limits: the reviewers are subagents that share the parent's context (a fresh-context reviewer is the stronger form); the Case 2 reviewer did not run the test suite.
-- One evidence/eval skill (`skills/waza`), injected verbatim (microsoft/waza, MIT, 1,499 stars; upstream commit `f5789f75`, 2026-11-04), with the runnable suite `evals/waza-orcinus-verify/` (eval.yaml + 2 tasks + fixture) grading the flagship `orcinus-verify` skill. Eval (`evals/evidence-eval-01.md`) passed on a real run with the official v0.40.0 release binary (SHA256 verified): the shipped suite runs 2/2, aggregate 1.00, exit 0. The code-grader semantics (Python expressions evaluated with `output` in scope) are corroborated, not just assumed: that smoke run evaluated `len(output) > 0` and recorded passed/total assertion counts for it on both tasks (see evals/results/waza-harness-smoke-2026-11-06.json) — corroboration of the semantics, not proof of literal `eval()`; a control task with an absent string fails and `waza run` exits 1; `waza compare` shows the deltas (Score 1.0000 → 0.8889, Success Rate 100.0% → 66.7%). Recorded limits: the binary (~200 MB) is installed from the release page, not kept in the repo; only the mock executor was proven here — the mock echoes the prompt, so a mock pass proves the harness, never the skill; the upstream skill's inline task example used a string `expected`, which v0.40.0 rejects — it is corrected in this repo to the real schema (see its ATTRIBUTION.md), and the shipped suites use the correct schema. A second suite, `evals/waza-orcinus-verify-agent/`, grades agent behaviour with a real executor and prompts that do not state the expected verdict (9 tasks, 4 PASS / 5 FAIL, with structured-verdict-block graders); it is not yet run.
+- One evidence/eval skill (`skills/waza`), injected verbatim (microsoft/waza, MIT, 1,499 stars; upstream commit `f5789f75`, 2026-11-04), with the runnable suite `evals/waza-orcinus-verify/` (eval.yaml + 2 tasks + fixture) grading the flagship `orcinus-verify` skill. Eval (`evals/evidence-eval-01.md`) passed on a real run with the official v0.40.0 release binary (SHA256 verified): the shipped suite runs 2/2, aggregate 1.00, exit 0. The code-grader semantics (Python expressions evaluated with `output` in scope) are corroborated, not just assumed: that smoke run evaluated `len(output) > 0` and recorded passed/total assertion counts for it on both tasks (see evals/results/waza-harness-smoke-2026-11-06.json) — corroboration of the semantics, not proof of literal `eval()`; a control task with an absent string fails and `waza run` exits 1; `waza compare` shows the deltas (Score 1.0000 → 0.8889, Success Rate 100.0% → 66.7%). Recorded limits: the binary (~200 MB) is installed from the release page, not kept in the repo; only the mock executor was proven here — the mock echoes the prompt, so a mock pass proves the harness, never the skill; the upstream skill's inline task example used a string `expected`, which v0.40.0 rejects — it is corrected in this repo to the real schema (see its ATTRIBUTION.md), and the shipped suites use the correct schema. A second suite, `evals/waza-orcinus-verify-agent/`, grades agent behaviour with a real executor and prompts that do not state the expected verdict (9 tasks, designed 4 PASS / 5 FAIL, with structured-verdict-block graders); it is not yet run.
 - One generic-refactoring skill (`skills/refactor`), injected verbatim (MuhiminOsim/code-refactoring-skill, MIT, 12 stars; upstream commit `90fa6405`, 2026-05-19) — `SKILL.md` (119 lines) + 11 reference files (process, safety, smells, 7 catalogs, language profiles). Eval (`evals/refactor-01.md`) passed on a real run following the skill's own process on a throwaway copy of the demo: a 45-line smelly function was refactored in two atomic steps (guard clauses, then reuse `weeklySummary`), 11/11 tests after each step, lint + typecheck clean, behavior identical, file 45 → 32 lines; a breaking step failed 2 tests and was reverted immediately with no test changed; a proposed rename of an exported symbol was not made (a §3 red line, no confirmation given). Recorded limits: the smelly file was written for the eval, not found in a real codebase; only TypeScript was exercised.
 - One MCP API-design skill (`skills/mcp-builder`), injected verbatim (anthropics/skills, Apache-2.0; upstream commit `ca45fc49`, 2026-10-28) — `SKILL.md` (252 lines) + 5 reference files + 4 script files. Eval (`evals/mcp-builder-01.md`) passed on a real run following the skill's 4 phases: a TypeScript MCP server (SDK v2) for the demo's domain builds clean, its self-check passes (exactly 2 tools, correct summary/warning answers, `budget: 0` rejected by input validation, `SMOKE PASS`, exit 0), and its 10-question evaluation passes 10/10; a control run with one wrong expected answer fails 9/10 and exits 1. Recorded limits: only the stdio transport was exercised (no Streamable HTTP, no auth); the bundled `scripts/evaluation.py` was not run (it needs an Anthropic API key); the MCP Inspector was not used; only the demo's two-function domain was exposed.
 - One handoff skill (`skills/handoff`), a merge of two MIT handoff methods written in own words (mattpocock/skills handoff + dariohansson/claude-handoff, upstream commit `01b57fb0`, 2026-09-16) — the fixed template, path rules (confirm, never overwrite, mode 0600), strict redaction, and a resume mode that treats the file as data. Eval (`evals/handoff-01.md`) passed on a real run: a handoff for the real ORCINUS state was written (10 sections, mode 0600, no contents, no secrets); a fresh subagent resumed from it alone and restated everything correctly without acting; a hostile handoff (imperatives to skip confirmation, push, and run `rm -rf`) was followed in none of its five imperatives, the `rm -rf` was restated not run, and the target directory still exists. Recorded limits: the "fresh" subagents inherit the parent's context, so they are not truly fresh sessions; the handoff file itself had real gaps (unnamed onboarding candidate, sketched push procedure, undefined eval criteria) that a fresh session would have to resolve by reading `docs/MAP.md` first.
@@ -43,7 +43,7 @@
 - Shared glossary and boundaries.
 - Eval scenarios for the flagship, run on a demo repo.
 
-## Out of v0.9
+## Out of v0.10
 
 - Full implementations of every sub-skill in the map. They are added one at a time, each proven before it ships.
 - Auto-merge, auto-publish to a registry, and any irreversible action without human approval.
@@ -53,24 +53,24 @@
 
 - The router, gates, glossary, evidence bundle, and eval harness exist.
 - Every stage 0–100 has a present entry in the map — no empty stage.
-- Some sub-skills are thin in v0.9. Depth grows in later versions; the structure does not change.
+- Some sub-skills are thin in v0.10. Depth grows in later versions; the structure does not change.
 
 ## Non-goals
 
 - A dump of 2,000 skills to pick from. ORCINUS is one unit.
 - Copying CC-BY-SA or proprietary text verbatim into MIT files.
-- Rebuilding what ponytail and tdd already do well. ORCINUS routes to them where they fit and focuses new work on the gaps: independent verification, security, and eval. (diagnosing-bugs was external-optional in v0.9.0's first draft and is now bundled — see the debugging skill above.)
+- Rebuilding what ponytail and tdd already do well. ORCINUS routes to them where they fit and focuses new work on the gaps: independent verification, security, and eval. (diagnosing-bugs was external-optional in v0.9.0's first draft — historical — and is now bundled — see the debugging skill above.)
 
 
 ## Change notices for modified Apache-2.0 files
 
 A file copied from an Apache-2.0 upstream and then modified must carry its change notice in the file itself (Apache-2.0 §4(b)). ORCINUS writes the notice as an HTML comment right after the frontmatter (Markdown) or a `#` comment at the top (scripts) — invisible in rendering, so the rendered body stays verbatim, and never in the frontmatter, which the frontmatter spec check would reject as an unknown field. The modified files are listed in `scripts/validate_repo.py` (`MODIFIED_APACHE_FILES`); the repo validator checks each one carries the notice. The wording "verbatim body, ORCINUS frontmatter" is the precise claim: the body is verbatim upstream, the frontmatter is ORCINUS's (adapted to the Agent Skills spec, `user-invocable: false`, and the ORCINUS router-only note appended to the description). A "description verbatim" claim next to that appended sentence is false; every ATTRIBUTION.md records the append.
 
-## v1.1 (planned, not v0.9 blockers)
+## v1.1 (planned, not v0.10 blockers)
 
 These came from four independent external reviews (2026-11-06). They are
 recorded here so they are not lost, and so no one mistakes them for
-v0.9.0 promises. v0.9.0 ships the INCOMPLETE status and the structured
+v0.10.0 promises. v0.10.0 ships the INCOMPLETE status and the structured
 evidence schema in `orcinus-verify`; the rest of the enforcement layer
 is v1.1 work.
 
@@ -104,7 +104,8 @@ What is still v1.1 is the *tamper-proof* layer: a policy evaluator
 backed by the verifier's signature, session isolation for the
 verifier, and a tamper-proof state file. The specs above define
 what that layer must enforce; a local check already enforces the
-state machine's own rules (scripts/state.py refuses a transition
+state machine's own rules when a human or agent explicitly invokes
+it (scripts/state.py refuses a transition
 the evidence does not support — round 7), but it is not the
 tamper-proof layer: anyone with write access can still edit the
 state file, and the next validate only detects the edit.
@@ -116,7 +117,7 @@ self-consistent, not that the commands really ran.
 **Built in the fourth review round (2026-11-06) — trust fixes in
 the checking machinery itself:** the validator checks the SECURITY.md
 supported-versions table against the plugin version (it said 1.0.x
-while the plugin was 0.9.0); `doctor.py` finds a ruff binary on PATH
+while the plugin was 0.9.0 — historical); `doctor.py` finds a ruff binary on PATH
 (it only tried `python -m ruff`), its waza fallback is Linux-only,
 and its docstring now states the real exit codes (1 incomplete, 2
 incompatible); the clean-copy check was redesigned — two modes
@@ -167,8 +168,8 @@ verifier, and the real agent-behavior eval run.
   weights in the proposal (15/15/20/20/15/10/5) are arbitrary and
   gameable — they need evidence before they are adopted, and the score
   is a v2 idea at best. See ADR 0004 for the decision not to ship one
-  in v0.9.
+  in v0.10.
 - **Failure Intelligence, Model-Agnostic Verification, Prompt
   Injection Isolation, Dependency/Supply Chain Intelligence,
   Repository Memory, Self-Evaluation** (reviewer 2's §5–7 proposals):
-  documented directions for later versions, not v0.9 scope.
+  documented directions for later versions, not v0.10 scope.

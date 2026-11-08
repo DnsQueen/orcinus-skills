@@ -66,8 +66,9 @@ def test_readme_install_has_no_all_default():
     """The default Agent Skills install is the interactive pick, not
     --all to every agent without prompting (R3 #14)."""
     text = _readme()
-    assert "npx skills@latest add DnsQueen/orcinus-skills --all" not in text
-    assert "npx skills@latest add DnsQueen/orcinus-skills" in text
+    assert "npx skills@1.7.6 add DnsQueen/orcinus-skills --all" not in text
+    assert "npx skills@1.7.6 add DnsQueen/orcinus-skills" in text
+    assert "skills@latest" not in text  # round 8, FND-027: pin, don't float
     assert "--all" in text  # still documented as the non-interactive option
 
 

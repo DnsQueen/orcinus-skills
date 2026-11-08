@@ -8,7 +8,7 @@ ORCINUS is a guided workflow, not an enforcement layer: it tells the agent what 
 
 ## Quick start
 
-1. Install: `/plugin marketplace add DnsQueen/orcinus-skills`, then `/plugin install orcinus-skills@orcinus` (Claude Code), or `npx skills@latest add DnsQueen/orcinus-skills` (any agent).
+1. Install: `/plugin marketplace add DnsQueen/orcinus-skills`, then `/plugin install orcinus-skills@orcinus` (Claude Code), or `npx skills@1.7.6 add DnsQueen/orcinus-skills` (any agent).
 2. Invoke the router: `/orcinus` (or `/orcinus-skills:orcinus` for the plugin install).
 3. Say what you want to build; ORCINUS names the stage and routes to the skill for it.
 4. Confirm the two major gates: idea → code, code → done.
@@ -43,15 +43,16 @@ Requires Node.js 22.20 or later — the skills CLI declares
 `node >= 22.20.0` in its engines field. Run this from your project:
 
 ```bash
-npx skills@latest add DnsQueen/orcinus-skills
+npx skills@1.7.6 add DnsQueen/orcinus-skills
 ```
 
 The CLI asks which agent to install into and which skills to install. Pick your agent, then the ORCINUS skills — all 36 is the one-install system, the router is the entry point and loads sub-skills on demand. The user never picks a sub-skill mid-work.
 
-An exit code of 0 is not proof the install worked: an invalid
-`--agent` name prints `Invalid agents: <name>` and installs nothing
-while still exiting 0. The real confirmation is the
-`✓ <skill> (copied)` line for each skill.
+An invalid `--agent` name prints `Invalid agents: <name>`, installs
+nothing, and exits 1 (verified 2026-11-08 with `skills@1.7.6` — an
+earlier draft of this README said 0, which was wrong). An exit code
+of 0 is still not proof the install worked: the real confirmation is
+the `✓ <skill> (copied)` line for each skill.
 
 To install every skill to every agent without prompting (for example in CI), add `--all` (`--skill '*' --agent '*' -y`).
 
@@ -121,13 +122,14 @@ schema_analyzer.py + 3 tests; security-review/test_secret_scan.py;
 skill-creator/eval-viewer/generate_review.py;
 webapp-testing/examples/*.py x3). skills/monitoring/scripts/ holds
 only verify.sh, no .py. The auditor's live npx install
-(skills@1.7.6, v0.9.8) counted 40; the +2 are
+(skills@1.7.6, v0.9.8 — historical measurement) counted 40; the +2 are
 skills/orcinus-verify/scripts/record_check.py +
 test_record_check.py, added in the round-7 fix pass. Per-skill
 folders travel whole; repo-root scripts/ and plugin-root agents/
 and commands/ do not. -->
 And `${CLAUDE_PLUGIN_ROOT}` paths in skill text (one place:
-`orcinus-verify`) mean the Claude Code plugin root — in Hermes use
+`monitoring-observability`'s metrics-collection reference) mean the
+Claude Code plugin root — in Hermes use
 the installed skill folder, or `${HERMES_SKILL_DIR}` inside a skill
 body.
 
@@ -141,7 +143,11 @@ follows the skill's procedure inline instead.
 `metadata.hermes` is deliberately not embedded in the skill
 frontmatter: Hermes documents `metadata.hermes.tags` / `category` /
 `config`, but the Agent Skills spec requires metadata values to be
-strings, and ORCINUS keeps its frontmatter spec-pure. Tags and
+strings, so a nested `metadata.hermes` block does not fit. (ORCINUS
+frontmatter is not spec-pure in general — every sub-skill carries the
+Claude Code extension field `user-invocable: false`, which is not in
+the spec; see SCOPE.md. The reason for leaving `metadata.hermes` out
+is the metadata-values rule, not spec purity.) Tags and
 category are discovery metadata only; the router — not the skill
 list — is the entry point, so nothing functional is lost.
 
@@ -157,6 +163,10 @@ skills:
 ```bash
 hermes curator lock orcinus
 ```
+
+`hermes curator lock` is new in Hermes 0.23.0 (5 November 2026) —
+it does not exist in 0.19.0, where the `write_approval: true` gate
+above is the protection; upgrade Hermes to use `lock`.
 
 A locked skill stays readable and loadable, but `skill_manage`,
 `write_file`, `patch` and `terminal` all refuse to change it.
@@ -190,7 +200,7 @@ into context for discovery.
 
 After that, keep working. ORCINUS detects the stage; you confirm each major gate.
 
-## What v0.9 contains
+## What v0.10 contains
 
 <!-- BEGIN GENERATED SKILL TABLE — do not edit by hand; run scripts/generate_readme_table.py -->
 | Skill | Stages | Licence | Integration | Source |
@@ -240,10 +250,10 @@ After that, keep working. ORCINUS detects the stage; you confirm each major gate
 - `skills/orcinus-verify/references/evidence.schema.json` — the machine-readable form of the evidence bundle orcinus-verify returns. Validate a bundle with `python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json>`.
 - `scripts/doctor.py` — check whether this machine can run the ORCINUS gates (python, pytest, ruff, git, node, waza) and say exactly which ones it cannot.
 - `scripts/clean_copy_check.py` — prove the repo works from a clean copy, in two modes: working-tree (copy the working tree) and release (`git archive` of a committed revision, so an uncommitted fix cannot make a broken release look green). It never renames or writes to the source: an earlier design hid the source by renaming it and could strand it hidden if the process was killed (demonstrated with a SIGKILL, removed 2026-11-06). The price is stated in the script's docstring — an absolute-path leak back to the live checkout is no longer caught. It is a copy check, not an install check: it runs the repo's own gates inside the copy (also run in CI).
-- `docs/adr/` — architecture decision records for ORCINUS's own decisions (one install, verification-first, verbatim-with-attribution, no Trust Score in v0.9, record-check transcript).
+- `docs/adr/` — architecture decision records for ORCINUS's own decisions (one install, verification-first, verbatim-with-attribution, no Trust Score in v0.10, record-check transcript).
 - `docs/report-format.md` — the unified machine-readable report format all checkers converge to.
-- `docs/project-state.md` — the persistent project state spec (`.orcinus/state.json`): BUILDING / VERIFYING / BLOCKED / VERIFIED / AWAITING_APPROVAL / RELEASE_READY, each bound to a revision and an evidence bundle; the schema is `scripts/state_schema.json` and transitions are enforced by `scripts/state.py`.
-- `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v0.9 does and does not do.
+- `docs/project-state.md` — the persistent project state spec (`.orcinus/state.json`): BUILDING / VERIFYING / BLOCKED / VERIFIED / AWAITING_APPROVAL / RELEASE_READY, each bound to a revision and an evidence bundle; the schema is `scripts/state_schema.json` and transitions are enforced by `scripts/state.py` when a human or agent explicitly invokes its CLI (nothing else calls it — see `docs/project-state.md`).
+- `GLOSSARY.md` — shared vocabulary. `SCOPE.md` — what v0.10 does and does not do.
 
 Later sub-skills (idea, architecture, coding, security, eval) are listed in `docs/MAP.md` with their source and status. They are added one at a time, each proven on a demo repo before it ships. No stage is empty in the map. All 36 shipped skills are fully built; the 3 MAP needs with no implementing skill yet (Benchmark, Sandbox runtime, Skill eval) are the ones still to build.
 ## Boundaries (non-negotiable)
@@ -269,11 +279,11 @@ ORCINUS core is MIT. See `LICENSE`.
 
 Sub-skills adapted from other projects keep their own licence and attribution in their folder and in `docs/MAP.md`. MIT/Apache-2.0 sources may be copied verbatim with attribution. CC-BY-SA sources are rewritten in our own words or kept as a separate licensed module in the same install — never copied verbatim into an MIT file. Proprietary sources are reimplemented from scratch, never copied. Deprecated sources are not used.
 
-Sources that shaped v0.9 include Anthropic (Effective Harnesses, Agent Skills, code-review), OpenAI (Harness Engineering, monitoring), Columbia DAPLab (9 Critical Failure Patterns), METR, and the projects listed in `docs/MAP.md`.
+Sources that shaped v0.10 include Anthropic (Effective Harnesses, Agent Skills, code-review), OpenAI (Harness Engineering, monitoring), Columbia DAPLab (9 Critical Failure Patterns), METR, and the projects listed in `docs/MAP.md`.
 
 ## Status
 
-v0.9 foundation: the router and 35 focused sub-skills — all listed above. The map (`docs/MAP.md`) covers every micro-step, so no stage is empty. All 36 shipped skills are built (see `skills/manifest.json`); the 3 MAP needs with no implementing skill yet — Benchmark (SWE-bench), Sandbox runtime (SWE-agent/swe-rex), and Skill eval (plugin-eval) — are built in order, each proven before it ships.
+v0.10 foundation: the router and 35 focused sub-skills — all listed above. The map (`docs/MAP.md`) covers every micro-step, so no stage is empty. All 36 shipped skills are built (see `skills/manifest.json`); the 3 MAP needs with no implementing skill yet — Benchmark (SWE-bench), Sandbox runtime (SWE-agent/swe-rex), and Skill eval (plugin-eval) — are built in order, each proven before it ships.
 
 Eval honesty: the 33 scenario evals in `evals/*.md` are manual text scenarios, not scored harness runs. 32 of them carry a dated "Last run" note from a run on throwaway /tmp paths, not a harness re-run. By exact file-stem match, 9 of the 36 skills have no matching `*-01.md` eval file, and 6 eval files have no matching skill directory. One of the six is `router-01.md`, which evaluates the Router in `skills/orcinus`. The only harness-scored evals are the two waza suites, and both grade only `orcinus-verify`. The mock suite ran 2/2 with the real waza v0.40.0 binary, but a mock pass proves the harness runs, never the skill. The agent-behaviour suite (`evals/waza-orcinus-verify-agent/`, executor copilot-sdk, 9 tasks, 1 trial each) has never run with a real executor, so its results are unproven. 9 tasks × 1 trial at a 0.8 threshold cannot measure an LLM. At least 5 trials per task with a real executor is future work (see `SCOPE.md`).
 
