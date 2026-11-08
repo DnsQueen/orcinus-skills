@@ -1,0 +1,52 @@
+=== ORCINUS demo — raw verification log ===
+Date: 2026-11-08T15:31:38Z (UTC)
+Repo: DnsQueen/orcinus-skills, examples/demo/
+
+--- npm ci ---
+
+added 260 packages in 3s
+
+68 packages are looking for funding
+  run `npm fund` for details
+exit=0
+
+--- npm run build ---
+
+> orcinus-demo-scaffold@0.1.0 build
+> tsc
+exit=0
+
+--- npm run lint ---
+
+> orcinus-demo-scaffold@0.1.0 lint
+> eslint .
+exit=0
+
+--- npm run typecheck ---
+
+> orcinus-demo-scaffold@0.1.0 typecheck
+> tsc --noEmit
+exit=0
+
+--- npm test ---
+
+> orcinus-demo-scaffold@0.1.0 test
+> tsc && node --test dist/tests/*.test.js
+
+✔ no warning below 80% of budget (1.07235ms)
+✔ warning at 80% of budget (0.256526ms)
+✔ throws when budget is not positive (0.878129ms)
+✔ weekly summary for [20, 30, 30] of 100 (1.991692ms)
+✔ weekly summary for empty spending of 100 (0.212599ms)
+✔ weekly summary below the warning line (0.158679ms)
+✔ throws when budget is not positive (0.646931ms)
+✔ weekly summary rounds a non-divisible percent up: [79.6] of 100 (0.236656ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 178.555878
+exit=0
