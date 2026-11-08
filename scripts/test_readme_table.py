@@ -85,6 +85,34 @@ def test_build_skill_table_counts_python_files():
     assert "skills/webapp-testing/examples/console_logging.py" in counts
 
 
+def test_python_counts_paths_use_forward_slashes_on_windows():
+    """CI 0.10.5, windows job: the generated .py-counts comment
+    differed from the committed README on Windows only, so the
+    validator reported the skill table stale ("README skill table
+    is stale — run scripts/generate_readme_table.py"). The
+    enumeration was built with f"skills/{rel}" — and str(Path)
+    uses backslashes on Windows, while the committed README has
+    forward slashes. (.gitattributes forces LF everywhere, so
+    line endings were not it.) The paths must be formatted with
+    as_posix() on every platform. PureWindowsPath simulates the
+    Windows str() without a Windows machine: on the old code
+    this test fails with backslashes in `outside`."""
+    from pathlib import PureWindowsPath
+
+    class _WindowsSkillsDir(PureWindowsPath):
+        def rglob(self, pattern):
+            return [
+                self / "database-designer" / "index_optimizer.py",
+                self / "orcinus-verify" / "scripts" / "content_digest.py",
+            ]
+
+    total, scripts, outside = grt._python_counts(_WindowsSkillsDir("skills"))
+    assert total == 2
+    assert scripts == 1
+    assert outside == ["skills/database-designer/index_optimizer.py"]
+    assert "\\" not in ", ".join(outside)
+
+
 def test_build_skill_table_is_deterministic():
     manifest = json.loads((REPO / "skills" / "manifest.json").read_text())
     assert grt.build_skill_table(manifest) == grt.build_skill_table(manifest)

@@ -57,7 +57,11 @@ def _python_counts(skills_dir):
         if len(rel.parts) >= 2 and rel.parts[1] == "scripts":
             scripts += 1
         else:
-            outside.append(f"skills/{rel}")
+            # Forward slashes on every platform: str(Path) uses
+            # backslashes on Windows, which made the generated
+            # table differ from the committed README there (CI
+            # 0.10.5, windows job: "README skill table is stale").
+            outside.append(f"skills/{rel.as_posix()}")
     return total, scripts, outside
 
 
