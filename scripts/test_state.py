@@ -821,13 +821,31 @@ def test_six_sequential_cli_transitions_print_no_stale_lock_note(tmp_path):
         assert "stale lock" not in proc.stderr, (to_stage, proc.stderr)
 
 
+# Hold the lock from another process (the production shape: a
+# second orcinus run), cross-platform: a same-process fd does not
+# conflict on Windows, where msvcrt locking is per-process, so a
+# same-process contender would let the first try succeed there
+# and the stale-lock note would never fire. The holder prints
+# "locked" once it holds the lock, then sleeps and exits (the OS
+# releases the lock on exit).
+_HOLD_LOCK_SCRIPT = (
+    "import os, sys, time\n"
+    "fd = os.open(sys.argv[1], os.O_RDWR)\n"
+    "try:\n"
+    "    import fcntl; fcntl.flock(fd, fcntl.LOCK_EX)\n"
+    "except ImportError:\n"
+    "    import msvcrt; os.lseek(fd, 0, 0); msvcrt.locking(fd, msvcrt.LK_LOCK, 1)\n"
+    "print('locked', flush=True)\n"
+    "time.sleep(float(sys.argv[2]))\n"
+)
+
+
 def test_stale_lock_note_still_fires_after_contention(tmp_path, capsys):
     """FND-005 control: the note is suppressed only when the flock
     was free on first try — after genuine contention with a dead
     recorded holder, the note still fires."""
+    import gc
     import os
-    import threading
-    import time
 
     state_path = tmp_path / "state.json"
     state_path.write_text("{}\n", encoding="utf-8")
@@ -835,28 +853,45 @@ def test_stale_lock_note_still_fires_after_contention(tmp_path, capsys):
     assert fd is not None
     st._unlock(fd)
     os.close(fd)
-    # Plant a dead holder's PID in the lock file.
+    # Plant a dead holder's PID in the lock file. The child must
+    # be released first (del + gc closes its handle): a Popen kept
+    # alive in this test would keep the Windows handle open and
+    # the PID would read alive there. The guard proves the PID
+    # reads dead on every platform before the test proceeds.
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead_pid = proc.pid
     proc.wait()
-    lock_path.write_text(f" {proc.pid}\n", encoding="utf-8")
-    # Hold the flock from another fd so the first try fails, then
-    # release it: the acquisition waits, then succeeds.
-    contender = os.open(lock_path, os.O_RDWR)
-    assert st._try_lock(contender)
+    del proc
+    gc.collect()
+    assert not st._pid_is_alive(dead_pid)
+    lock_path.write_text(f" {dead_pid}\n", encoding="utf-8")
+    # Hold the lock from another process so the first try fails,
+    # then release it: the acquisition waits, then succeeds.
+    holder = subprocess.Popen(
+        [sys.executable, "-c", _HOLD_LOCK_SCRIPT, str(lock_path), "1"],
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    assert holder.stdout.readline().strip() == "locked"
+    fd2 = None
+    try:
+        fd2, _, _ = st._acquire_lock(state_path, timeout_s=10.0)
+        assert fd2 is not None
+        assert "stale lock" in capsys.readouterr().err
+    finally:
+        if fd2 is not None:
+            st._unlock(fd2)
+            os.close(fd2)
+        holder.wait(timeout=10)
 
-    def _release():
-        time.sleep(0.2)
-        st._unlock(contender)
-        os.close(contender)
 
-    threading.Thread(target=_release, daemon=True).start()
-    fd2, _, _ = st._acquire_lock(state_path, timeout_s=10.0)
-    assert fd2 is not None
-    assert "stale lock" in capsys.readouterr().err
-    st._unlock(fd2)
-    os.close(fd2)
-
-
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="os.kill(pid, 0) semantics are POSIX-only: on Windows a "
+    "reaped child still has a live kernel object while its Popen "
+    "handle is open, so the PID reads alive (see "
+    "test_pid_is_alive_windows_probe)",
+)
 def test_pid_is_alive_posix():
     """_pid_is_alive on POSIX: the current process is alive; a
     reaped subprocess's PID is dead."""
