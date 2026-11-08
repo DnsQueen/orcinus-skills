@@ -3,6 +3,22 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.6] — 2026-11-09
+
+CI fix for the 0.10.5 Windows failure (run 42518738682:
+`test (windows-latest, 3.12)` failed at "Validate the repo" —
+"README skill table is stale").
+
+### Fixed
+
+- The round-9 FND-004 enumeration built repo-relative `.py` paths
+  with `f"skills/{rel}"`, and `str(Path)` uses backslashes on
+  Windows, so the generated skill-table comment differed from the
+  committed README there and the validator reported it stale. The
+  paths are now formatted with `rel.as_posix()`, identical on every
+  platform; a regression test simulates Windows `str(Path)` with
+  `PureWindowsPath`.
+
 ## [0.10.5] — 2026-11-08
 
 Round-9 fix pass for the audit v3 of v0.10.4 (10 findings: 9
