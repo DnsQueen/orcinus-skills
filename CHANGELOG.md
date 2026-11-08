@@ -3,6 +3,24 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.10] — 2026-11-09
+
+CI fix for the 0.10.9 macOS and Windows failures (run 42532295528:
+`test (macos-latest, 3.12)` failed 1 test and `test
+(windows-latest, 3.12)` failed 4, all in the new caveman Track 3
+host isolation).
+
+### Fixed
+
+- `isolated_workdir` had one structural bug with two faces: on
+  macOS `$TMPDIR` is a symlink (`/var` → `/private/var`), so the
+  yielded temp path was unresolved while `Path.cwd()` is resolved;
+  on Windows the cwd was restored only after
+  `TemporaryDirectory` cleanup, and Windows cannot delete the
+  process's current directory (`WinError 32`). The yielded path
+  is now resolved and the cwd is restored inside the
+  `TemporaryDirectory` block, before cleanup runs.
+
 ## [0.10.9] — 2026-11-09
 
 Two takeaways from the 15-repo evaluation (2026-11-09), implemented
