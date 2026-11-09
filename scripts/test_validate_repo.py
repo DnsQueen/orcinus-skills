@@ -1366,7 +1366,7 @@ def test_readme_skill_table_stale_fails(tmp_path, monkeypatch):
     readme = root / "README.md"
     readme.write_text(
         readme.read_text(encoding="utf-8").replace(
-            "| [orcinus](skills/orcinus) |", "| [orcinus](skills/orcinus) | 0-100 |"
+            "[orcinus](skills/orcinus)", "[orcinus](skills/orcinus-renamed)"
         ),
         encoding="utf-8",
     )

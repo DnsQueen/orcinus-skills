@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Generate the skill table in README.md from skills/manifest.json.
+"""Generate the skill list in README.md from skills/manifest.json.
 
-The README's skill list is a table, not a hand-kept bullet list:
-hand-kept lists drift from the manifest silently (a renamed skill, a
-dropped row, a stale count). The table is generated from the manifest
-— the single source of truth for the skill inventory — and the repo
-validator checks it is current.
+The README's skill list is grouped by lifecycle stage, not a
+hand-kept bullet list: hand-kept lists drift from the manifest
+silently (a renamed skill, a dropped row, a stale count). The list
+is generated from the manifest — the single source of truth for the
+skill inventory — and the repo validator checks it is current.
+
+The list carries no provenance: where a skill came from lives in
+that skill's ATTRIBUTION.md and in docs/MAP.md, not on the front
+page.
 
 Run: python3 scripts/generate_readme_table.py
 Check (no writes): python3 scripts/generate_readme_table.py --check
 
 Stdlib only. The output is deterministic: the same manifest always
-produces the same table bytes.
+produces the same list bytes.
 """
 
 import json
@@ -24,15 +28,6 @@ MANIFEST = ROOT / "skills" / "manifest.json"
 
 BEGIN = "<!-- BEGIN GENERATED SKILL TABLE — do not edit by hand; run scripts/generate_readme_table.py -->"
 END = "<!-- END GENERATED SKILL TABLE -->"
-
-
-def _source_cell(source):
-    if source == "from-scratch":
-        return "from-scratch"
-    if source.startswith("https://github.com/"):
-        repo = source[len("https://github.com/") :]
-        return f"[{repo}]({source})"
-    return source
 
 
 def _python_counts(skills_dir):
@@ -79,32 +74,45 @@ def _python_counts_line(skills_dir):
     )
 
 
+# The README groups skills by lifecycle stage, in stage order — the
+# same bands docs/MAP.md uses. A skill that covers two stages
+# appears under both.
+STAGE_GROUPS = (
+    ("0-9", "Idea"),
+    ("10-19", "Architecture"),
+    ("20-39", "Coding"),
+    ("40-59", "Verification"),
+    ("50-79", "Security & debugging"),
+    ("80-100", "Finalize & publish"),
+    ("0-100", "All stages"),
+)
+
+
 def build_skill_table(manifest, skills_dir=None):
-    """Render the skill table (Markdown) from the manifest dict,
-    preceded by the generated .py-counts comment. `skills_dir`
-    is the skills directory the counts are read from (default:
-    the skills directory beside this script's repo root); the
-    repo validator passes its own root, so a test repo's counts
-    are its own, not this checkout's."""
+    """Render the skill list (Markdown) from the manifest dict,
+    grouped by lifecycle stage and preceded by the generated
+    .py-counts comment. `skills_dir` is the skills directory the
+    counts are read from (default: the skills directory beside
+    this script's repo root); the repo validator passes its own
+    root, so a test repo's counts are its own, not this
+    checkout's. A skill covering two stages is listed under
+    both."""
     if skills_dir is None:
         skills_dir = ROOT / "skills"
-    lines = [
-        _python_counts_line(skills_dir),
-        "| Skill | Stages | Licence | Integration | Source |",
-        "|---|---|---|---|---|",
-    ]
-    for name in sorted(manifest["skills"]):
-        skill = manifest["skills"][name]
-        stages = ", ".join(skill["stages"])
-        lines.append(
-            f"| [{name}](skills/{name}) | {stages} | {skill['license']} | "
-            f"{skill.get('integration', '')} | {_source_cell(skill.get('source', ''))} |"
+    skills = manifest["skills"]
+    groups = []
+    for stages, title in STAGE_GROUPS:
+        names = sorted(n for n, s in skills.items() if stages in s["stages"])
+        if not names:
+            continue
+        groups.append(
+            f"### {title} ({stages})\n\n" + ", ".join(f"[{n}](skills/{n})" for n in names)
         )
-    return "\n".join(lines) + "\n"
+    return _python_counts_line(skills_dir) + "\n\n" + "\n\n".join(groups) + "\n"
 
 
 def table_section(readme_text):
-    """The table currently in README.md (between the markers)."""
+    """The generated skill list currently in README.md (between the markers)."""
     start = readme_text.index(BEGIN) + len(BEGIN)
     if not readme_text[start:].startswith("\n"):
         raise ValueError("the generated-table BEGIN marker must be followed by a newline")
@@ -114,7 +122,7 @@ def table_section(readme_text):
 
 
 def replace_table(readme_text, manifest):
-    """README.md with its skill table replaced by a fresh generation."""
+    """README.md with its skill list replaced by a fresh generation."""
     start = readme_text.index(BEGIN) + len(BEGIN)
     if not readme_text[start:].startswith("\n"):
         raise ValueError("the generated-table BEGIN marker must be followed by a newline")

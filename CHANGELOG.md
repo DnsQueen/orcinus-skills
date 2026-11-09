@@ -3,6 +3,28 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.1] — 2026-11-09
+
+**Changed:** the README no longer lists where each skill came from.
+Provenance is unchanged — it lives in `THIRD_PARTY_NOTICES.md`
+(central index), each skill's `ATTRIBUTION.md`, and `docs/MAP.md` —
+it was only ever on the front page by accident, and a 36-row list of
+upstream repos is not what a first-time reader needs.
+
+### Changed
+
+- **README rewritten:** shorter, organised around use (install,
+  invoke, first session, how verification works, boundaries,
+  status) instead of internals; the skill inventory is now a
+  stage-grouped list with no Source or Licence columns; two
+  diagrams (`docs/images/lifecycle.svg`, `docs/images/verification.svg`).
+  The honest Status section and the Hermes untested caveat are
+  unchanged in substance.
+- **`scripts/generate_readme_table.py`:** now emits the grouped
+  list from `skills/manifest.json` instead of the five-column
+  table; the repo validator still checks the generated section
+  byte-for-byte.
+
 ## [0.12.0] — 2026-11-10
 
 **Breaking:** the targeted-rerun fallback no longer mints VERIFIED.

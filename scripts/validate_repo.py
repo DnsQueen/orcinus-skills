@@ -71,9 +71,9 @@ Checks:
  17. No sub-skill description tells the user to type /<skill>:
      sub-skills are user-invocable: false, so the instruction is a
      dead end.
- 18. The skill table in README.md is exactly what
+ 18. The skill list in README.md is exactly what
      scripts/generate_readme_table.py produces from
-     skills/manifest.json — a hand-edited table drifts from the
+     skills/manifest.json — a hand-edited list drifts from the
      inventory silently.
  19. Every MAP row's `Implemented in` names a real ORCINUS skill
      folder (or nothing, for a `todo` row): a `built` row must name
@@ -1171,8 +1171,8 @@ def check_no_slash_invocation():
 
 
 def check_readme_skill_table():
-    """The skill table in README.md is exactly what the generator
-    produces from skills/manifest.json — a hand-edited table drifts
+    """The skill list in README.md is exactly what the generator
+    produces from skills/manifest.json — a hand-edited list drifts
     from the inventory silently. The generated section also carries
     the .py counts (round 9, FND-004), recomputed from this repo's
     skills/ directory, so a stale count fails here too."""

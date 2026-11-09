@@ -1,10 +1,10 @@
 """Tests for the README skill table generator (round 5, T10) and
 for the README wording fixes (R3 #14, #15, #20; G3).
 
-The skill list in README.md is a table generated from
+The skill list in README.md is a grouped list generated from
 skills/manifest.json (scripts/generate_readme_table.py), not a
 hand-kept bullet list: the two drift apart silently otherwise. The
-repo validator checks the table is current.
+repo validator checks the list is current.
 
 The secret-shaped-string test scans every tracked file for a
 realistic key shape (sk- at a word boundary + 16 or more key
@@ -44,15 +44,34 @@ def _section(text, heading):
 def test_build_skill_table_from_manifest():
     manifest = json.loads((REPO / "skills" / "manifest.json").read_text())
     table = grt.build_skill_table(manifest)
-    rows = [line for line in table.splitlines() if line.startswith("| [")]
-    assert len(rows) == 36
     # FND-004: the first line is the generated .py counts comment;
-    # the table header follows it.
+    # the grouped list follows it.
     assert table.splitlines()[0].startswith("<!-- ")
-    assert table.splitlines()[1] == "| Skill | Stages | Licence | Integration | Source |"
-    assert any("| [orcinus-verify](skills/orcinus-verify) | 40-59 |" in r for r in rows)
-    assert any("| [refactor](skills/refactor) | 50-79 | MIT | verbatim |" in r for r in rows)
+    # The list carries no provenance: no source column, no licence
+    # column, no upstream links — those live in each skill's
+    # ATTRIBUTION.md and in docs/MAP.md, not on the front page.
+    assert "github.com" not in table
+    assert "Licence" not in table and "Source" not in table
     assert "12 stars" not in table
+    # Every skill is listed once per stage it covers: 36 skills,
+    # 37 links (visual-regression covers 40-59 and 80-100).
+    links = re.findall(r"\[([a-z0-9-]+)\]\(skills/[a-z0-9-]+\)", table)
+    assert len(links) == 37
+    assert len(set(links)) == 36
+    assert set(links) == set(manifest["skills"])
+    # Group headings, in stage order.
+    headings = [line for line in table.splitlines() if line.startswith("### ")]
+    assert headings == [
+        "### Idea (0-9)",
+        "### Architecture (10-19)",
+        "### Coding (20-39)",
+        "### Verification (40-59)",
+        "### Security & debugging (50-79)",
+        "### Finalize & publish (80-100)",
+        "### All stages (0-100)",
+    ]
+    assert "[orcinus-verify](skills/orcinus-verify)" in table
+    assert "[visual-regression](skills/visual-regression)" in table
 
 
 def test_build_skill_table_counts_python_files():
