@@ -3,6 +3,29 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.1] — 2026-11-09
+
+Two fixes to the 0.11.0 targeted re-run checker, both caught by CI
+before any 0.11.0 release (no 0.11.0 tag exists).
+
+### Fixed
+
+- **Windows worktree-path comparison:** `git worktree list
+  --porcelain` prints paths with forward slashes even on Windows,
+  while `str(Path)` uses backslashes there, so the
+  no-lingering-worktree assertion in
+  `test_honest_rerun_writes_exact_proof_shape` failed only on
+  `windows-latest`. Both sides are now compared with
+  `Path.as_posix()`; the check itself is unchanged.
+- **Fail-first nodeid passed twice:** when the fail-first test's
+  file was already among the changed test files, `select_targets`
+  named the nodeid twice, which pytest 8.4.2 runs twice (9.0.3
+  dedupes), so proof JUnit totals over-counted distinct tests
+  under older pytest. The nodeid is now dropped from the pytest
+  argv when its file is already a target (the file run covers it
+  once); the nodeid is still returned and still used for the
+  presence check.
+
 ## [0.11.0] — 2026-11-09
 
 Attested verification: a local validator PASS is now provisional —
