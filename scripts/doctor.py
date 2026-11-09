@@ -5,9 +5,10 @@ gates, and say exactly which ones it cannot.
 Each check reports one of three states:
 - ready: the tool is installed and usable;
 - incomplete: an OPTIONAL tool is missing, but the gate it serves
-  can be skipped (node for the demo and the JS/TS skills, waza for
-  the eval suites — the report says what is unverified because of
-  it);
+  can be skipped (node for the demo and the JS/TS skills,
+  oasdiff/stryker/mutmut for the breaking-change and
+  mutation-testing skills, waza for the eval suites — the report
+  says what is unverified because of it);
 - incompatible: a MANDATORY tool is missing (git, python, pytest,
   ruff — without one of those a gate cannot run at all), the tool
   is present but the wrong version, or the environment cannot run
@@ -219,6 +220,58 @@ def check_node():
             "node", "incompatible", f"node is installed but its version is unreadable: {out!r}"
         )
     return _check("node", "ready", f"node {out.strip()}")
+
+
+def _check_optional_cli(name, detail_missing, fix):
+    """One optional external binary, in the check_node shape: missing
+    (or not runnable) is incomplete, never incompatible — the gate
+    it serves can be skipped — and present-but-unreadable is
+    incompatible, like node (round 8, N-B1). No minimum version is
+    enforced: no minimum is documented for these tools here."""
+    rc, out = _run([name, "--version"])
+    if rc is None or rc != 0 or not out.strip():
+        return _check(name, "incomplete", detail_missing, fix=fix)
+    version = _version_tuple(out)
+    if version is None:
+        return _check(
+            name, "incompatible", f"{name} is installed but its version is unreadable: {out!r}"
+        )
+    return _check(name, "ready", f"{name} {out.strip()}")
+
+
+def check_oasdiff():
+    # Round 11, FND-013: the breaking-change skill shells out to
+    # oasdiff, but doctor had no probe for it — an agent could be
+    # routed there on a machine without it and get a shell error
+    # instead of an INCOMPLETE step.
+    return _check_optional_cli(
+        "oasdiff",
+        "oasdiff is not installed or does not run (needed for "
+        "the breaking-change skill, not for the Python gates)",
+        fix="Install oasdiff from github.com/oasdiff/oasdiff/releases, or run go install github.com/oasdiff/oasdiff@latest.",
+    )
+
+
+def check_stryker():
+    # Round 11, FND-013: the mutation-testing skill shells out to
+    # Stryker, but doctor had no probe for it.
+    return _check_optional_cli(
+        "stryker",
+        "stryker is not installed or does not run (needed for "
+        "the mutation-testing skill, not for the Python gates)",
+        fix="Install Stryker (npm install -g @stryker-mutator/core, or per-project; see the mutation-testing skill).",
+    )
+
+
+def check_mutmut():
+    # Round 11, FND-013: the mutation-testing-python skill shells
+    # out to mutmut, but doctor had no probe for it.
+    return _check_optional_cli(
+        "mutmut",
+        "mutmut is not installed or does not run (needed for "
+        "the mutation-testing-python skill, not for the Python gates)",
+        fix="pip install mutmut",
+    )
 
 
 def _windows_owned_by_current_user(path):
@@ -451,6 +504,9 @@ def main():
         check_ruff(),
         check_git(),
         check_node(),
+        check_oasdiff(),
+        check_stryker(),
+        check_mutmut(),
         check_waza(),
         check_repo_files(),
     ]

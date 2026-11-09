@@ -646,6 +646,9 @@ def _all_ready(monkeypatch, override):
         "check_ruff",
         "check_git",
         "check_node",
+        "check_oasdiff",
+        "check_stryker",
+        "check_mutmut",
         "check_waza",
         "check_repo_files",
     ):
@@ -722,3 +725,55 @@ def test_node_real_version_is_ready(monkeypatch):
     result = doctor.check_node()
     assert result["status"] == "ready"
     assert "24.22.1" in result["detail"]
+
+
+# --- Round 11 (2026-11-09): FND-013 — oasdiff/stryker/mutmut probes ---
+
+
+def test_missing_external_tools_stay_incomplete(monkeypatch):
+    """FND-013: oasdiff, Stryker and mutmut are optional (the
+    breaking-change and mutation-testing skills, not the Python
+    gates) — missing them stays incomplete, exit 1. The regression
+    the finding requires: absent tools report 'incomplete', never
+    'ok'."""
+    _patched_run(monkeypatch, {})
+    assert doctor.check_oasdiff()["status"] == "incomplete"
+    assert doctor.check_stryker()["status"] == "incomplete"
+    assert doctor.check_mutmut()["status"] == "incomplete"
+
+
+def test_external_tools_real_version_is_ready(monkeypatch):
+    """Control: a parseable `--version` still reports ready, with
+    the version in the detail. The fake outputs are the probes'
+    parsing contract (first X.Y[.Z] in the output), not a claim
+    about each vendor's exact banner."""
+    _patched_run(
+        monkeypatch,
+        {
+            ("oasdiff", "--version"): (0, "oasdiff version 1.35.0"),
+            ("stryker", "--version"): (0, "8.0.0"),
+            ("mutmut", "--version"): (0, "mutmut version 3.3.0"),
+        },
+    )
+    assert doctor.check_oasdiff()["status"] == "ready"
+    assert "1.35.0" in doctor.check_oasdiff()["detail"]
+    assert doctor.check_stryker()["status"] == "ready"
+    assert "8.0.0" in doctor.check_stryker()["detail"]
+    assert doctor.check_mutmut()["status"] == "ready"
+    assert "3.3.0" in doctor.check_mutmut()["detail"]
+
+
+def test_external_tools_garbage_version_is_incompatible(monkeypatch):
+    """Present-but-unreadable is incompatible, like node (N-B1):
+    a tool printing garbage must not report ready."""
+    _patched_run(
+        monkeypatch,
+        {
+            ("oasdiff", "--version"): (0, "no version here"),
+            ("stryker", "--version"): (0, "no version here"),
+            ("mutmut", "--version"): (0, "no version here"),
+        },
+    )
+    for check in (doctor.check_oasdiff(), doctor.check_stryker(), doctor.check_mutmut()):
+        assert check["status"] == "incompatible"
+        assert "unreadable" in check["detail"]

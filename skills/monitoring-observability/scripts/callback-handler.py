@@ -1,3 +1,6 @@
+# ORCINUS note (round 11, FND-006): host-app example, not runnable as shipped — it imports
+# the host application's own app.core.config module (plus langchain-anthropic and langfuse).
+# Copy it into your app and point the import at your own config; see the skill's SKILL.md.
 """
 Langfuse CallbackHandler for LangChain/LangGraph integration.
 

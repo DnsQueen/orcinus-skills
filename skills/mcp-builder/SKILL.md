@@ -3,15 +3,20 @@ name: mcp-builder
 description: Guide for creating high-quality MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. Use when building MCP servers to integrate external APIs or services, whether in Python (FastMCP) or Node/TypeScript (MCP SDK). Only invoke via the orcinus router.
 license: Apache-2.0
 user-invocable: false
+compatibility: Requires Python 3.11+ and the mcp (>= 1.8.0) and anthropic (>= 0.39.0) packages; install with pip install mcp>=1.8.0 anthropic>=0.39.0.
 ---
 
-<!-- ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — frontmatter adapted to the Agent Skills spec (license, user-invocable) and the ORCINUS router-only note appended to the description. The body is otherwise verbatim; see ATTRIBUTION.md. -->
+<!-- ORCINUS change notice (Apache-2.0 §4(b)): ORCINUS changed this file from upstream anthropics/skills@ca45fc4 — frontmatter adapted to the Agent Skills spec (license, user-invocable) and the ORCINUS router-only note appended to the description. The body is otherwise verbatim, except for the Dependencies note added 2026-11-09 (round 11, FND-006) naming the scripts' pip requirements; see ATTRIBUTION.md. -->
 
 # MCP Server Development Guide
 
 ## Overview
 
 Create MCP (Model Context Protocol) servers that enable LLMs to interact with external services through well-designed tools. The quality of an MCP server is measured by how well it enables LLMs to accomplish real-world tasks.
+
+## Dependencies
+
+The scripts in `scripts/` need the `mcp` (>= 1.8.0) and `anthropic` (>= 0.39.0) packages: `pip install -r scripts/requirements.txt`. Without them `connections.py` and `evaluation.py` fail at import time.
 
 ---
 

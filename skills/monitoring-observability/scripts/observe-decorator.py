@@ -1,3 +1,5 @@
+# ORCINUS note (round 11, FND-006): host-app example — it needs the langfuse package
+# (pip install langfuse) and a configured Langfuse host; it does not run in this repo as shipped.
 """
 Basic @observe decorator usage for Langfuse tracing.
 

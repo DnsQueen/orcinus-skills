@@ -3,6 +3,7 @@ name: accessibility
 description: Audit a web UI for accessibility with the ultra11y engine (RGAA 4.1.2 on a WCAG 2.2 AA core, 102 static checks), fix what it finds, and re-audit. Use before shipping any web UI change and in CI on every UI change. A page that was never audited is not accessible. Only invoke via the orcinus router.
 license: MIT
 user-invocable: false
+compatibility: Requires Node.js; the bundled ultra11y engine is self-contained and install-free, with no dependencies beyond Node.
 ---
 
 # ACCESSIBILITY — can everyone use this page?

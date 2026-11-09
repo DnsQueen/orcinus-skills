@@ -3,6 +3,7 @@ name: monitoring-observability
 description: Monitoring and observability patterns for Prometheus metrics, Grafana dashboards, Langfuse v4 LLM tracing (as_type, score_current_span, should_export_span, LangfuseMedia), and drift detection. Use when adding logging, metrics, distributed tracing, LLM cost tracking, or quality drift monitoring. Only invoke via the orcinus router.
 license: MIT
 user-invocable: false
+compatibility: Requires Python 3.11+ and the langfuse package for the Langfuse scripts; the LangChain callback example also imports the host application's own config module and is illustrative, not runnable as shipped.
 ---
 
 # Monitoring & Observability
@@ -127,6 +128,8 @@ Detection and alerting for silent failures in LLM agents.
 | `references/dev-agent-lens.md` | LiteLLM proxy layer (or Bifrost) for API-boundary observability |
 | `examples/orchestkit-monitoring-dashboard.md` | Worked monitoring dashboard example |
 | `scripts/` | Templates: Prometheus, OpenTelemetry, health checks, Langfuse |
+
+The Langfuse scripts in `scripts/` are host-app examples, not runnable as shipped: `observe-decorator.py` needs the `langfuse` package (`pip install langfuse`) and a configured Langfuse host, and `callback-handler.py` additionally needs `langchain-anthropic` and imports the host application's own `app.core.config` module — copy it into your app and point the import at your own config.
 
 ## Related Skills
 

@@ -3,6 +3,7 @@ name: mutation-testing-python
 description: Check whether Python tests actually catch bugs by mutating the code and seeing if the tests fail. Use after a Python slice passes its tests, before calling it done, and whenever a Python test suite looks green but unproven. Python only. Only invoke via the orcinus router.
 license: MIT
 user-invocable: false
+compatibility: Requires Python 3.11+, pytest, and mutmut 3.x; install with pip install mutmut pytest.
 ---
 
 # MUTATION-TESTING-PYTHON — do the Python tests catch anything?

@@ -3,6 +3,7 @@ name: breaking-change
 description: Detect breaking changes between two OpenAPI specs before shipping, so a change that breaks consumers never ships under the same version. Use before merging any API change and in CI on every spec change. OpenAPI 3.x only. Only invoke via the orcinus router.
 license: MIT
 user-invocable: false
+compatibility: Requires the oasdiff CLI (the eval used v1.35.0); install a prebuilt binary from the official releases or with go install github.com/oasdiff/oasdiff@latest.
 ---
 
 # BREAKING-CHANGE — did the API break, and is it allowed to?
