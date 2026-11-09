@@ -26,7 +26,13 @@ Two layers, kept separate:
    typecheck, test) must be required or explicitly waived with a
    reason; silence is not a waiver. A PASS for a behaviour change
    (bug-fix, feature, refactor) additionally needs the test gate and
-   a fail-first proof. The proof carries the red run itself
+   a fail-first proof, and assertion-bearing tests in the changed
+   test files: at least one `assert`, `assert*` method call, or
+   `pytest.raises` / `pytest.warns` in them (counted by AST over
+   the whole file, helpers included; non-Python test files are
+   not counted). A plan may also declare an optional
+   `mutation_gate`, which must then be backed by a passing
+   mutation-test check. The proof carries the red run itself
    (command, non-zero exit code, output), and the test id must
    appear in the red output and in the passing test check's output
    — a bare test name with no output proves nothing. The test id
@@ -141,6 +147,7 @@ imported — schema/validator pattern only.
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -1060,6 +1067,178 @@ def check_test_report(bundle, problems, bundle_dir):
         problems.append(
             f"test_report lists {total} test(s) but none passed: a required test gate "
             "must have at least one passing test (an all-skipped suite ran no test)"
+        )
+
+
+# A test file, by the Python naming convention: test_*.py or
+# *_test.py, in any directory.
+_TEST_FILE_RE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
+
+# unittest-style assertion methods: assertEqual, assertTrue,
+# assertRaises, ... — any attribute starting with "assert".
+_ASSERT_METHOD_RE = re.compile(r"^assert")
+
+
+def _count_assertions(source):
+    """The number of assertions in one Python test file's source,
+    or None when it cannot be parsed. Counting rule (round 11,
+    FND-002): every `assert` statement in the file counts —
+    including asserts inside helpers the tests call, since the
+    count is over the whole file, not only inside test functions
+    — plus every `assert*` method call (unittest's
+    self.assertEqual etc.) and every `pytest.raises` /
+    `pytest.warns` use (a test that expects an exception proves
+    the code path ran). Anything else — a bare call like
+    charge(100) with no assertion — counts as zero: the test
+    passes whatever the code does. Stdlib ast, written here (no
+    borrowed counting approach)."""
+    try:
+        tree = ast.parse(source.decode("utf-8"))
+    except (SyntaxError, UnicodeDecodeError, ValueError):
+        return None
+    count = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assert):
+            count += 1
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if _ASSERT_METHOD_RE.match(node.func.attr):
+                count += 1
+            elif (
+                node.func.attr in ("raises", "warns")
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "pytest"
+            ):
+                count += 1
+    return count
+
+
+def _read_changed_test_file(repo_root, bundle, path):
+    """The bytes of a changed test file: the working-tree file when
+    it exists (the tree the checks ran on), else the committed
+    bytes at the bundle revision. None when it cannot be read
+    either way (deleted, or never in the tree). A path escaping
+    the repo is never read from disk."""
+    root = Path(repo_root).resolve()
+    try:
+        disk = (root / path).resolve()
+    except OSError:
+        disk = None
+    if disk is not None and disk.is_relative_to(root):
+        try:
+            if disk.is_file():
+                return disk.read_bytes()
+        except OSError:
+            pass
+    revision = bundle.get("revision")
+    if isinstance(revision, str) and revision:
+        target = _resolve_commit(repo_root, "HEAD" if revision == "working-tree" else revision)
+        if target is not None:
+            return _git_file_bytes(repo_root, target, path)
+    return None
+
+
+def check_assertion_bearing_tests(bundle, problems, repo):
+    """FND-002: a PASS for a behaviour change whose changed test
+    files contain zero assertions is INCOMPLETE, not PASS — a test
+    with no assertion passes identically for a broken and a correct
+    implementation (the auditor's charge(100) repro: `1 passed`
+    for both `return -1` and `return amount`). Only the changed
+    test files count (not the whole suite), and only for behaviour
+    changes with a required test gate — docs-only / config-only
+    bundles have no behaviour to test, and a change touching no
+    test file is not failed by this rule. Non-Python test files are
+    not counted: the AST count covers Python only, so a change
+    whose changed test files are all non-Python is left alone.
+    Without a repo the changed files cannot be read, so the rule
+    runs only when one is given — the CLI always passes one
+    (default: the working directory), the same as the tree binding.
+    A test file that cannot be read at all is not counted; when
+    none of the changed test files can be read the bundle cannot
+    show assertion-bearing tests either, so that fails too."""
+    if bundle.get("verdict") != "PASS":
+        return
+    plan = bundle.get("verification_plan")
+    if not isinstance(plan, dict):
+        return
+    if plan.get("change_type") not in BEHAVIOR_CHANGE_TYPES:
+        return
+    required = plan.get("required_gates")
+    if not isinstance(required, list) or "test" not in required:
+        return
+    files = bundle.get("files_changed")
+    if not isinstance(files, list):
+        return
+    test_files = [f for f in files if isinstance(f, str) and _TEST_FILE_RE.search(f)]
+    if not test_files:
+        return
+    if repo is None:
+        return
+    rc, out = _git_output(repo, "rev-parse", "--show-toplevel")
+    top = out.strip() if rc == 0 else ""
+    if rc != 0 or not top or "\n" in top or not Path(top).is_dir():
+        return  # the tree binding already reports an unusable repo
+    total = 0
+    readable = 0
+    unparsable = []
+    for path in test_files:
+        data = _read_changed_test_file(Path(top), bundle, path)
+        if data is None:
+            continue
+        readable += 1
+        count = _count_assertions(data)
+        if count is None:
+            unparsable.append(path)
+            continue
+        total += count
+    if readable == 0:
+        problems.append(
+            f"no changed test file could be read in {top}: a behaviour "
+            "change cannot show assertion-bearing tests without one"
+        )
+        return
+    if total == 0:
+        detail = ""
+        if unparsable:
+            detail = f" ({'; '.join(unparsable)} could not be parsed as Python)"
+        problems.append(
+            "the changed test files contain no assertions"
+            f"{detail}: a test with no assertion passes identically for "
+            "a broken and a correct implementation — a behaviour "
+            "change needs at least one assert, assert* call, or "
+            "pytest.raises / pytest.warns in its changed test files"
+        )
+
+
+def check_mutation_gate(bundle, problems):
+    """FND-002 (auditor P2-5): a plan may declare an optional
+    `mutation_gate` — the mutation-test check that backs the
+    verification. When declared, a passing check with the declared
+    name must exist, or the bundle is INCOMPLETE, not PASS. When
+    the plan does not declare it, nothing changes: the gate is
+    optional, never a new mandatory requirement. The check must be
+    recorded like any check in a PASS bundle (check_recorded_checks
+    enforces that); the run itself enforces its score threshold
+    through its exit code — a passing recorded check is the
+    evidence, the validator does not parse scores out of output.
+    A PASS rule only: an honest FAIL/INCOMPLETE bundle may declare
+    a gate its mutation run never satisfied."""
+    if bundle.get("verdict") != "PASS":
+        return
+    plan = bundle.get("verification_plan")
+    if not isinstance(plan, dict):
+        return
+    gate = plan.get("mutation_gate")
+    if not isinstance(gate, dict):
+        return
+    check_name = gate.get("check")
+    if not isinstance(check_name, str) or not check_name:
+        return  # the schema layer already reported it
+    passing = {c.get("name") for c in _checks(bundle) if c.get("verdict") == "PASS"}
+    if check_name not in passing:
+        problems.append(
+            f"verification_plan declares mutation_gate check {check_name!r} "
+            "but there is no passing check with that name: a declared "
+            "mutation gate must be backed by a recorded mutation-test check"
         )
 
 
@@ -2920,6 +3099,8 @@ def _validate_bundle_inner(
     check_verdict_consistency(bundle, problems)
     check_fail_first(bundle, problems, bundle_dir)
     check_test_report(bundle, problems, bundle_dir)
+    check_assertion_bearing_tests(bundle, problems, repo)
+    check_mutation_gate(bundle, problems)
     check_identities(bundle, problems)
     check_noop_commands(bundle, problems)
     check_test_gate_invokes_runner(bundle, problems)

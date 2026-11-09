@@ -173,7 +173,7 @@ def _git(repo, *args):
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
 
 
-def _recording_repo(directory):
+def _recording_repo(directory, test_source=None):
     """A throwaway git repo to record captures against, beside the
     bundle directory. record_check.py binds every capture to a
     revision + content digest, so it needs a git repo — but the
@@ -184,7 +184,9 @@ def _recording_repo(directory):
     test_record_check.py's _repo, for the validator tests. The repo
     is a sibling of the bundle directory, never inside it, so the
     validator — which reads named artifacts from the bundle
-    directory — never sees it."""
+    directory — never sees it. `test_source` overrides the fixture
+    test file's content (round 11, FND-002: an assertion-free
+    variant); the default is the assertion-bearing canonical file."""
     directory = Path(directory)
     repo = directory.parent / (directory.name + "-repo")
     if (repo / ".git").exists():
@@ -211,7 +213,9 @@ def _recording_repo(directory):
     (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
     (repo / "tests").mkdir(exist_ok=True)
     (repo / "tests" / "test_capture.py").write_text(
-        "def test_capture_persian_only():\n    assert True\n"
+        test_source
+        if test_source is not None
+        else "def test_capture_persian_only():\n    assert True\n"
         "\n"
         "\n"
         "class TestCapture:\n"
@@ -446,7 +450,7 @@ def _good_bundle():
         "working_tree_state": "clean",
         "requirement": "Fix the Persian capture crash.",
         "acceptance_criteria": ["A Persian-only idea captures without a traceback."],
-        "files_changed": ["skills/idea-capture/scripts/capture.py"],
+        "files_changed": ["skills/idea-capture/scripts/capture.py", "tests/test_capture.py"],
         "checks": [
             {
                 "name": "test",
@@ -2822,6 +2826,150 @@ def test_test_gate_report_not_required_when_verdict_not_pass(tmp_path):
     b["checks"][0]["verdict"] = "FAIL"
     b["checks"][0]["exit_code"] = 1
     assert _problems(b) == []
+
+
+# Round 11, FND-002: an assertion-free suite passes identically for
+# a broken and a correct implementation, so a PASS for a behaviour
+# change needs assertion-bearing tests in the changed test files.
+# The fixture below is the auditor's repro in miniature: charge()
+# returns -1 (wrong) and the tests call it without asserting
+# anything — pytest reports 2 passed.
+_NO_ASSERT_TEST_SOURCE = (
+    "def charge(amount):\n"
+    "    return -1\n"
+    "\n"
+    "\n"
+    "def test_capture_persian_only():\n"
+    "    charge(100)\n"
+    "\n"
+    "\n"
+    "class TestCapture:\n"
+    "    def test_capture_persian_only(self):\n"
+    "        charge(100)\n"
+)
+
+
+def _no_assert_bundle(tmp_path):
+    """A bound PASS bundle whose only changed test file has no
+    assertions: the recording repo's test file is the no-assert
+    source above, and files_changed names it."""
+    repo = _recording_repo(tmp_path, test_source=_NO_ASSERT_TEST_SOURCE)
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path, repo=repo)
+    b["revision"] = _head_sha_of(repo)
+    b["files_changed"] = ["skills/idea-capture/scripts/capture.py", "tests/test_capture.py"]
+    return b, repo
+
+
+def test_count_assertions_counts_helpers_raises_and_unittest():
+    # The counting rule, directly: asserts anywhere in the file
+    # (including helpers the tests call), assert* method calls,
+    # and pytest.raises / pytest.warns — a bare call counts zero,
+    # and an unparsable file counts as None.
+    assert ve._count_assertions(b"def helper():\n    assert True\n") == 1
+    assert ve._count_assertions(b"def test_x(self):\n    self.assertEqual(1, 1)\n") == 1
+    assert (
+        ve._count_assertions(b"def test_x():\n    with pytest.raises(ValueError):\n        f()\n")
+        == 1
+    )
+    assert (
+        ve._count_assertions(b"def test_x():\n    with pytest.warns(UserWarning):\n        f()\n")
+        == 1
+    )
+    assert ve._count_assertions(b"def test_x():\n    charge(100)\n") == 0
+    assert ve._count_assertions(b"def test_x(:\n") is None
+
+
+def test_assertion_free_changed_tests_fail(tmp_path):
+    # FND-002: a behaviour change whose changed test files contain
+    # zero assertions is INCOMPLETE, not PASS — the suite cannot
+    # distinguish the broken implementation from the correct one.
+    b, repo = _no_assert_bundle(tmp_path)
+    problems = _problems(b, tmp_path, repo=repo)
+    assert any("assertion" in p for p in problems), problems
+
+
+def test_assertion_bearing_changed_tests_pass(tmp_path):
+    # FND-002 control: the same shape with assertion-bearing tests
+    # still passes — the rule must not reject a real suite.
+    b, repo = _bound_bundle(tmp_path)
+    b["files_changed"] = ["skills/idea-capture/scripts/capture.py", "tests/test_capture.py"]
+    assert _problems(b, tmp_path, repo=repo) == []
+
+
+def test_behaviour_change_without_changed_test_files_passes(tmp_path):
+    # FND-002: only the changed test files count — a behaviour
+    # change that touches no test file is not failed by this rule.
+    b, repo = _bound_bundle(tmp_path)
+    b["files_changed"] = ["skills/idea-capture/scripts/capture.py"]
+    assert _problems(b, tmp_path, repo=repo) == []
+
+
+def test_docs_only_pass_with_repo_ignores_assertion_rule(tmp_path):
+    # FND-002: docs-only / config-only bundles have no behaviour
+    # to test, so the assertion rule does not apply to them.
+    b = _good_bundle()
+    b.pop("fail_first", None)
+    b["files_changed"] = ["README.md"]
+    b["verification_plan"]["change_type"] = "docs-only"
+    b["verification_plan"]["required_gates"] = []
+    b["verification_plan"]["not_applicable_gates"] = [
+        {"gate": "build", "reason": "Docs-only change; nothing to build."},
+        {"gate": "lint", "reason": "Docs-only change; no code to lint."},
+        {"gate": "typecheck", "reason": "Docs-only change; nothing to typecheck."},
+        {"gate": "test", "reason": "Docs-only change; no behaviour to test."},
+    ]
+    repo = _recording_repo(tmp_path)
+    _recorded_bundle(b, tmp_path, repo=repo)
+    b["revision"] = _head_sha_of(repo)
+    assert _problems(b, tmp_path, repo=repo) == []
+
+
+def test_declared_mutation_gate_without_check_fails(tmp_path):
+    # FND-002: a plan that declares mutation_gate must be backed by
+    # a passing check with the declared name — otherwise the bundle
+    # is INCOMPLETE, not PASS.
+    b, repo = _bound_bundle(tmp_path)
+    b["files_changed"] = ["skills/idea-capture/scripts/capture.py", "tests/test_capture.py"]
+    b["verification_plan"]["mutation_gate"] = {"check": "mutation"}
+    problems = _problems(b, tmp_path, repo=repo)
+    assert any("mutation_gate" in p and "no passing check" in p for p in problems), problems
+
+
+def test_declared_mutation_gate_with_passing_check_passes(tmp_path):
+    # FND-002 control: the declared mutation gate satisfied by a
+    # recorded passing check still passes.
+    repo = _recording_repo(tmp_path)
+    b = _good_bundle()
+    b["files_changed"] = ["skills/idea-capture/scripts/capture.py", "tests/test_capture.py"]
+    b["verification_plan"]["mutation_gate"] = {"check": "mutation", "min_score": 80}
+    b["checks"].append(
+        {
+            "name": "mutation",
+            "command": "python3 -c \"print('mutation score 100.00: 30 mutants, 30 killed')\"",
+            "cwd": "/repo",
+            "exit_code": 0,
+            "verdict": "PASS",
+            "tool_version": "mutmut 2.5.0",
+            "started_at": "2026-11-06T10:00:13Z",
+            "finished_at": "2026-11-06T10:00:14Z",
+            "stdout_text": "mutation score 100.00: 30 mutants, 30 killed",
+        }
+    )
+    _recorded_bundle(
+        b,
+        tmp_path,
+        repo=repo,
+        commands={
+            "mutation": [
+                sys.executable,
+                "-c",
+                "print('mutation score 100.00: 30 mutants, 30 killed')",
+            ]
+        },
+    )
+    b["revision"] = _head_sha_of(repo)
+    assert _problems(b, tmp_path, repo=repo) == []
 
 
 def test_future_timestamps_rejected(tmp_path):
