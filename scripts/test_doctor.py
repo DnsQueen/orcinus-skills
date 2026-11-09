@@ -847,9 +847,7 @@ def _with_version(bundle_text, version):
     """
     import re
 
-    replaced, n = re.subn(
-        r"^version: .*$", f"version: {version}", bundle_text, count=1, flags=re.M
-    )
+    replaced, n = re.subn(r"^version: .*$", f"version: {version}", bundle_text, count=1, flags=re.M)
     return replaced if n else f"version: {version}\n{bundle_text}"
 
 
@@ -866,9 +864,7 @@ def test_hermes_bundle_version_match_passes(tmp_path, monkeypatch):
 def test_hermes_bundle_wrong_version_fails(tmp_path, monkeypatch):
     """A bundle version that does not match the repo version fails
     the check — a stale bundle must not report ready."""
-    version = _hermes_fixture(
-        tmp_path, monkeypatch, _with_version(_real_bundle_text(), "9.9.9")
-    )
+    version = _hermes_fixture(tmp_path, monkeypatch, _with_version(_real_bundle_text(), "9.9.9"))
     result = doctor.check_hermes_bundle()
     assert result["status"] == "incompatible"
     assert "9.9.9" in result["detail"]
