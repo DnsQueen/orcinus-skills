@@ -62,7 +62,17 @@ def _minimal_repo(tmp_path):
         + "- **Idea (0–9):** x.\n- **Architecture (10–19):** x.\n"
         + "- **Scaffold (20–29):** x.\n- **Build (30–39):** x.\n"
         + "- **Verify (40–59):** x.\n- **Security (50–79, cross-cutting):** x.\n"
-        + "- **Debugging (50–79):** x.\n- **Finalize (80–100):** x.\n",
+        + "- **Debugging (50–79):** x.\n- **Finalize (80–100):** x.\n"
+        + "\n## Gates\n\n"
+        + "- After orcinus-verify passes: "
+        + "`python3 scripts/state.py transition .orcinus/state.json "
+        + "--to VERIFIED --revision <sha> --evidence <bundle>`\n"
+        + "- When the verified work is ready for the human to approve the next step: "
+        + "`python3 scripts/state.py transition .orcinus/state.json "
+        + "--to AWAITING_APPROVAL --revision <sha>`\n"
+        + "- After the human approves the verified digest for release: "
+        + "`python3 scripts/state.py transition .orcinus/state.json "
+        + "--to RELEASE_READY --revision <sha>`\n",
         encoding="utf-8",
     )
     (root / "skills" / "other" / "SKILL.md").write_text(
@@ -1261,6 +1271,21 @@ def test_stage_containment_passes_on_real_repo(monkeypatch):
     vr.failures.clear()
     vr.check_stage_containment()
     assert list(vr.failures) == []
+
+
+def test_router_state_commands(tmp_path, monkeypatch):
+    """Round 11 (FND-005): the router must name the three state.py
+    transition commands for VERIFYING -> VERIFIED ->
+    AWAITING_APPROVAL -> RELEASE_READY. Removing any one must fail."""
+    root = _minimal_repo(tmp_path)
+    assert _run_with_root(monkeypatch, root, vr.check_router_state_commands) == []
+    router = root / "skills" / "orcinus" / "SKILL.md"
+    text = router.read_text(encoding="utf-8")
+    for command in vr.ROUTER_STATE_COMMANDS:
+        router.write_text(text.replace(command, ""), encoding="utf-8")
+        failures = _run_with_root(monkeypatch, root, vr.check_router_state_commands)
+        assert any("state transition" in f for f in failures)
+        router.write_text(text, encoding="utf-8")
 
 
 def test_apache_change_notices():

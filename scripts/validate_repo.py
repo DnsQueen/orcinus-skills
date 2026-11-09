@@ -78,6 +78,10 @@ Checks:
  19. Every MAP row's `Implemented in` names a real ORCINUS skill
      folder (or nothing, for a `todo` row): a `built` row must name
      the folder that covers the need, never an external tool.
+ 20. The router names the state.py transition commands for the
+     VERIFYING -> VERIFIED -> AWAITING_APPROVAL -> RELEASE_READY
+     path: the state machine is only invoked when the router tells
+     the agent the exact commands (round 11, FND-005).
 
 A check that cannot run (missing file it needs) is reported as a
 failure, never silently skipped — except where the check itself says
@@ -1998,6 +2002,42 @@ def check_hermes_bundle():
         )
 
 
+# The three state.py transition commands the router must name, in
+# lifecycle order (round 11, FND-005). <sha> is the commit under
+# verification; <bundle> is the evidence bundle path. --evidence is
+# required for VERIFIED when no bundle is recorded in the state.
+ROUTER_STATE_COMMANDS = (
+    "python3 scripts/state.py transition .orcinus/state.json "
+    "--to VERIFIED --revision <sha> --evidence <bundle>",
+    "python3 scripts/state.py transition .orcinus/state.json "
+    "--to AWAITING_APPROVAL --revision <sha>",
+    "python3 scripts/state.py transition .orcinus/state.json "
+    "--to RELEASE_READY --revision <sha>",
+)
+
+
+def check_router_state_commands():
+    """The router names the state.py transition commands for the
+    VERIFYING -> VERIFIED -> AWAITING_APPROVAL -> RELEASE_READY
+    path. The state machine is only invoked when the router tells
+    the agent the exact commands (round 11, FND-005): the router
+    mentioned .orcinus/state.json but gave no command, and nothing
+    else calls the state machine, so the strongest gate was
+    optional in practice."""
+    router = ROOT / "skills" / "orcinus" / "SKILL.md"
+    if not router.is_file():
+        fail("router SKILL.md is missing")
+        return
+    text = router.read_text(encoding="utf-8")
+    for command in ROUTER_STATE_COMMANDS:
+        if command not in text:
+            fail(
+                f"router SKILL.md does not name the state transition "
+                f"{command!r} — the router must give the exact "
+                f"command for each transition it requires"
+            )
+
+
 def main():
     check_skill_frontmatter()
     check_attribution_pairs()
@@ -2022,6 +2062,7 @@ def main():
     check_version_matches_changelog()
     check_security_versions()
     check_hermes_bundle()
+    check_router_state_commands()
     for w in warnings:
         print(f"warning: {w}")
     if failures:
