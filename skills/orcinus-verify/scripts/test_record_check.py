@@ -98,6 +98,10 @@ def test_bundled_content_digest_is_byte_identical():
         Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "content_digest.py"
     )
     assert skill_copy.is_file(), "bundled content_digest.py is missing from the skill folder"
+    if not repo_copy.is_file():
+        import pytest
+
+        pytest.skip("repo-root scripts/content_digest.py is absent (skills-only install)")
     assert skill_copy.read_bytes() == repo_copy.read_bytes()
 
 
