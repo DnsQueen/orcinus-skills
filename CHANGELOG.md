@@ -3,6 +3,36 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.13] — 2026-11-09
+
+CI follow-up to the round 11 fix pass. 0.10.12 was never tagged or
+released, so 0.10.13 is the first pushed version containing the
+fixes below — the 0.10.12 entry underneath describes the fix pass
+itself, and this entry only the follow-up that got Windows CI
+green.
+
+### Fixed
+
+- **Windows CI, shell paths:** a `sh -c` string recorded on
+  Windows carries drive-letter backslash paths, and POSIX
+  `shlex.split` mangled them (`C:\Users\...` -> `C:Users...`), so
+  the validator rejected an honest Windows recording as
+  INCOMPLETE — the runner was not detected and the `--junitxml`
+  report did not match. `_shell_segments` now normalises
+  backslashes to `/` in unquoted drive-letter tokens before the
+  split; quoted paths (including a drive-letter path inside a
+  `-c "..."` string) are left alone, and `echo green.xml` still
+  names no path. The shell-gate test builds its shell string with
+  forward-slash paths (`sys.executable.replace("\\", "/")`,
+  `Path.as_posix()`), so the recording itself runs under Git Bash
+  `sh` instead of failing with exit 127. The 4d0de4f validator
+  change covered list-form argv only; this completes shell
+  strings.
+- **Python 3.13 fixture shadowing (from 4d0de4f):** the fixture
+  `code.py` shadowed stdlib `code` (pytest inserts the repo root
+  on `sys.path`), breaking pytest's own configure with
+  INTERNALERROR / exit 3 on Python 3.13; renamed to `sample.py`.
+
 ## [0.10.12] — 2026-11-09
 
 Round 11 audit fix pass (audit of v0.10.11/3f06ffa, 14 findings:

@@ -3014,6 +3014,51 @@ def test_argv_windows_paths():
         assert ve._argv_mentions_path(argv, artifact) is expected, argv
 
 
+def test_argv_windows_shell_string():
+    # Windows CI follow-up (round 11): a `sh -c` string recorded on
+    # Windows carries drive-letter backslash paths — the interpreter
+    # and the --junitxml report. POSIX shlex.split treats `\` as an
+    # escape and mangles them (`C:\Users\...` -> `C:Users...`), so
+    # the runner was not detected and the report did not match.
+    # The shell parser must read those paths the way it reads POSIX
+    # ones: the runner segment is detected and the report matches.
+    win_python = r"C:\hostedtoolcache\windows\Python\3.12.10\x64\python.exe"
+    win_report = r"C:\Users\runneradmin\Temp\x\green.xml"
+    posix_python = win_python.replace("\\", "/")
+    posix_report = win_report.replace("\\", "/")
+    shell = (
+        f"{win_python} -m pytest tests/test_capture.py -v "
+        f"--junitxml {win_report} "
+        f"|| {win_python} -c \"print('fallback')\""
+    )
+    argv = ["sh", "-c", shell]
+    segments = ve._shell_segments(shell)
+    assert segments is not None
+    assert segments[0][0] == posix_python
+    assert segments[0][segments[0].index("--junitxml") + 1] == posix_report
+    # The fallback segment keeps its `-c` string byte-for-byte:
+    # normalising drive-letter paths must not touch other
+    # backslash uses.
+    assert segments[1] == [posix_python, "-c", "print('fallback')"]
+    assert ve._invoked_runner_tool_name(argv) == "pytest"
+    assert ve._argv_mentions_path(argv, "green.xml") is True
+    assert ve._argv_mentions_path(argv, "other.xml") is False
+    assert ve._argv_mentions_path(argv, "reports/green.xml") is False
+    # The `--junitxml=<path>` spelling in a shell string too.
+    assert (
+        ve._argv_mentions_path(
+            ["sh", "-c", f"{win_python} -m pytest --junitxml={win_report}"],
+            "green.xml",
+        )
+        is True
+    )
+    # Negative control (must stay failing-closed): a mention inside
+    # echo is not a command that could have written the report, and
+    # no runner runs.
+    assert ve._argv_mentions_path(["sh", "-c", "echo green.xml"], "green.xml") is False
+    assert ve._invoked_runner_tool_name(["sh", "-c", "echo green.xml"]) is None
+
+
 def test_parse_pytest_summary_counts():
     # FND-003, the stdout summary parser directly: the counts
     # pytest prints, a category omitted (zero), warnings and
@@ -3699,14 +3744,21 @@ def test_shell_test_gate_running_a_runner_passes(tmp_path):
 
         pytest.skip("sh is not installed")
     b = _good_bundle()
+    # Forward slashes: the shell string runs under `sh` (Git Bash
+    # on the Windows runner), and a backslash interpreter or
+    # --junitxml path is mangled by sh into a nonexistent command
+    # name (exit 127). sys.executable.replace("\\", "/") and
+    # Path.as_posix() are the sh-compatible spellings — the same
+    # ones test_noop_recorded_shell_fallback_passes uses.
+    python = sys.executable.replace("\\", "/")
     _recorded_bundle(
         b,
         tmp_path,
         commands={
             "test": (
-                f"{sys.executable} -m pytest tests/test_capture.py -v "
-                f"--junitxml {tmp_path / 'green.xml'} "
-                f"|| {sys.executable} -c \"print('fallback')\""
+                f"{python} -m pytest tests/test_capture.py -v "
+                f"--junitxml {(tmp_path / 'green.xml').as_posix()} "
+                f"|| {python} -c \"print('fallback')\""
             ),
         },
     )

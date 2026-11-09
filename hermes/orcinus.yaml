@@ -6,7 +6,7 @@
 # skills would dump the whole collection into one message. The router
 # loads each sub-skill on demand with skill_view(name).
 name: orcinus
-version: 0.10.12
+version: 0.10.13
 description: One integrated companion for building software with a coding agent, from raw idea to publish. Use when starting, continuing, or finishing any software project, or when you need to know what stage you are in and what comes next.
 skills:
   - orcinus

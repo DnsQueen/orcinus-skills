@@ -1695,6 +1695,19 @@ _M_RUNNERS = frozenset(r[-1] for r in TEST_RUNNERS if len(r) == 3 and r[1] == "-
 # would run; a runner merely echoed is not.
 _SHELL_OPERATORS = (";", "&&", "||", "|", "&")
 
+# An unquoted Windows drive-letter path in a shell string:
+# `C:\...\python.exe`, or the drive path after `--junitxml=`.
+# POSIX shlex.split treats `\` as an escape and mangles such a
+# token (`C:\Users\...` -> `C:Users...`), so the runner is not
+# detected and the report path does not match (Windows CI, round
+# 11 follow-up). Normalising its backslashes to `/` before the
+# split reads it as the path it is. Quoted paths are left alone:
+# shlex already preserves backslashes inside quotes, so
+# `"C:\Program Files\..."` and `'C:\...'` need no help — and a
+# drive-letter path inside a `-c "..."` string is quoted too, so
+# the lookbehind keeps other backslash uses byte-identical.
+_WINDOWS_DRIVE_TOKEN_RE = re.compile(r"""(?<![\"'])[A-Za-z]:\\[^\s\"']*""")
+
 
 def _basename(program):
     """The final component of a program path, on either separator,
@@ -1719,11 +1732,18 @@ def _shell_segments(command):
     shell operators — or None when the string cannot be parsed.
     shlex honours quotes, so `echo "a && b"` is one command and
     `pytest -q` is one argv. An unparseable string (unbalanced
-    quote) fails closed: it invokes no runner.
+    quote) fails closed: it invokes no runner. A Windows shell
+    string names its interpreter and report with unquoted
+    drive-letter backslash paths; those are normalised to `/`
+    before the split (see _WINDOWS_DRIVE_TOKEN_RE), so
+    `C:\\...\\python.exe -m pytest --junitxml C:\\...\\green.xml`
+    parses as the runner run it is. Quoted paths are untouched:
+    shlex preserves their backslashes already.
     shortcut: operators must be whitespace-separated (shlex splits
     on whitespace), so `cd x&&python3 -m pytest` is not split and
     fails closed; upgrade to a real shell lexer if that spelling
     ever needs to pass."""
+    command = _WINDOWS_DRIVE_TOKEN_RE.sub(lambda match: match.group(0).replace("\\", "/"), command)
     try:
         tokens = shlex.split(command)
     except ValueError:
