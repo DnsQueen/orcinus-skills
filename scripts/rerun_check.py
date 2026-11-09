@@ -232,11 +232,13 @@ def _read_bundle(path):
 
 def select_targets(bundle):
     """(fail_first nodeid, [pytest targets]) from a bundle. The
-    targets are the nodeid plus the changed test files, in that
-    order — pytest collects a test named twice only once, so
-    naming the nodeid alongside its file does not double-run it.
-    A bundle that names no test to rerun is a failed claim (exit
-    1), not a tool failure: there is nothing to attest."""
+    targets are the changed test files plus the fail-first nodeid —
+    except when the nodeid's own file is already listed: then the
+    nodeid is dropped, because the file run covers it once. Naming
+    both runs the test twice on pytest 8.4.2 (9.0.3 dedupes), so the
+    proof's JUnit totals would over-count distinct tests. A bundle
+    that names no test to rerun is a failed claim (exit 1), not a
+    tool failure: there is nothing to attest."""
     validator = _validator()
     fail_first = bundle.get("fail_first")
     if not isinstance(fail_first, dict):
@@ -269,6 +271,11 @@ def select_targets(bundle):
         path = entry.removeprefix("./")
         if validator._TEST_FILE_RE.search(path) and path not in test_files:
             test_files.append(path)
+    # The nodeid's file, when listed, already runs the nodeid once;
+    # naming it again double-runs it on pytest < 9.
+    nodeid_file = test.split("::", 1)[0]
+    if nodeid_file in test_files:
+        return test, test_files
     return test, [test, *test_files]
 
 

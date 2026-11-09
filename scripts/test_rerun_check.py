@@ -412,3 +412,32 @@ def test_pytest_missing_is_exit_2(tmp_path, monkeypatch):
         rc._probe_pytest(tmp_path)
     assert excinfo.value.exit_code == 2
     assert "pytest" in str(excinfo.value)
+
+
+def test_select_targets_drops_nodeid_when_its_file_is_listed():
+    """Unit: pytest 8.4.2 runs a test twice when given both its
+    nodeid and its file (9.0.3 dedupes), so a proof's JUnit totals
+    over-count distinct tests on older pytest. When the fail-first
+    file is listed, the file run covers the nodeid once — so the
+    nodeid is dropped from the argv (the returned nodeid is still
+    used for the presence check)."""
+    bundle = {
+        "fail_first": {"test": FAIL_FIRST},
+        "files_changed": ["tests/test_sample.py", "tests/test_other.py"],
+    }
+    test, targets = rc.select_targets(bundle)
+    assert test == FAIL_FIRST
+    assert targets == ["tests/test_sample.py", "tests/test_other.py"]
+
+
+def test_select_targets_keeps_nodeid_when_its_file_is_not_listed():
+    """Unit: when the fail-first file is not among the changed test
+    files, the nodeid must stay in the argv — otherwise the
+    fail-first test would not run at all."""
+    bundle = {
+        "fail_first": {"test": FAIL_FIRST},
+        "files_changed": ["tests/test_other.py"],
+    }
+    test, targets = rc.select_targets(bundle)
+    assert test == FAIL_FIRST
+    assert targets == [FAIL_FIRST, "tests/test_other.py"]
