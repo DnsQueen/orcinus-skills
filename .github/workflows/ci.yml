@@ -72,20 +72,36 @@ jobs:
 
   attest:
     # 0.11.0: attests the tree content digest, so a later VERIFIED
-    # transition can prove CI ran on that exact content. `needs:
-    # [test]` means an attestation existing for a run implies the
-    # test job passed in that same run — the attestation is only
-    # minted after the tests are green, never instead of them.
-    # The subject is a FILE (content-digest.txt): `gh attestation
-    # verify` has no --subject-digest mode, so the digest is
-    # written to a file and the file is attested. The job adds only
-    # seconds: it computes one digest and signs it, and runs no
-    # test of its own.
+    # transition can prove CI ran on that exact content. 0.12.0:
+    # `needs` names all nine essential gates, so an attestation
+    # existing for a run implies every one of them passed in that
+    # same run — the attestation is only minted after the whole
+    # pipeline is green, never instead of it. `if: push` pins the
+    # job to push-to-main: a fork pull request cannot write
+    # attestations (it has no id-token permission for this repo),
+    # so an attest step on pull_request would only ever fail or
+    # be skipped — pinning it makes that explicit instead of
+    # relying on the permission failure. The subject is a FILE
+    # (content-digest.txt): `gh attestation verify` has no
+    # --subject-digest mode, so the digest is written to a file
+    # and the file is attested. The job adds only seconds: it
+    # computes one digest and signs it, and runs no test of its
+    # own.
     # actions/attest, not actions/attest-build-provenance: the
     # latter is a thin wrapper around the former, and current
     # GitHub guidance is that new implementations use
     # actions/attest directly (default SLSA provenance predicate).
-    needs: [test]
+    needs:
+      - test
+      - waza
+      - demo
+      - waza-fixtures
+      - shellcheck
+      - clean-install
+      - version-bump
+      - plugin-validate
+      - postgres-migration
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -15,6 +15,7 @@ Run: python3 -m pytest scripts/test_state.py -q
 """
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -111,9 +112,9 @@ def _stub_verified_attestation(repo, revision):
 
 
 def _proof_dict(repo, revision, digest, **overrides):
-    """A targeted-rerun attestation proof for `revision`'s tree:
-    the exact shape scripts/state.py accepts (method,
-    revision, content_digest, tests, junit totals, exit_code)."""
+    """A targeted-rerun proof dict as the gate's own rerun
+    returns it (method, revision, content_digest, tests, junit
+    totals, exit_code) — the shape _check_rerun_proof checks."""
     proof = {
         "method": "targeted-rerun",
         "revision": revision,
@@ -126,10 +127,32 @@ def _proof_dict(repo, revision, digest, **overrides):
     return proof
 
 
-def _write_proof(tmp_path, proof, name="proof.json"):
-    path = tmp_path / name
-    path.write_text(json.dumps(proof), encoding="utf-8")
-    return path
+def _stub_rerun_runner(proof):
+    """A rerun runner stub for tests whose subject is not the
+    runner itself: it returns `proof` without running anything,
+    explicitly — the gate still re-checks the proof's fields."""
+
+    def _run(repo, revision, bundle_path):
+        return dict(proof)
+
+    return _run
+
+
+def _failing_rerun_runner(repo, revision, bundle_path):
+    raise ValueError("targeted rerun refused: rerun_check.py exited 1: fail_first test failed")
+
+
+def _rerun_record(revision, tests=("tests/test_x.py::test_y",)):
+    """A valid rerun record as a RERUN_CONFIRMED state stores it:
+    the proof the gate's rerun produced, plus when it ran."""
+    return {
+        "method": "targeted-rerun",
+        "revision": revision,
+        "at": "2026-11-10T00:00:00+00:00",
+        "tests": list(tests),
+        "junit": {"total": 2, "passed": 2},
+        "exit_code": 0,
+    }
 
 
 def _write_bundle(repo, name="x.json", bundle=None, revision=None):
@@ -150,9 +173,32 @@ def _write_bundle(repo, name="x.json", bundle=None, revision=None):
     return f"docs/verification/{name}"
 
 
+def _rerun_bundle(repo, revision, fail_first="tests/test_x.py::test_y"):
+    """A PASS bundle the in-gate rerun can run: the docs-only
+    fixture plus a fail-first entry naming the test to rerun.
+    The change itself is docs-only (files_changed stays
+    README.md — a docs-only bundle listing a code file is
+    rejected); the fail-first method is "not-applicable" with a
+    note saying exactly that, because there is no behaviour to
+    prove fail-first for — the test is only the rerun target.
+    The test file itself need not exist for the stub-runner
+    tests, which never run it."""
+    bundle = _pass_bundle_dict()
+    if fail_first is not None:
+        bundle["fail_first"] = {
+            "test": fail_first,
+            "failed_before": False,
+            "passed_after": True,
+            "method": "not-applicable",
+            "note": "Docs-only change: no behaviour to prove fail-first for; "
+            "the test named here is the target the gate's rerun re-runs.",
+        }
+    return _write_bundle(repo, "rerun.json", bundle, revision=revision)
+
+
 def _building(digest=DIGEST, revision=REV):
     return {
-        "format_version": 2,
+        "format_version": 3,
         "project": "weekly-budget",
         "stage": "BUILDING",
         "revision": revision,
@@ -160,16 +206,18 @@ def _building(digest=DIGEST, revision=REV):
         "evidence_bundle": None,
         "approval": None,
         "history": [],
+        "verification_origin": None,
+        "rerun": None,
     }
 
 
 def test_schema_file_matches_module():
-    """The schema file is the contract: six stages, format_version 2,
+    """The schema file is the contract: seven stages, format_version 3,
     digest pattern, required fields — and the module enforces the
     same stages."""
     schema = json.loads((REPO / "scripts" / "state_schema.json").read_text(encoding="utf-8"))
     assert schema["properties"]["stage"]["enum"] == list(st.STAGES)
-    assert schema["properties"]["format_version"]["const"] == 2
+    assert schema["properties"]["format_version"]["const"] == 3
     assert set(schema["required"]) == {
         "format_version",
         "project",
@@ -179,6 +227,8 @@ def test_schema_file_matches_module():
         "evidence_bundle",
         "approval",
         "history",
+        "verification_origin",
+        "rerun",
     }
     assert st.validate_state(_building()) == []
 
@@ -211,11 +261,18 @@ def test_validate_rejects_bad_states():
 def _at_stage(repo, stage, revision, digest):
     """A valid state in `stage` for a real repo (VERIFIED needs a
     real evidence bundle file, RELEASE_READY needs an approval
-    bound to the computed digest)."""
+    bound to the computed digest; VERIFIED records a CI
+    attestation origin, RERUN_CONFIRMED a local-rerun origin
+    with its rerun record)."""
     data = _building(digest=digest, revision=revision)
     data["stage"] = stage
     if stage in ("VERIFIED", "AWAITING_APPROVAL", "RELEASE_READY"):
         data["evidence_bundle"] = _write_bundle(repo, revision=revision)
+        data["verification_origin"] = "CI_ATTESTED"
+    if stage == "RERUN_CONFIRMED":
+        data["evidence_bundle"] = _write_bundle(repo, revision=revision)
+        data["verification_origin"] = "LOCAL_RERUN"
+        data["rerun"] = _rerun_record(revision)
     if stage == "RELEASE_READY":
         data["approval"] = {
             "approved_by": "x",
@@ -252,8 +309,10 @@ def test_allowed_transitions(tmp_path):
         ("BUILDING", "VERIFYING"),
         ("VERIFYING", "BLOCKED"),
         ("VERIFYING", "VERIFIED"),
+        ("VERIFYING", "RERUN_CONFIRMED"),
         ("BLOCKED", "BUILDING"),
         ("VERIFIED", "AWAITING_APPROVAL"),
+        ("RERUN_CONFIRMED", "AWAITING_APPROVAL"),
         ("AWAITING_APPROVAL", "RELEASE_READY"),
     ):
         repo = _repo(tmp_path / f"repo-{frm}-{to}")
@@ -263,6 +322,9 @@ def test_allowed_transitions(tmp_path):
         kwargs = {"repo": repo, "attestation_checker": _stub_verified_attestation}
         if to == "VERIFIED":
             kwargs["evidence_bundle"] = _write_bundle(repo, revision=revision)
+        elif to == "RERUN_CONFIRMED":
+            kwargs["evidence_bundle"] = _write_bundle(repo, revision=revision)
+            kwargs["rerun_runner"] = _stub_rerun_runner(_proof_dict(repo, revision, digest))
         elif to == "RELEASE_READY":
             data["approval"] = {
                 "approved_by": "x",
@@ -275,8 +337,13 @@ def test_allowed_transitions(tmp_path):
         assert data["stage"] == to
     for frm, to in (
         ("BUILDING", "VERIFIED"),
+        ("BUILDING", "RERUN_CONFIRMED"),
         ("VERIFYING", "AWAITING_APPROVAL"),
         ("VERIFIED", "VERIFYING"),
+        ("VERIFIED", "RERUN_CONFIRMED"),
+        ("RERUN_CONFIRMED", "VERIFIED"),
+        ("RERUN_CONFIRMED", "RELEASE_READY"),
+        ("AWAITING_APPROVAL", "VERIFIED"),
         ("RELEASE_READY", "VERIFYING"),
         ("RELEASE_READY", "BUILDING"),
     ):
@@ -527,9 +594,9 @@ def test_verified_refuses_stale_revision(tmp_path):
             evidence_bundle=_write_bundle(repo, revision=old_revision),
         )
     # RELEASE_READY at a stale revision is refused the same way.
-    data = _building(digest=old_digest, revision=old_revision)
-    data["stage"] = "AWAITING_APPROVAL"
-    data["evidence_bundle"] = _write_bundle(repo, revision=old_revision)
+    # _at_stage (not a hand-built stage) so the origin rule is
+    # satisfied and the stale check is what refuses it.
+    data = _at_stage(repo, "AWAITING_APPROVAL", old_revision, old_digest)
     data["approval"] = {
         "approved_by": "x",
         "revision": old_revision,
@@ -825,24 +892,23 @@ def test_six_sequential_cli_transitions_print_no_stale_lock_note(tmp_path):
     repo = _repo(tmp_path)
     revision = _head(repo)
     digest = cd.content_digest(repo, revision)
-    bundle = _write_bundle(repo, revision=revision)
     state_dir = repo / ".orcinus"
     state_dir.mkdir(exist_ok=True)
     state_path = state_dir / "state.json"
     state_path.write_text(json.dumps(_building(digest=digest, revision=revision)), encoding="utf-8")
     script = Path(__file__).resolve().parent / "state.py"
-    # The VERIFIED step runs through the real CLI, which has no
-    # stub to inject: it takes the explicit --attestation-proof
-    # path (the honest CLI route where no live attestation exists
-    # for this throwaway repo).
-    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest))
+    # Six sequential legal transitions (via BLOCKED back to
+    # BUILDING). No VERIFIED or RERUN_CONFIRMED step: those need
+    # a live attestation or a real rerun, and the real-runner
+    # tests cover those paths; this test's subject is the lock
+    # note, not the gates.
     steps = [
         ("VERIFYING", []),
         ("BLOCKED", []),
         ("BUILDING", []),
         ("VERIFYING", []),
-        ("VERIFIED", ["--evidence", bundle, "--attestation-proof", str(proof)]),
-        ("AWAITING_APPROVAL", []),
+        ("BLOCKED", []),
+        ("BUILDING", []),
     ]
     for to_stage, extra in steps:
         proc = subprocess.run(
@@ -862,7 +928,7 @@ def test_six_sequential_cli_transitions_print_no_stale_lock_note(tmp_path):
             capture_output=True,
             text=True,
             cwd=repo,
-            timeout=60,
+            timeout=120,
         )
         assert proc.returncode == 0, proc.stderr
         assert "stale lock" not in proc.stderr, (to_stage, proc.stderr)
@@ -1253,8 +1319,8 @@ def test_lock_released_after_refused_transition(tmp_path):
 # recorded claim in the bundle. The default checker is the real
 # verify_attestation check, in production and in tests alike;
 # tests inject a stub explicitly, never by making the check
-# optional. The explicit fallback is a --attestation-proof file
-# (a targeted-rerun proof, produced by the Layer 2 producer).
+# optional. (0.12.0 removed the --attestation-proof file fallback:
+# a hand-written proof minted VERIFIED through the gate itself.)
 
 
 def _not_verified_attestation(repo, revision):
@@ -1263,10 +1329,6 @@ def _not_verified_attestation(repo, revision):
 
 def _unavailable_attestation(repo, revision):
     return va.AttestationResult("unavailable", "gh is not authenticated (run: gh auth login)")
-
-
-def _failing_attestation(repo, revision):
-    raise AssertionError("the live check must not run when a proof file is given")
 
 
 def _verified_state_data(repo, revision, digest):
@@ -1312,10 +1374,11 @@ def test_verified_allowed_with_stubbed_attestation(tmp_path):
     assert data["stage"] == "VERIFIED"
 
 
-def test_verified_refused_when_attestation_unavailable_names_both_options(tmp_path):
+def test_verified_refused_when_attestation_unavailable_names_only_the_live_check(tmp_path):
     """No gh / no network / no auth is not a pass and not a
-    'not verified': the transition is refused, naming both ways
-    forward — a live check, or an explicit --attestation-proof."""
+    'not verified': the transition is refused, naming the live
+    check as the only way forward — since 0.12.0 there is no
+    proof-file fallback to name."""
     repo = _repo(tmp_path)
     revision = _head(repo)
     digest = cd.content_digest(repo, revision)
@@ -1329,7 +1392,8 @@ def test_verified_refused_when_attestation_unavailable_names_both_options(tmp_pa
             evidence_bundle=_write_bundle(repo, revision=revision),
             attestation_checker=_unavailable_attestation,
         )
-    assert "--attestation-proof" in str(exc.value)
+    assert "attestation-proof" not in str(exc.value)
+    assert "gh" in str(exc.value)
 
 
 def test_verified_default_checker_is_the_live_check(tmp_path, monkeypatch):
@@ -1359,153 +1423,11 @@ def test_verified_default_checker_is_the_live_check(tmp_path, monkeypatch):
     assert calls == [(repo, revision)]
 
 
-def test_verified_with_valid_proof_file(tmp_path):
-    """The explicit fallback: a targeted-rerun proof whose
-    revision and content digest match the transition, with a
-    passing JUnit count and exit 0, satisfies the gate — and the
-    live check is never consulted."""
-    repo = _repo(tmp_path)
-    revision = _head(repo)
-    digest = cd.content_digest(repo, revision)
-    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest))
-    data = _verified_state_data(repo, revision, digest)
-    data = st.transition(
-        data,
-        "VERIFIED",
-        revision,
-        repo=repo,
-        evidence_bundle=_write_bundle(repo, revision=revision),
-        attestation_checker=_failing_attestation,
-        attestation_proof=str(proof),
-    )
-    assert data["stage"] == "VERIFIED"
-
-
-def test_verified_proof_digest_mismatch_refused(tmp_path):
-    """A proof for another tree's digest is not proof for this
-    revision: the digest is recomputed, never trusted from the
-    file."""
-    repo = _repo(tmp_path)
-    revision = _head(repo)
-    digest = cd.content_digest(repo, revision)
-    proof = _write_proof(
-        tmp_path, _proof_dict(repo, revision, digest, content_digest="sha256:" + "f" * 64)
-    )
-    data = _verified_state_data(repo, revision, digest)
-    with pytest.raises(ValueError, match="content_digest"):
-        st.transition(
-            data,
-            "VERIFIED",
-            revision,
-            repo=repo,
-            evidence_bundle=_write_bundle(repo, revision=revision),
-            attestation_proof=str(proof),
-        )
-
-
-def test_verified_proof_wrong_method_refused(tmp_path):
-    """Only method 'targeted-rerun' is a proof: any other method
-    is refused, even with a matching digest."""
-    repo = _repo(tmp_path)
-    revision = _head(repo)
-    digest = cd.content_digest(repo, revision)
-    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest, method="full-run"))
-    data = _verified_state_data(repo, revision, digest)
-    with pytest.raises(ValueError, match="method"):
-        st.transition(
-            data,
-            "VERIFIED",
-            revision,
-            repo=repo,
-            evidence_bundle=_write_bundle(repo, revision=revision),
-            attestation_proof=str(proof),
-        )
-
-
-def test_verified_proof_nonzero_exit_refused(tmp_path):
-    """A rerun that exited non-zero proves nothing, whatever its
-    junit counts say."""
-    repo = _repo(tmp_path)
-    revision = _head(repo)
-    digest = cd.content_digest(repo, revision)
-    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest, exit_code=1))
-    data = _verified_state_data(repo, revision, digest)
-    with pytest.raises(ValueError, match="exit_code"):
-        st.transition(
-            data,
-            "VERIFIED",
-            revision,
-            repo=repo,
-            evidence_bundle=_write_bundle(repo, revision=revision),
-            attestation_proof=str(proof),
-        )
-
-
-def test_verified_proof_junit_mismatch_refused(tmp_path):
-    """A proof whose junit counts do not add up (total != passed,
-    or no tests at all) is refused."""
-    repo = _repo(tmp_path)
-    revision = _head(repo)
-    digest = cd.content_digest(repo, revision)
-    data = _verified_state_data(repo, revision, digest)
-    for junit in ({"total": 2, "passed": 1}, {"total": 0, "passed": 0}):
-        proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest, junit=junit))
-        with pytest.raises(ValueError, match="junit"):
-            st.transition(
-                data,
-                "VERIFIED",
-                revision,
-                repo=repo,
-                evidence_bundle=_write_bundle(repo, revision=revision),
-                attestation_proof=str(proof),
-            )
-
-
-def test_verified_proof_revision_mismatch_refused(tmp_path):
-    """A proof recorded at another revision is not proof for this
-    one, even when the trees happen to share a digest."""
-    repo = _repo(tmp_path)
-    old_revision = _head(repo)
-    _commit_change(repo)  # HEAD moves on; the proof names the old revision
-    revision = _head(repo)
-    digest = cd.content_digest(repo, revision)
-    proof = _write_proof(tmp_path, _proof_dict(repo, old_revision, digest))
-    data = _verified_state_data(repo, revision, digest)
-    with pytest.raises(ValueError, match="revision"):
-        st.transition(
-            data,
-            "VERIFIED",
-            revision,
-            repo=repo,
-            evidence_bundle=_write_bundle(repo, revision=revision),
-            attestation_proof=str(proof),
-        )
-
-
-def test_attestation_proof_requires_fail_first_nodeid(tmp_path):
-    """The proof must name the fail-first test: the rerun is the
-    rerun OF that test, not of an unrelated passing subset."""
-    repo = _repo(tmp_path)
-    revision = _head(repo)
-    digest = cd.content_digest(repo, revision)
-    nodeid = "tests/test_x.py::test_y"
-    proof = _write_proof(
-        tmp_path, _proof_dict(repo, revision, digest, tests=["tests/test_other.py::test_z"])
-    )
-    with pytest.raises(ValueError, match=nodeid):
-        st._check_attestation_proof(str(proof), repo, revision, digest, fail_first_test=nodeid)
-    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest, tests=[nodeid]))
-    assert (
-        st._check_attestation_proof(str(proof), repo, revision, digest, fail_first_test=nodeid)
-        is None
-    )
-
-
-def test_cli_verified_refused_without_attestation_or_proof(tmp_path):
-    """The CLI, with no --attestation-proof and no live
-    attestation for this throwaway repo, refuses VERIFIED (exit
-    1) naming the attestation — the refusal holds whether the
-    live check fails as not-verified or as unavailable."""
+def test_cli_verified_refused_without_attestation(tmp_path):
+    """The CLI, with no live attestation for this throwaway repo,
+    refuses VERIFIED (exit 1) naming the attestation — the refusal
+    holds whether the live check fails as not-verified or as
+    unavailable."""
     repo = _repo(tmp_path)
     revision = _head(repo)
     digest = cd.content_digest(repo, revision)
@@ -1535,36 +1457,470 @@ def test_cli_verified_refused_without_attestation_or_proof(tmp_path):
     assert "attestation" in proc.stdout + proc.stderr
 
 
-def test_cli_verified_with_proof_file(tmp_path):
-    """The CLI --attestation-proof path: a valid proof file
-    carries the VERIFIED transition with no live check."""
+# --- 0.12.0: the proof file is gone; RERUN_CONFIRMED replaces it ---
+# A hand-written proof JSON with correct values used to mint
+# VERIFIED through the gate itself (friend review of 0.11.1,
+# claim 5, verified by execution). The gate now runs the rerun
+# itself, from the revision-pinned rerun_check.py, and a local
+# rerun mints RERUN_CONFIRMED — never VERIFIED. The state records
+# its verification origin, and format 3 is required: a format-2
+# state must be migrated, and a pre-0.12 VERIFIED is demoted,
+# because its origin cannot be known afterwards.
+
+
+def test_local_rerun_can_never_become_verified():
+    """The privilege-escalation test: walk every (stage, origin)
+    pair reachable from (RERUN_CONFIRMED, LOCAL_RERUN) through
+    the allowed-transition table, applying the origin rules the
+    gate enforces (BUILDING discards the record, VERIFIED mints
+    CI_ATTESTED, RERUN_CONFIRMED mints LOCAL_RERUN, anything else
+    keeps it). No reachable pair has stage VERIFIED with an origin
+    other than CI_ATTESTED — the only way back to VERIFIED is
+    through BUILDING, which discards the local-rerun record, and
+    a fresh live attestation."""
+    start = ("RERUN_CONFIRMED", "LOCAL_RERUN")
+    seen = {start}
+    queue = [start]
+    while queue:
+        stage, origin = queue.pop()
+        for nxt in st.ALLOWED_TRANSITIONS[stage]:
+            if nxt == "BUILDING":
+                new_origin = None
+            elif nxt == "VERIFIED":
+                new_origin = "CI_ATTESTED"
+            elif nxt == "RERUN_CONFIRMED":
+                new_origin = "LOCAL_RERUN"
+            else:
+                new_origin = origin
+            pair = (nxt, new_origin)
+            if pair not in seen:
+                seen.add(pair)
+                queue.append(pair)
+    assert not any(s == "VERIFIED" and o != "CI_ATTESTED" for s, o in seen)
+    assert ("VERIFIED", "CI_ATTESTED") in seen  # reachable only by re-verifying via CI
+
+
+def test_origin_rules_in_validate(tmp_path):
+    """One case per stage group: the origin must match the stage,
+    and a human approval never supplies one."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    # VERIFIED with a local-rerun origin is corrupt, not verified.
+    data = _at_stage(repo, "VERIFIED", revision, digest)
+    data["verification_origin"] = "LOCAL_RERUN"
+    data["rerun"] = _rerun_record(revision)
+    assert any("CI_ATTESTED" in p for p in st.validate_state(data, repo=repo))
+    # RERUN_CONFIRMED with a CI origin, or without a rerun record, is corrupt.
+    data = _at_stage(repo, "RERUN_CONFIRMED", revision, digest)
+    data["verification_origin"] = "CI_ATTESTED"
+    data["rerun"] = None
+    problems = st.validate_state(data, repo=repo)
+    assert any("LOCAL_RERUN" in p for p in problems)
+    assert any("rerun record" in p for p in problems)
+    # AWAITING_APPROVAL with no origin: an approval is a decision, not a verification.
+    data = _at_stage(repo, "AWAITING_APPROVAL", revision, digest)
+    data["verification_origin"] = None
+    assert any("verification_origin" in p for p in st.validate_state(data, repo=repo))
+    # BUILDING carrying a verification record is corrupt.
+    data = _building(digest=digest, revision=revision)
+    data["verification_origin"] = "CI_ATTESTED"
+    assert any("verification_origin" in p for p in st.validate_state(data))
+    # A rerun record for another revision is not a rerun of this content.
+    data = _at_stage(repo, "RERUN_CONFIRMED", revision, digest)
+    data["rerun"] = _rerun_record("c" * 40)
+    assert any("rerun.revision" in p for p in st.validate_state(data, repo=repo))
+
+
+def test_rerun_confirmed_with_stubbed_runner(tmp_path):
+    """The stub stands in for the runner explicitly — the gate
+    still re-checks the proof's fields, and records what the
+    rerun did (revision, tests, junit, exit code, time) plus the
+    origin, in the state and in the history entry."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    bundle = _write_bundle(repo, revision=revision)
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    data = st.transition(
+        data,
+        "RERUN_CONFIRMED",
+        revision,
+        repo=repo,
+        evidence_bundle=bundle,
+        rerun_runner=_stub_rerun_runner(_proof_dict(repo, revision, digest)),
+    )
+    assert data["stage"] == "RERUN_CONFIRMED"
+    assert data["verification_origin"] == "LOCAL_RERUN"
+    assert data["rerun"]["tests"] == ["tests/test_x.py::test_y"]
+    assert data["rerun"]["junit"] == {"total": 2, "passed": 2}
+    assert data["rerun"]["revision"] == revision
+    assert data["rerun"]["exit_code"] == 0
+    assert data["rerun"]["at"]
+    assert data["history"][-1]["origin"] == "LOCAL_RERUN"
+    assert st.validate_state(data, repo=repo) == []
+
+
+def test_rerun_confirmed_refused_when_runner_fails(tmp_path):
+    """A rerun that cannot run, or whose claim does not hold, is
+    a refusal — never a pass."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    with pytest.raises(ValueError, match="rerun"):
+        st.transition(
+            data,
+            "RERUN_CONFIRMED",
+            revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, revision=revision),
+            rerun_runner=_failing_rerun_runner,
+        )
+
+
+def test_rerun_confirmed_refused_when_runner_returns_bad_proof(tmp_path):
+    """Defence in depth: even the gate's own runner output is
+    re-checked field by field — a proof for another tree's digest
+    is refused, as is one that does not list the fail-first test."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    bad = _proof_dict(repo, revision, digest, content_digest="sha256:" + "f" * 64)
+    with pytest.raises(ValueError, match="content_digest"):
+        st.transition(
+            data,
+            "RERUN_CONFIRMED",
+            revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, revision=revision),
+            rerun_runner=_stub_rerun_runner(bad),
+        )
+    bundle = _rerun_bundle(repo, revision)  # fail-first tests/test_x.py::test_y
+    proof = _proof_dict(repo, revision, digest, tests=["tests/test_other.py::test_z"])
+    with pytest.raises(ValueError, match="fail-first"):
+        st.transition(
+            data,
+            "RERUN_CONFIRMED",
+            revision,
+            repo=repo,
+            evidence_bundle=bundle,
+            rerun_runner=_stub_rerun_runner(proof),
+        )
+
+
+def test_building_resets_verification_record(tmp_path):
+    """Rework discards the verification record: it described the
+    old content, not the tree the state now points at."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _at_stage(repo, "VERIFIED", revision, digest)
+    data = st.transition(data, "BUILDING", revision, repo=repo)
+    assert data["verification_origin"] is None and data["rerun"] is None
+    assert data["history"][-1]["origin"] is None
+    data = _at_stage(repo, "RERUN_CONFIRMED", revision, digest)
+    data = st.transition(data, "BUILDING", revision, repo=repo)
+    assert data["verification_origin"] is None and data["rerun"] is None
+
+
+def test_local_rerun_origin_survives_approval_but_never_becomes_verified(tmp_path):
+    """RERUN_CONFIRMED -> AWAITING_APPROVAL -> RELEASE_READY
+    keeps the LOCAL_RERUN origin: the human approval decides the
+    release, it does not upgrade the technical trust, and the
+    stage never becomes VERIFIED along the way."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _at_stage(repo, "RERUN_CONFIRMED", revision, digest)
+    data = st.transition(data, "AWAITING_APPROVAL", revision, repo=repo)
+    assert data["verification_origin"] == "LOCAL_RERUN"
+    data["approval"] = {
+        "approved_by": "x",
+        "revision": revision,
+        "content_digest": digest,
+        "artifact": "a.tgz",
+        "at": "2026-11-07T00:00:00+00:00",
+    }
+    data = st.transition(data, "RELEASE_READY", revision, repo=repo)
+    assert data["stage"] == "RELEASE_READY"
+    assert data["verification_origin"] == "LOCAL_RERUN"
+    assert data["rerun"] is not None
+
+
+def test_cli_attestation_proof_flag_is_gone(tmp_path, capsys):
+    """0.12.0: --attestation-proof no longer exists. A caller that
+    passes it gets an argparse usage error (exit 2) — the friend's
+    hand-written proof has no flag left to feed it through."""
     repo = _repo(tmp_path)
     revision = _head(repo)
     digest = cd.content_digest(repo, revision)
     path = tmp_path / "state.json"
-    path.write_text(json.dumps(_verified_state_data(repo, revision, digest)), encoding="utf-8")
-    bundle = _write_bundle(repo, revision=revision)
-    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest))
-    proc = subprocess.run(
-        [
-            sys.executable,
-            str(REPO / "scripts" / "state.py"),
-            "transition",
-            str(path),
-            "--to",
-            "VERIFIED",
-            "--revision",
-            revision,
-            "--repo",
-            str(repo),
-            "--evidence",
-            bundle,
-            "--attestation-proof",
-            str(proof),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
+    path.write_text(json.dumps(_building(digest=digest, revision=revision)), encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        st.main(
+            [
+                "transition",
+                str(path),
+                "--to",
+                "VERIFYING",
+                "--revision",
+                revision,
+                "--attestation-proof",
+                "proof.json",
+            ]
+        )
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --attestation-proof" in capsys.readouterr().err
+
+
+def _v2_building(digest=DIGEST, revision=REV, stage="BUILDING"):
+    """A format-2 state dict: no verification_origin, no rerun."""
+    return {
+        "format_version": 2,
+        "project": "weekly-budget",
+        "stage": stage,
+        "revision": revision,
+        "content_digest": digest,
+        "evidence_bundle": None,
+        "approval": None,
+        "history": [],
+    }
+
+
+def test_migrate_v2_verified_demoted():
+    """A pre-0.12 VERIFIED has unknown provenance — the file never
+    recorded whether it came from a CI attestation or a proof file
+    — so the migration demotes it to VERIFYING instead of
+    grandfathering it as CI-attested. The input is not mutated."""
+    data = _v2_building(stage="VERIFIED")
+    data["evidence_bundle"] = "docs/verification/x.json"
+    new = st.migrate_state(data)
+    assert new["format_version"] == 3
+    assert new["stage"] == "VERIFYING"
+    assert new["verification_origin"] is None and new["rerun"] is None
+    assert new["history"][-1]["stage"] == "VERIFYING"
+    assert "unknown verification provenance" in new["history"][-1]["note"]
+    assert data["stage"] == "VERIFIED" and data["format_version"] == 2
+
+
+def test_migrate_v2_awaiting_and_release_demoted_and_approval_preserved():
+    """AWAITING_APPROVAL and RELEASE_READY derive from VERIFIED,
+    so they are demoted the same way — but the approval itself is
+    a separate fact from technical verification, and it survives
+    the migration (it still binds the same digest when the content
+    is verified again)."""
+    approval = {
+        "approved_by": "x",
+        "revision": REV,
+        "content_digest": DIGEST,
+        "artifact": "a.tgz",
+        "at": "2026-11-07T00:00:00+00:00",
+    }
+    for stage in ("AWAITING_APPROVAL", "RELEASE_READY"):
+        data = _v2_building(stage=stage)
+        data["approval"] = dict(approval)
+        new = st.migrate_state(data)
+        assert new["stage"] == "VERIFYING", stage
+        assert new["approval"] == approval, stage
+
+
+def test_migrate_v2_building_kept_and_idempotent():
+    """Stages that imply no verification keep their stage; the
+    migration only adds the null fields. Migrating twice changes
+    nothing the second time."""
+    data = _v2_building(stage="BUILDING")
+    new = st.migrate_state(data)
+    assert new["stage"] == "BUILDING"
+    assert new["format_version"] == 3
+    assert new["verification_origin"] is None and new["rerun"] is None
+    assert st.migrate_state(new) == new
+    with pytest.raises(ValueError, match="only format 2"):
+        st.migrate_state({**_v2_building(), "format_version": 1})
+
+
+def test_migrate_malformed_history_refused():
+    """Migration refuses a malformed history with a ValueError —
+    it must never crash with a traceback on a file load_state
+    only checked for JSON shape (history null, or an entry that
+    is not an object)."""
+    for bad in (None, "x", [{"stage": "BUILDING"}, "not-an-object"]):
+        data = _v2_building()
+        data["history"] = bad
+        with pytest.raises(ValueError, match="history must be a list of objects"):
+            st.migrate_state(data)
+
+
+def test_v2_refused_until_migrated(tmp_path):
+    """A format-2 state is refused by validate and by transition
+    until it is migrated — there is no silent grandfathering."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _v2_building(digest=digest, revision=revision)
+    assert any("migrate" in p for p in st.validate_state(data, repo=repo))
+    with pytest.raises(ValueError, match="invalid state"):
+        st.transition(data, "VERIFYING", revision, repo=repo)
+
+
+def test_cli_migrate(tmp_path, capsys):
+    """The CLI migrate: a v2 VERIFIED file becomes a v3 VERIFYING
+    file (demoted, with the note), and migrating again is a
+    no-op."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _v2_building(digest=digest, revision=revision, stage="VERIFIED")
+    data["evidence_bundle"] = _write_bundle(repo, revision=revision)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert st.main(["migrate", str(path), "--repo", str(repo)]) == 0
+    assert "re-verification required" in capsys.readouterr().out
+    new = json.loads(path.read_text(encoding="utf-8"))
+    assert new["format_version"] == 3 and new["stage"] == "VERIFYING"
+    assert new["verification_origin"] is None and new["rerun"] is None
+    assert st.validate_state(new, repo=repo) == []
+    assert st.main(["migrate", str(path), "--repo", str(repo)]) == 0
+    assert "already format 3" in capsys.readouterr().out
+
+
+def test_attest_job_needs_all_gates_and_push_only():
+    """0.12.0: the attest job must wait for every essential gate
+    and run only on push to main — a fork PR cannot write
+    attestations, and an attestation must mean the whole CI was
+    green, not just the test matrix."""
+    yaml = pytest.importorskip("yaml")
+    workflow = yaml.safe_load(
+        (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert json.loads(path.read_text(encoding="utf-8"))["stage"] == "VERIFIED"
+    triggers = workflow.get("on", workflow.get(True))  # PyYAML reads `on:` as True
+    assert set(triggers["push"]["branches"]) == {"main"}
+    assert "pull_request" in triggers
+    attest = workflow["jobs"]["attest"]
+    assert set(attest["needs"]) == {
+        "test",
+        "waza",
+        "demo",
+        "waza-fixtures",
+        "shellcheck",
+        "clean-install",
+        "version-bump",
+        "plugin-validate",
+        "postgres-migration",
+    }
+    assert attest["if"] == "github.event_name == 'push'"
+
+
+def _gate_probe_repo(tmp_path, test_source, dirname="probe-repo"):
+    """A standalone scratch repo with the real rerun machinery and
+    one probe test committed: the gate's real runner needs a repo
+    whose revision contains rerun_check.py (the revision-pinned
+    copy it runs) plus the two files it loads at the same relative
+    paths — scripts/content_digest.py beside it and
+    skills/orcinus-verify/scripts/validate_evidence.py under the
+    repo root — all three stdlib-only, so a scratch repo can host
+    exactly them. Returns (repo, revision). Standalone on purpose:
+    the earlier shape worktree'd the real repo at HEAD, which fails
+    in a clean copy (no .git there) and coupled the test to the
+    enclosing checkout. pytest removes tmp_path afterwards, so
+    there is no worktree to clean up. Commits use -c
+    user.email/name so no repo config is changed."""
+    repo = tmp_path / dirname
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "test@orcinus.local")
+    _git(repo, "config", "user.name", "ORCINUS Test")
+    (repo / "scripts").mkdir()
+    for name in ("rerun_check.py", "content_digest.py"):
+        shutil.copy2(REPO / "scripts" / name, repo / "scripts" / name)
+    validator_dir = repo / "skills" / "orcinus-verify" / "scripts"
+    validator_dir.mkdir(parents=True)
+    shutil.copy2(
+        REPO / "skills" / "orcinus-verify" / "scripts" / "validate_evidence.py",
+        validator_dir / "validate_evidence.py",
+    )
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_gate_probe.py").write_text(test_source, encoding="utf-8")
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "probe repo: rerun_check.py and one probe test")
+    return repo, _head(repo)
+
+
+def _probe_bundle(tmp_path, revision, fail_first="tests/test_gate_probe.py::test_probe"):
+    """A PASS bundle for the probe worktree, written outside the
+    worktree (absolute path) so the worktree stays clean."""
+    bundle = _pass_bundle_dict()
+    if fail_first is not None:
+        bundle["fail_first"] = {
+            "test": fail_first,
+            "failed_before": False,
+            "passed_after": True,
+            "method": "not-applicable",
+            "note": "Docs-only change: no behaviour to prove fail-first for; "
+            "the test named here is the target the gate's rerun re-runs.",
+        }
+    bundle["revision"] = revision
+    path = tmp_path / "probe-bundle.json"
+    path.write_text(json.dumps(bundle), encoding="utf-8")
+    return str(path)
+
+
+def test_rerun_confirmed_real_runner_honest(tmp_path):
+    """The real in-gate rerun, end to end: the gate runs the
+    revision-pinned rerun_check.py in a temporary worktree, the
+    probe test passes there, and the transition mints
+    RERUN_CONFIRMED with the recorded rerun."""
+    wt, revision = _gate_probe_repo(tmp_path, "def test_probe():\n    assert 1 + 1 == 2\n")
+    digest = cd.content_digest(wt, revision)
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    data = st.transition(
+        data,
+        "RERUN_CONFIRMED",
+        revision,
+        repo=wt,
+        evidence_bundle=_probe_bundle(tmp_path, revision),
+    )
+    assert data["stage"] == "RERUN_CONFIRMED"
+    assert data["verification_origin"] == "LOCAL_RERUN"
+    assert data["rerun"]["tests"] == ["tests/test_gate_probe.py::test_probe"]
+    assert data["rerun"]["junit"] == {"total": 1, "passed": 1}
+    assert data["rerun"]["revision"] == revision
+    assert data["history"][-1]["origin"] == "LOCAL_RERUN"
+    assert st.validate_state(data, repo=wt) == []
+
+
+def test_rerun_confirmed_real_runner_liar_and_no_fail_first(tmp_path):
+    """The real runner refuses a bundle whose fail-first test
+    fails at the revision, and a bundle that names no test to
+    rerun — the two negative cases from the friend's table."""
+    wt, revision = _gate_probe_repo(tmp_path, "def test_probe():\n    assert 1 == 2\n")
+    digest = cd.content_digest(wt, revision)
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    with pytest.raises(ValueError, match="rerun"):
+        st.transition(
+            data,
+            "RERUN_CONFIRMED",
+            revision,
+            repo=wt,
+            evidence_bundle=_probe_bundle(tmp_path, revision),
+        )
+    wt, revision = _gate_probe_repo(
+        tmp_path, "def test_probe():\n    assert 1 + 1 == 2\n", dirname="probe-repo-2"
+    )
+    digest = cd.content_digest(wt, revision)
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    with pytest.raises(ValueError, match="fail_first"):
+        st.transition(
+            data,
+            "RERUN_CONFIRMED",
+            revision,
+            repo=wt,
+            evidence_bundle=_probe_bundle(tmp_path, revision, fail_first=None),
+        )

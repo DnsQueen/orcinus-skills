@@ -54,16 +54,21 @@
   CI attestation for the revision, checked at transition time
   (`scripts/verify_attestation.py`: `gh attestation verify` on the
   content digest, pinned to this repo's CI workflow and the revision;
-  exit 0 verified / 1 not verified / 2 unavailable), or an explicit
-  targeted-rerun proof file (`--attestation-proof`, produced by
-  `scripts/rerun_check.py`, which re-runs only the bundle's
-  fail-first test and the changed test files in a clean worktree at
-  the exact revision). A local validator PASS is provisional —
-  structurally valid, not CI-attested — and `validate` is local-only:
-  it never checks attestation. Recorded limit: no live attested
-  transition has been observed yet in this environment (`gh`
-  unauthenticated here; the `attest` job first runs on the next CI
-  run after merge) — see `docs/verification/HONEST-NUMBERS.md`.
+  exit 0 verified / 1 not verified / 2 unavailable). The CI `attest`
+  job needs all nine essential gates and runs on push-to-main only.
+  There is no fallback that mints VERIFIED: a targeted rerun mints
+  only the new RERUN_CONFIRMED stage, and the gate runs the rerun
+  itself (`scripts/rerun_check.py`, from a clean worktree at the
+  exact revision, using the revision-pinned copy of the script) and
+  records the proof it produced — the `--attestation-proof` proof
+  file was removed in 0.12.0 after a hand-written proof JSON was
+  shown to mint VERIFIED in a scratch repo with no tests at all. A
+  local validator PASS is provisional — structurally valid, not
+  CI-attested — and `validate` is local-only: it never checks
+  attestation. Recorded limit: no live attested transition has been
+  observed yet in this environment (`gh` unauthenticated here; the
+  `attest` job first runs on the next CI run after merge) — see
+  `docs/verification/HONEST-NUMBERS.md`.
 
 ## Out of v0.10
 
@@ -133,11 +138,14 @@ tamper-proof layer: anyone with write access can still edit the
 state file, and the next validate only detects the edit.
 v0.11.0 does not build it: the attestation is an
 independent-observer check on minting VERIFIED, not the
-tamper-proof layer — it is checked live at transition time and
-never recorded in the state file, and a hand-written VERIFIED stage
-still validates locally. What 0.11.0 adds is a refusal to mint
-VERIFIED without an attestation (or a targeted-rerun proof), not a
-lock on the file afterwards.
+tamper-proof layer — it is checked live at transition time and,
+since 0.12.0, recorded in the state file as
+`verification_origin`, and a hand-written VERIFIED stage still
+validates locally. What 0.11.0 added is a refusal to mint
+VERIFIED without an attestation; 0.12.0 removed the
+targeted-rerun proof fallback that used to mint VERIFIED too —
+a local rerun now mints only RERUN_CONFIRMED. Neither is a lock
+on the file afterwards.
 Harness-executed evidence (the harness, not the LLM, running the
 commands and writing the bundle — reviewer 2's 2-V8/Rec2) is 0.10
 scope, not v1.1: the validator proves a bundle is complete and

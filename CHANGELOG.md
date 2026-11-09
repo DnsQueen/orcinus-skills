@@ -3,6 +3,78 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.0] — 2026-11-10
+
+**Breaking:** the targeted-rerun fallback no longer mints VERIFIED.
+A hand-written proof JSON with correct values was shown to mint
+VERIFIED through `--attestation-proof` in a scratch repo with no
+tests at all, without `rerun_check.py` ever running — the content
+digest is public and recomputable, so checking JSON fields was
+never a proof that anything ran. The flag is removed, the gate
+runs the rerun itself, and a local rerun mints only the new
+RERUN_CONFIRMED stage. Old format_version 2 states are migrated,
+never grandfathered: a v2 VERIFIED, AWAITING_APPROVAL, or
+RELEASE_READY becomes VERIFYING, because v2 never recorded how
+verification happened.
+
+### Added
+
+- **New stage `RERUN_CONFIRMED`:** a local targeted rerun mints
+  only this stage, never VERIFIED. It may move to
+  AWAITING_APPROVAL — the human decides on the rerun record, with
+  the origin visible in the state file. No path from
+  RERUN_CONFIRMED (or from AWAITING_APPROVAL) to VERIFIED exists.
+- **`verification_origin` and `rerun` fields (format_version 3):**
+  every state records how its content was verified (`CI_ATTESTED`
+  or `LOCAL_RERUN`, null before any verification), the rerun
+  record the gate itself produced (revision, time, tests run,
+  JUnit totals, exit code), and the origin in force at each
+  history entry. A human approval never changes the origin:
+  approval is a decision, not a verification. BUILDING resets
+  both fields to null.
+- **`state.py migrate`:** migrates a format_version 2 file to 3 —
+  adds the new fields as null, adds `origin: null` to history
+  entries, and demotes VERIFIED / AWAITING_APPROVAL /
+  RELEASE_READY to VERIFYING (provenance unknown, never
+  recorded). The approval field is preserved. Idempotent: a
+  format 3 file is reported as already migrated and left
+  unchanged.
+
+### Changed
+
+- **In-gate rerun:** the state gate runs `rerun_check.py` itself
+  (subprocess, list argv, no shell) from a clean worktree at the
+  exact revision, using the revision-pinned copy of the script —
+  never the working-tree copy — and re-checks the proof it just
+  produced field-by-field. Fail-closed on timeout, non-zero exit,
+  missing script, unreadable proof, or a proof that does not
+  match what the gate just ran. Stale-revision and dirty-tree
+  gates now apply to RERUN_CONFIRMED as well as VERIFIED.
+- **CI `attest` job:** `needs` now names all nine essential gates
+  (test, waza, demo, waza-fixtures, shellcheck, clean-install,
+  version-bump, plugin-validate, postgres-migration) instead of
+  `[test]` alone, and the job runs on push-to-main only (`if:
+  github.event_name == 'push'`): a fork pull request cannot write
+  attestations, so pinning it makes that explicit instead of
+  relying on the permission failure.
+
+### Removed
+
+- **`--attestation-proof`:** the state-gate flag that accepted a
+  caller-supplied rerun proof file is gone — that file was the
+  hole. No proof file can be handed in anymore; the only way to
+  RERUN_CONFIRMED is the gate running the rerun itself, and the
+  only way to VERIFIED is a live CI attestation.
+
+### Fixed
+
+- **No new bugs introduced by this fix pass:** the change is
+  covered by 58 state-machine tests (was 50), including a
+  no-escalation sweep over every (stage, origin) pair, migration
+  demotion/idempotence, and the honest/liar/no-fail-first
+  in-gate rerun cases. The full suite stays green; nothing was
+  weakened to get there.
+
 ## [0.11.1] — 2026-11-09
 
 Two fixes to the 0.11.0 targeted re-run checker, both caught by CI

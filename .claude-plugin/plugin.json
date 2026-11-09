@@ -2,7 +2,7 @@
   "author": {
     "name": "DnsQueen"
   },
-  "description": "ORCINUS: a verification-first engineering skill collection \u2014 one integrated nervous system for the 0\u2013100 software lifecycle, from raw idea to release. Router + 35 focused sub-skills, shared glossary, evidence bundles, independent review. No auto-merge, no weakened tests. Evidence bundles are tamper-evident, not proof of execution: a test gate must invoke a recognised test runner and its JUnit report must agree with the recorded command and stdout, but a command that runs a runner and then fabricates consistent artifacts can still validate. A local PASS bundle is provisional; VERIFIED means the revision was attested in CI (or a targeted-rerun proof was supplied).",
+  "description": "ORCINUS: a verification-first engineering skill collection \u2014 one integrated nervous system for the 0\u2013100 software lifecycle, from raw idea to release. Router + 35 focused sub-skills, shared glossary, evidence bundles, independent review. No auto-merge, no weakened tests. Evidence bundles are tamper-evident, not proof of execution: a test gate must invoke a recognised test runner and its JUnit report must agree with the recorded command and stdout, but a command that runs a runner and then fabricates consistent artifacts can still validate. A local PASS bundle is provisional; VERIFIED means the revision was attested in CI; a local targeted rerun mints only RERUN_CONFIRMED, never VERIFIED.",
   "homepage": "https://github.com/DnsQueen/orcinus-skills",
   "keywords": [
     "engineering",
@@ -15,5 +15,5 @@
   "license": "MIT",
   "name": "orcinus-skills",
   "repository": "https://github.com/DnsQueen/orcinus-skills",
-  "version": "0.11.1"
+  "version": "0.12.0"
 }

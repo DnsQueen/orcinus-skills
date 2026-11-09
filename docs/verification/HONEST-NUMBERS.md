@@ -83,14 +83,32 @@ is a finding to record, not a number to hide: the router skill
 would need its routing table or its triggers changed, or the
 workload would need routing without it.
 
-## CI-attested verification (0.11.0)
+## CI-attested verification (0.11.0 → 0.12.0)
 
-What is now proven: a CI-attested test run for a revision — the
-`attest` job needs `[test]`, so an attestation existing for a run
-implies the test job passed in that same run. The check is live:
-`gh attestation verify` on the tree content digest, pinned to this
-repo's CI workflow and the revision — and it never trusts `gh`'s
-exit code alone (the JSON subjects must contain the file's sha256).
+What is now proven: a CI-attested test run for a revision — since
+0.12.0 the `attest` job needs all nine essential gates (test, waza,
+demo, waza-fixtures, shellcheck, clean-install, version-bump,
+plugin-validate, postgres-migration) and runs on push-to-main only,
+so an attestation existing for a run implies every one of them
+passed in that same run. The check is live: `gh attestation
+verify` on the tree content digest, pinned to this repo's CI
+workflow and the revision — and it never trusts `gh`'s exit code
+alone (the JSON subjects must contain the file's sha256).
+
+What 0.12.0 closed: the targeted-rerun proof file. A hand-written
+proof JSON with correct values (method `targeted-rerun`, matching
+revision, content digest recomputed from the real bundle, exit
+code 0, junit 2/2) was shown to mint VERIFIED through
+`--attestation-proof` in a scratch repo with no tests at all,
+without `rerun_check.py` ever running — the content digest is
+public and recomputable, so checking JSON fields was never a proof
+that anything ran. The flag is removed: the gate now runs the
+rerun itself (from a clean worktree at the exact revision, using
+the revision-pinned copy of the script) and records the proof it
+produced, and a local rerun mints only RERUN_CONFIRMED, never
+VERIFIED. The verifier's exact experiment (scratch repo, no tests,
+hand-written proof) is now refused: there is no flag left to hand
+it to.
 
 What is still NOT proven: correctness or safety of the code;
 safety of the dependencies; the agent's writing process; and that
@@ -98,7 +116,13 @@ the bundle's artifacts are the ones the runner produced — the
 targeted re-run (`scripts/rerun_check.py`) verifies the claim that
 the selected tests pass at the revision, not the artifacts'
 provenance. A fabricated JUnit that exactly matches what a real
-run would produce still agrees with the rerun.
+run would produce still agrees with the rerun. And the remaining
+ceiling, stated plainly: local minting is still not tamper-proof
+against an agent with write access to the repo — a hand-written
+RERUN_CONFIRMED record still validates locally, because
+`validate` does not re-run anything. What 0.12.0 closed was the
+legitimate-looking path (a proof file the gate itself accepted as
+VERIFIED); the tamper-proof layer is v1.1, not this release.
 
 Measurement: one live attested transition has now been observed —
 for revision `697707b` (CI run 42690744707, 2026-11-09), the
