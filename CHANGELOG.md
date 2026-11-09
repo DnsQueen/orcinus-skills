@@ -69,7 +69,7 @@ verification happened.
 ### Fixed
 
 - **No new bugs introduced by this fix pass:** the change is
-  covered by 58 state-machine tests (was 50), including a
+  covered by 59 state-machine tests (was 50), including a
   no-escalation sweep over every (stage, origin) pair, migration
   demotion/idempotence, and the honest/liar/no-fail-first
   in-gate rerun cases. The full suite stays green; nothing was
