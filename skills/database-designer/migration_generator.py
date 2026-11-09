@@ -1087,7 +1087,7 @@ class MigrationGenerator:
             description=f"Create table {table.name} with {len(table.columns)} columns",
             sql_forward=create_sql,
             sql_rollback=drop_sql,
-            validation_sql=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(table.name)};",
+            validation_sql=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(table.name)};",  # nosec B608: value interpolated only via quote_literal()
             dependencies=dependencies if dependencies is not None else [],
             risk_level="LOW",
         )
@@ -1132,7 +1132,7 @@ class MigrationGenerator:
             description=f"Add column {column.name} to {table}",
             sql_forward=add_sql,
             sql_rollback=drop_sql,
-            validation_sql=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(table)} AND column_name = {quote_literal(column.name)};",
+            validation_sql=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(table)} AND column_name = {quote_literal(column.name)};",  # nosec B608: values interpolated only via quote_literal()
             risk_level=risk_level,
         )
 
@@ -1160,7 +1160,7 @@ class MigrationGenerator:
             description=f"Add column {column.name} to {table} (zero-downtime phase 1)",
             sql_forward=add_sql,
             sql_rollback=drop_sql,
-            validation_sql=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(table)} AND column_name = {quote_literal(column.name)};",
+            validation_sql=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(table)} AND column_name = {quote_literal(column.name)};",  # nosec B608: values interpolated only via quote_literal()
             risk_level="LOW",
             zero_downtime_phase="EXPAND",
         )
@@ -1454,7 +1454,7 @@ class MigrationGenerator:
             description=f"Modify column {column}: {', '.join(changes)}",
             sql_forward=alter_sql,
             sql_rollback=rollback_sql,
-            validation_sql=f"SELECT data_type, is_nullable FROM information_schema.columns WHERE table_name = {quote_literal(table)} AND column_name = {quote_literal(column)};",
+            validation_sql=f"SELECT data_type, is_nullable FROM information_schema.columns WHERE table_name = {quote_literal(table)} AND column_name = {quote_literal(column)};",  # nosec B608: values interpolated only via quote_literal()
             risk_level=risk_level,
         )
 
@@ -1509,10 +1509,10 @@ class MigrationGenerator:
         # Step 2: Copy data, with a backfill check that must return 0
         # before the contract phase runs.
         if not target_def.nullable:
-            backfill_sql = f"SELECT COUNT(*) FROM {quote_ident(table)} WHERE {quote_ident(temp_column)} IS NULL;"
+            backfill_sql = f"SELECT COUNT(*) FROM {quote_ident(table)} WHERE {quote_ident(temp_column)} IS NULL;"  # nosec B608: identifiers interpolated only via quote_ident()
         else:
             backfill_sql = (
-                f"SELECT COUNT(*) FROM {quote_ident(table)} "
+                f"SELECT COUNT(*) FROM {quote_ident(table)} "  # nosec B608: identifiers interpolated only via quote_ident()
                 f"WHERE {quote_ident(temp_column)} IS NULL "
                 f"AND {quote_ident(column)} IS NOT NULL;"
             )
@@ -1521,8 +1521,8 @@ class MigrationGenerator:
             step_type="COPY_COLUMN_DATA",
             table=table,
             description=f"Copy data from {column} to {temp_column} in {table} — the backfill check must return 0 before the contract phase",
-            sql_forward=f"UPDATE {quote_ident(table)} SET {quote_ident(temp_column)} = {quote_ident(column)};",
-            sql_rollback=f"UPDATE {quote_ident(table)} SET {quote_ident(temp_column)} = NULL;",
+            sql_forward=f"UPDATE {quote_ident(table)} SET {quote_ident(temp_column)} = {quote_ident(column)};",  # nosec B608: identifiers interpolated only via quote_ident()
+            sql_rollback=f"UPDATE {quote_ident(table)} SET {quote_ident(temp_column)} = NULL;",  # nosec B608: identifiers interpolated only via quote_ident()
             validation_sql=backfill_sql,
             risk_level="MEDIUM",
             zero_downtime_phase="EXPAND",
@@ -1801,7 +1801,7 @@ class MigrationGenerator:
             description=f"Rename table {old_name} to {new_name}{similarity_note}",
             sql_forward=rename_sql,
             sql_rollback=rollback_sql,
-            validation_sql=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(new_name)};",
+            validation_sql=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(new_name)};",  # nosec B608: value interpolated only via quote_literal()
             risk_level="MEDIUM",
         )
 
@@ -1971,7 +1971,7 @@ class MigrationGenerator:
     def _generate_migration_id(self, changes: Dict[str, List[Dict[str, Any]]]) -> str:
         """Generate unique migration ID."""
         content = json.dumps(changes, sort_keys=True, default=_json_default)
-        return hashlib.md5(content.encode()).hexdigest()[:8]
+        return hashlib.md5(content.encode(), usedforsecurity=False).hexdigest()[:8]
 
     def _calculate_schema_hash(self, schema: Optional[Dict[str, Any]]) -> str:
         """The SHA-256 of a schema dict (keys sorted, defaults
@@ -2069,7 +2069,7 @@ class ValidationGenerator:
             check_type="TABLE_EXISTS",
             table=step.table,
             description=f"Verify table {step.table} exists",
-            sql_query=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(step.table)};",
+            sql_query=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(step.table)};",  # nosec B608: value interpolated only via quote_literal()
             expected_result=1,
         )
 
@@ -2084,7 +2084,7 @@ class ValidationGenerator:
             check_type="COLUMN_EXISTS",
             table=step.table,
             description=f"Verify column {column_name} exists in {step.table}",
-            sql_query=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(step.table)} AND column_name = {quote_literal(column_name)};",
+            sql_query=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(step.table)} AND column_name = {quote_literal(column_name)};",  # nosec B608: values interpolated only via quote_literal()
             expected_result=1,
         )
 
@@ -2117,7 +2117,7 @@ class ValidationGenerator:
         definition = definition_match.group(1).replace('"', "") if definition_match else ""
 
         query = (
-            "SELECT COUNT(*) FROM pg_indexes "
+            "SELECT COUNT(*) FROM pg_indexes "  # nosec B608: interpolations in this query use quote_literal() only
             "WHERE schemaname = current_schema() "
             f"AND tablename = {quote_literal(step.table)} "
             f"AND indexname = {quote_literal(index_name)}"
@@ -2149,7 +2149,7 @@ class ValidationGenerator:
             check_type="COLUMN_EXISTS_BEFORE_DROP",
             table=step.table,
             description=f"Verify column {column_name} exists in {step.table} before dropping it",
-            sql_query=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(step.table)} AND column_name = {quote_literal(column_name)};",
+            sql_query=f"SELECT COUNT(*) FROM information_schema.columns WHERE table_name = {quote_literal(step.table)} AND column_name = {quote_literal(column_name)};",  # nosec B608: values interpolated only via quote_literal()
             expected_result=1,
         )
 
@@ -2162,7 +2162,7 @@ class ValidationGenerator:
             check_type="TABLE_EXISTS_BEFORE_DROP",
             table=step.table,
             description=f"Verify table {step.table} exists before dropping it",
-            sql_query=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(step.table)};",
+            sql_query=f"SELECT COUNT(*) FROM information_schema.tables WHERE table_name = {quote_literal(step.table)};",  # nosec B608: value interpolated only via quote_literal()
             expected_result=1,
         )
 
