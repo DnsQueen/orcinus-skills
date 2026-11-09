@@ -55,7 +55,7 @@ measurement, and tell the reader when to turn the thing off.
 | Router self-check pin | 12/12 baseline, 12/12 terse, 12/12 orcinus; honest delta 0 | Grading REFERENCE_DECISIONS (the expected answers) under each arm label — a harness pin, **not an agent measurement** | `evals/snapshots/router-results.json` |
 | Router live three-arm run | Not measured yet — no live-agent run recorded | — | `evals/router-01.md` |
 | orcinus-verify waza harness-smoke (mock) | 2/2, aggregate score 1.00; negative control 0/1 (fails by design) | Mock executor, official waza v0.40.0 binary | `evals/evidence-eval-01.md` Cases 1–2 |
-| CI-attested VERIFIED transition | Not observed yet — no live attested transition recorded | — | `scripts/verify_attestation.py`, `.github/workflows/ci.yml` (`attest` job) |
+| CI-attested VERIFIED transition | Observed once — 1 attestation for revision `697707b` (CI run 42690744707), verified via the GitHub attestations API: subject `content-digest.txt` sha256 matches the tree digest, SLSA v1 predicate, workflow `.github/workflows/ci.yml` | GitHub attestations API, 2026-11-09 | `scripts/verify_attestation.py`, `.github/workflows/ci.yml` (`attest` job) |
 | finalize / registry-publish / independent-review / handoff waza evals (real executor) | Not measured yet — specs exist, no live-agent run recorded | — | `evals/waza-finalize/`, `evals/waza-registry-publish/`, `evals/waza-independent-review/`, `evals/waza-handoff/` |
 
 ## When the skill wins
@@ -100,11 +100,16 @@ the selected tests pass at the revision, not the artifacts'
 provenance. A fabricated JUnit that exactly matches what a real
 run would produce still agrees with the rerun.
 
-Measurement: no live attested transition has been observed yet in
-this environment — `gh` is unauthenticated here, and the `attest`
-job first runs on the next CI run after merge — so no numbers are
-claimed. The first observed attested transition goes here when it
-exists.
+Measurement: one live attested transition has now been observed —
+for revision `697707b` (CI run 42690744707, 2026-11-09), the
+attestations API returns exactly one attestation whose subject is
+`content-digest.txt` with the sha256 of that revision's tree
+digest, an SLSA v1 predicate, and the CI workflow as its builder.
+What is still NOT observed in this environment: the
+`verify_attestation.py` live exit-0 path itself — `gh` is
+unauthenticated here, so the script's `gh attestation verify`
+call has not yet returned exit 0 against a real attestation.
+No numbers beyond this single observation are claimed.
 
 ## What this does not measure
 
