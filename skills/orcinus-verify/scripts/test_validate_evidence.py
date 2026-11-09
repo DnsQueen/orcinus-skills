@@ -440,9 +440,9 @@ def _recorded_bundle(bundle, directory, commands=None, repo=None):
             fragment = _run_record_check(directory, "red_check", [cmd], red_repo, shell=True)
         else:
             fragment = _run_record_check(directory, "red_check", cmd, red_repo)
-        # The red run has no name in the schema (additionalProperties
-        # is false): the fragment's name is the capture filename stem.
-        fragment.pop("name", None)
+        # Round 11, FND-007: the fragment pastes verbatim into
+        # red_check, name included — the schema allows it, so no
+        # field is dropped here.
         ff["red_check"].update(fragment)
         ff["red_check"].pop("stdout_text", None)
         import hashlib
@@ -1383,6 +1383,20 @@ def test_fail_first_red_check_zero_exit_fails():
     }
     problems = _problems(b)
     assert any("red_check" in p and "exit" in p for p in problems)
+
+
+def test_fail_first_red_check_accepts_verbatim_record_check_fragment(tmp_path):
+    # Round 11, FND-007: the fragment record_check.py prints must
+    # paste verbatim into fail_first.red_check, exactly as SKILL.md
+    # step 3 instructs — no hand-editing the fragment. The fragment
+    # always carries `name`, so the schema must allow it.
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    red_repo = _red_worktree(tmp_path, _recording_repo(tmp_path))
+    fragment = _run_record_check(tmp_path, "red_check", _RED_COMMAND, red_repo)
+    assert fragment["name"] == "red_check"
+    b["fail_first"]["red_check"] = fragment
+    assert _problems(b, tmp_path) == []
 
 
 def test_fail_first_unlinked_test_name_fails():
