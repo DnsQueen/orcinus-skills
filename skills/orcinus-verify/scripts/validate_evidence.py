@@ -1066,8 +1066,10 @@ def _argv_mentions_path(argv, artifact):
     `--flag=<path>` token, or the token after `--junitxml`. Paths
     are compared by trailing components, so an absolute
     `--junitxml /tmp/.../green.xml` names the bundle-relative
-    `green.xml`, and `./green.xml` names `green.xml`; a different
-    filename never matches. No runner's report flag is assumed
+    `green.xml`, and `./green.xml` names `green.xml`; a Windows
+    `--junitxml C:\\...\\green.xml` names it too (backslashes are
+    normalised before the comparison). A different filename
+    never matches. No runner's report flag is assumed
     beyond that: pytest's `--junitxml` is the only spelling this
     repo documents, and any token naming the path counts, whatever
     flag carried it. Written here (own code): no borrowed
@@ -1089,7 +1091,11 @@ def _argv_mentions_path(argv, artifact):
     for candidate in candidates:
         if not candidate:
             continue
-        cand_parts = PurePosixPath(candidate).parts
+        # A Windows path names the same trailing components as a
+        # POSIX one: normalise backslashes before the comparison,
+        # so `C:\...\green.xml` matches the bundle-relative
+        # `green.xml` (a drive letter is just a leading component).
+        cand_parts = PurePosixPath(candidate.replace("\\", "/")).parts
         if len(cand_parts) >= len(art_parts) and cand_parts[-len(art_parts) :] == art_parts:
             return True
     return False
@@ -1690,11 +1696,21 @@ _M_RUNNERS = frozenset(r[-1] for r in TEST_RUNNERS if len(r) == 3 and r[1] == "-
 _SHELL_OPERATORS = (";", "&&", "||", "|", "&")
 
 
+def _basename(program):
+    """The final component of a program path, on either separator,
+    without a Windows `.exe` suffix: `C:\\Python312\\python.exe`
+    names `python`, `/usr/bin/python3` names `python3`."""
+    name = re.split(r"[/\\]", program)[-1]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    return name
+
+
 def _is_python(program):
     """True when `program` names a Python interpreter: `python`,
-    `python3.11`, `/usr/bin/python3`, `pypy3` — the basename, with
-    an optional version suffix."""
-    name = program.rsplit("/", 1)[-1]
+    `python3.11`, `/usr/bin/python3`, `pypy3`, `C:\\Python312\\python.exe`
+    — the basename, with an optional version suffix."""
+    name = _basename(program)
     return re.fullmatch(r"(python|pypy)[0-9.]*", name) is not None
 
 
@@ -1772,7 +1788,7 @@ def _argv_runner_tool_name(parts):
     for runner in TEST_RUNNERS:
         if tuple(parts[: len(runner)]) == runner:
             return _normalise_tool_name(_runner_tool_name(runner))
-    basename = parts[0].rsplit("/", 1)[-1]
+    basename = _basename(parts[0])
     if basename in _SINGLE_TOKEN_RUNNERS:
         return _normalise_tool_name(basename)
     for i, token in enumerate(parts):

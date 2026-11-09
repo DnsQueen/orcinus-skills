@@ -212,14 +212,20 @@ def _recording_repo(directory, test_source=None):
     # real base to bind the red to. A one-commit repo cannot model
     # that shape: its red would sit on the bundle revision itself,
     # which is exactly the mislabelled shape the validator rejects.
-    (repo / "code.py").write_text("x = 1\n", encoding="utf-8")
+    # The fixture file is sample.py, not code.py: pytest inserts
+    # the repo root on sys.path, so a stdlib name at the root
+    # shadows the stdlib module — on Python 3.13 `code.py` breaks
+    # pytest's own configure (`pdb` imports stdlib `code`) with an
+    # INTERNALERROR and exit code 3, failing every test that
+    # records against this repo.
+    (repo / "sample.py").write_text("x = 1\n", encoding="utf-8")
     # A real pytest run in this repo writes __pycache__ and
     # .pytest_cache: ignored, so the tree stays clean after the run
     # (round 11, FND-001 — the print one-liner never wrote anything).
     (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n", encoding="utf-8")
     _git(repo, "add", ".")
-    _git(repo, "commit", "-qm", "code")
-    (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
+    _git(repo, "commit", "-qm", "sample")
+    (repo / "sample.py").write_text("x = 2\n", encoding="utf-8")
     (repo / "tests").mkdir(exist_ok=True)
     (repo / "tests" / "test_capture.py").write_text(
         test_source
@@ -2338,7 +2344,7 @@ def _retime(bundle, bundle_dir, started, finished):
 
 def _second_commit(repo):
     """A second commit on the recording repo; returns its HEAD."""
-    (repo / "code.py").write_text("x = 3\n", encoding="utf-8")
+    (repo / "sample.py").write_text("x = 3\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "second")
     return _head_sha_of(repo)
@@ -2429,15 +2435,15 @@ def test_tree_binding_dirty_diff_passes_and_wrong_diff_fails(tmp_path):
 
     b, repo = _bound_bundle(tmp_path)
     # Round 9, FND-002 changed the recording repo's fix commit to
-    # code.py "x = 2", so dirtying the tree needs content that
+    # sample.py "x = 2", so dirtying the tree needs content that
     # differs from HEAD — writing "x = 2" is a no-op now.
-    (repo / "code.py").write_text("x = 99\n", encoding="utf-8")
+    (repo / "sample.py").write_text("x = 99\n", encoding="utf-8")
     diff = subprocess.run(
         ["git", "-C", str(repo), "diff", "HEAD"], check=True, capture_output=True
     ).stdout
     diff_hash = hashlib.sha256(diff).hexdigest()
     b["working_tree_state"] = "dirty"
-    b["dirty_files"] = ["code.py"]
+    b["dirty_files"] = ["sample.py"]
     b["revision"] = "working-tree"
     b["diff_sha256"] = diff_hash
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo) == []
@@ -2699,12 +2705,12 @@ def _revert_bundle(tmp_path):
     b, repo = _bound_bundle(tmp_path)
     b["fail_first"]["method"] = "revert-at-smallest-scope"
     _re_record_red_at_head(b, tmp_path, repo)
-    (repo / "code.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "sample.py").write_text("x = 1\n", encoding="utf-8")
     diff = subprocess.run(
         ["git", "-C", str(repo), "diff", "HEAD"], check=True, capture_output=True
     ).stdout
     red_diff = hashlib.sha256(diff).hexdigest()
-    (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
+    (repo / "sample.py").write_text("x = 2\n", encoding="utf-8")
     b["fail_first"]["red_diff_sha256"] = red_diff
     return b, repo, red_diff
 
@@ -2732,7 +2738,7 @@ def test_tree_binding_rejects_clean_claim_on_dirty_tree(tmp_path):
     # bundle claiming "clean" on a tree with tracked modifications
     # is rejected, whatever it claims.
     b, repo = _bound_bundle(tmp_path)
-    (repo / "code.py").write_text("x = 99\n", encoding="utf-8")
+    (repo / "sample.py").write_text("x = 99\n", encoding="utf-8")
     problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
     assert any("clean" in p and "dirty" in p for p in problems), problems
 
@@ -2753,7 +2759,7 @@ def test_tree_binding_rejects_dirty_claim_on_clean_tree(tmp_path):
     # cannot be the diff of a clean tree.
     b, repo = _bound_bundle(tmp_path)
     b["working_tree_state"] = "dirty"
-    b["dirty_files"] = ["code.py"]
+    b["dirty_files"] = ["sample.py"]
     b["diff_sha256"] = "0" * 64
     problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path, repo=repo)
     assert any("dirty" in p and "clean" in p for p in problems), problems
@@ -2969,6 +2975,40 @@ def test_argv_mentions_path_shapes():
         (["bash", "-c", "echo 'unterminated"], "green.xml", False),
         ([], "green.xml", False),
         (None, "green.xml", False),
+    ]
+    for argv, artifact, expected in cases:
+        assert ve._argv_mentions_path(argv, artifact) is expected, argv
+
+
+def test_argv_windows_paths():
+    # Windows CI (round 11): the good bundle's recorded argv
+    # carries drive-letter paths with backslashes and a
+    # `python.exe` interpreter — `C:\...\python.exe -m pytest
+    # --junitxml C:\...\green.xml`. The helpers must read those
+    # the same way they read POSIX argv: the basename split and
+    # the `.exe` suffix for the runner match, backslash
+    # normalisation for the trailing-components path match.
+    win_python = r"C:\hostedtoolcache\windows\Python\3.12.10\x64\python.exe"
+    win_report = r"C:\Users\runneradmin\AppData\Local\Temp\x\green.xml"
+    assert ve._is_python(win_python) is True
+    assert ve._is_python(r"C:\Python312\python3.12.exe") is True
+    assert ve._is_python(r"C:\Python312\Scripts\pytest.exe") is False
+    assert ve._argv_runner_tool_name([win_python, "-m", "pytest", "-q"]) == "pytest"
+    assert ve._argv_runner_tool_name([r"C:\Python312\Scripts\pytest.exe", "-q"]) == "pytest"
+    assert ve._argv_runner_tool_name([r"C:\Python312\Scripts\py.test.exe", "-q"]) == "pytest"
+    assert (
+        ve._invoked_runner_tool_name(
+            [win_python, "-m", "pytest", "tests/test_capture.py", "-v", "--junitxml", win_report]
+        )
+        == "pytest"
+    )
+    assert ve._invokes_test_runner([win_python, "-m", "pytest", "-q"]) is True
+    cases = [
+        ([win_python, "-m", "pytest", "--junitxml", win_report], "green.xml", True),
+        (["pytest", "--junitxml=" + win_report], "green.xml", True),
+        (["pytest", "--junitxml", r"C:\bundle\reports\test.xml"], "reports/test.xml", True),
+        (["pytest", "--junitxml", r"C:\bundle\other.xml"], "green.xml", False),
+        (["pytest", "--junitxml", r"C:\bundle\green.xml"], "reports/green.xml", False),
     ]
     for argv, artifact, expected in cases:
         assert ve._argv_mentions_path(argv, artifact) is expected, argv
