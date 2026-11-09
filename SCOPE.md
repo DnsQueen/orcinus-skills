@@ -120,7 +120,11 @@ supported-versions table against the plugin version (it said 1.0.x
 while the plugin was 0.9.0 — historical); `doctor.py` finds a ruff binary on PATH
 (it only tried `python -m ruff`), its waza fallback is Linux-only,
 and its docstring now states the real exit codes (1 incomplete, 2
-incompatible); the clean-copy check was redesigned — two modes
+incompatible); residual (round 11, FND-012): the SHA-256 pin `doctor.py`
+gates the /tmp waza fallback on lives in this same repo, so a repo
+compromise could replace the hash and the binary together — the pin
+only stops a planted /tmp binary, it is not a root of trust outside
+the repo; the clean-copy check was redesigned — two modes
 (working-tree copy, release via `git archive`), it never renames the
 source (the old hide-by-rename could strand the checkout hidden if
 killed), and its docstring states the price (an absolute-path leak

@@ -25,6 +25,8 @@ user what to install before they trust a verification run.
 """
 
 import hashlib
+import importlib.util
+import json
 import os
 import platform
 import shutil
@@ -56,6 +58,10 @@ WAZA_VERSION = "0.40.0"
 # download, ci.yml:57-62) — verified against the downloaded binary.
 # It proves the file is the released one, not a planted one; it
 # does not prove the release itself was not forged (2-S6).
+# Residual (round 11, FND-012): the pinned hash lives in this same
+# repo, so a repo compromise could replace the hash and the binary
+# together. The pin only stops a planted /tmp binary; it is not a
+# root of trust outside the repo.
 WAZA_FALLBACK_PATH = "/tmp/waza-linux-amd64"
 WAZA_LINUX_SHA256 = "d09117a3c631f44a00a6c362462c951aed83c87751e8c25f39916a77d1013802"
 
@@ -474,6 +480,110 @@ def check_waza():
     )
 
 
+def _repo_version():
+    """The repo version, from .claude-plugin/plugin.json — the same
+    source validate_repo.py's version checks use. Returns None when
+    the file is missing or unparsable, so a caller can report
+    'cannot verify' instead of guessing a version."""
+    plugin = ROOT / ".claude-plugin" / "plugin.json"
+    try:
+        return json.loads(plugin.read_text(encoding="utf-8")).get("version")
+    except (OSError, ValueError):
+        return None
+
+
+def _parse_hermes_bundle(path):
+    """Parse hermes/orcinus.yaml with validate_repo's stdlib-only
+    subset parser — the same parser validate_repo uses for this
+    exact file, so doctor and the validator cannot disagree about
+    whether it parses. Returns (data, error)."""
+    spec = importlib.util.spec_from_file_location(
+        "orcinus_validate_repo", ROOT / "scripts" / "validate_repo.py"
+    )
+    if spec is None or spec.loader is None:
+        return None, "cannot load scripts/validate_repo.py"
+    try:
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.parse_yaml_file(path)
+    except Exception as e:  # noqa: BLE001 — any load/parse failure is a diagnostic, not a crash
+        return None, str(e)
+
+
+def check_hermes_bundle():
+    # Round 11, FND-009: Hermes compatibility was documented but
+    # never executed against a real Hermes install — no Hermes CLI
+    # exists in this environment. This check proves the bundle is
+    # well-formed (parses, lists only the router, and its version
+    # matches the repo version when the bundle carries one), NOT
+    # that Hermes runs it.
+    path = ROOT / "hermes" / "orcinus.yaml"
+    if not path.is_file():
+        # Missing is incomplete, never incompatible: Hermes users
+        # lose their entry point, but no Python gate depends on it.
+        return _check(
+            "hermes",
+            "incomplete",
+            "hermes/orcinus.yaml is missing (the Hermes bundle is "
+            "not present; the Claude Code plugin path is unaffected)",
+            fix="Restore hermes/orcinus.yaml from the repository.",
+        )
+    try:
+        data, error = _parse_hermes_bundle(path)
+    except OSError as e:
+        return _check("hermes", "incomplete", f"hermes/orcinus.yaml cannot be read: {e}")
+    if error is not None:
+        return _check("hermes", "incompatible", f"hermes/orcinus.yaml: unparsable YAML: {error}")
+    if not isinstance(data, dict):
+        return _check("hermes", "incompatible", "hermes/orcinus.yaml: the bundle is not a mapping")
+    skills = data.get("skills")
+    if skills != ["orcinus"]:
+        # A bundle loads everything it lists at once, so listing
+        # sub-skills would dump the whole collection into one
+        # message; and without the router there is no entry point.
+        return _check(
+            "hermes",
+            "incompatible",
+            f"hermes/orcinus.yaml: skills must be exactly ['orcinus'], got {skills!r}",
+        )
+    # The bundle carries no version field today, so the version
+    # comparison only applies when one is present — a missing field
+    # is not a mismatch, it is an unversioned bundle.
+    bundle_version = data.get("version")
+    if bundle_version is None:
+        return _check(
+            "hermes",
+            "ready",
+            "hermes/orcinus.yaml parses and lists only the router "
+            "skill 'orcinus' (no version field in the bundle, so no "
+            "version to pin) — well-formed only, never loaded by a "
+            "real Hermes installation",
+        )
+    repo_version = _repo_version()
+    if repo_version is None:
+        return _check(
+            "hermes",
+            "incomplete",
+            f"hermes/orcinus.yaml lists only the router, but the repo "
+            f"version in .claude-plugin/plugin.json is unreadable, so "
+            f"bundle version {bundle_version!r} could not be checked",
+        )
+    if str(bundle_version) != str(repo_version):
+        return _check(
+            "hermes",
+            "incompatible",
+            f"hermes/orcinus.yaml version {bundle_version!r} != repo version {repo_version!r}",
+        )
+    return _check(
+        "hermes",
+        "ready",
+        f"hermes/orcinus.yaml parses, lists only the router skill "
+        f"'orcinus', and version {bundle_version!r} matches the repo "
+        f"version — well-formed only, never loaded by a real Hermes "
+        f"installation",
+    )
+
+
 def check_repo_files():
     missing = []
     for rel in (
@@ -508,6 +618,7 @@ def main():
         check_stryker(),
         check_mutmut(),
         check_waza(),
+        check_hermes_bundle(),
         check_repo_files(),
     ]
     print(f"ORCINUS doctor — {ROOT} (Python {platform.python_version()})")

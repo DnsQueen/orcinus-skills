@@ -650,6 +650,7 @@ def _all_ready(monkeypatch, override):
         "check_stryker",
         "check_mutmut",
         "check_waza",
+        "check_hermes_bundle",
         "check_repo_files",
     ):
         status = override.get(name, "ready")
@@ -777,3 +778,113 @@ def test_external_tools_garbage_version_is_incompatible(monkeypatch):
     for check in (doctor.check_oasdiff(), doctor.check_stryker(), doctor.check_mutmut()):
         assert check["status"] == "incompatible"
         assert "unreadable" in check["detail"]
+
+
+# --- Round 11 (2026-11-09): FND-009 — Hermes bundle check ---
+
+
+def _hermes_fixture(tmp_path, monkeypatch, bundle_text=None, plugin_version=None):
+    """A minimal repo root for check_hermes_bundle: the bundle, a
+    plugin.json carrying the repo version, and a copy of the real
+    validate_repo.py (doctor parses the bundle with its subset
+    parser, loaded from ROOT/scripts/). bundle_text None means no
+    bundle file at all. The version is read from the real
+    plugin.json, never hardcoded, so the fixture survives a bump."""
+    import json
+    import shutil
+
+    scripts_dir = Path(doctor.__file__).resolve().parent
+    root = tmp_path / "repo"
+    (root / "hermes").mkdir(parents=True)
+    (root / "scripts").mkdir()
+    (root / ".claude-plugin").mkdir()
+    shutil.copy2(scripts_dir / "validate_repo.py", root / "scripts" / "validate_repo.py")
+    if plugin_version is None:
+        plugin_version = _real_repo_version()
+    (root / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"version": plugin_version}), encoding="utf-8"
+    )
+    if bundle_text is not None:
+        (root / "hermes" / "orcinus.yaml").write_text(bundle_text, encoding="utf-8")
+    monkeypatch.setattr(doctor, "ROOT", root)
+    return plugin_version
+
+
+def _real_bundle_text():
+    return (Path(doctor.__file__).resolve().parent.parent / "hermes" / "orcinus.yaml").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_hermes_bundle_valid_passes(tmp_path, monkeypatch):
+    """FND-009: the shipped bundle parses and lists only the router
+    — the check passes, but its detail says plainly that this
+    proves the bundle is well-formed, NOT that Hermes runs it."""
+    _hermes_fixture(tmp_path, monkeypatch, _real_bundle_text())
+    result = doctor.check_hermes_bundle()
+    assert result["status"] == "ready"
+    assert "orcinus" in result["detail"]
+    assert "never loaded by a real Hermes installation" in result["detail"]
+
+
+def _real_repo_version():
+    import json
+
+    return json.loads(
+        (
+            Path(doctor.__file__).resolve().parent.parent / ".claude-plugin" / "plugin.json"
+        ).read_text(encoding="utf-8")
+    )["version"]
+
+
+def test_hermes_bundle_version_match_passes(tmp_path, monkeypatch):
+    """A bundle carrying a version equal to the repo version passes,
+    with the version in the detail."""
+    version = _real_repo_version()
+    _hermes_fixture(tmp_path, monkeypatch, f"version: {version}\n{_real_bundle_text()}")
+    result = doctor.check_hermes_bundle()
+    assert result["status"] == "ready"
+    assert version in result["detail"]
+
+
+def test_hermes_bundle_wrong_version_fails(tmp_path, monkeypatch):
+    """A bundle version that does not match the repo version fails
+    the check — a stale bundle must not report ready."""
+    version = _hermes_fixture(tmp_path, monkeypatch, f"version: 9.9.9\n{_real_bundle_text()}")
+    result = doctor.check_hermes_bundle()
+    assert result["status"] == "incompatible"
+    assert "9.9.9" in result["detail"]
+    assert version in result["detail"]
+
+
+def test_hermes_bundle_broken_yaml_fails(tmp_path, monkeypatch):
+    """Unparsable bundle YAML fails the check instead of being read
+    as an empty bundle — and the check returns a status, it does
+    not raise."""
+    _hermes_fixture(tmp_path, monkeypatch, "name: [unclosed\nskills: [\n")
+    result = doctor.check_hermes_bundle()
+    assert result["status"] == "incompatible"
+    assert "unparsable" in result["detail"]
+
+
+def test_hermes_bundle_lists_subskill_fails(tmp_path, monkeypatch):
+    """A bundle listing a sub-skill directly fails — this bundle is
+    the entry point; the router loads sub-skills on demand."""
+    _hermes_fixture(
+        tmp_path,
+        monkeypatch,
+        _real_bundle_text().replace("  - orcinus\n", "  - orcinus\n  - other\n"),
+    )
+    result = doctor.check_hermes_bundle()
+    assert result["status"] == "incompatible"
+    assert "orcinus" in result["detail"]
+
+
+def test_hermes_bundle_missing_is_incomplete(tmp_path, monkeypatch):
+    """A missing bundle is incomplete, never incompatible: Hermes
+    users lose their entry point, but no Python gate depends on
+    it, so a missing file must not hard-fail the doctor run."""
+    _hermes_fixture(tmp_path, monkeypatch, None)
+    result = doctor.check_hermes_bundle()
+    assert result["status"] == "incomplete"
+    assert "missing" in result["detail"]
