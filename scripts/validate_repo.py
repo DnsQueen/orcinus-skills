@@ -2011,8 +2011,7 @@ ROUTER_STATE_COMMANDS = (
     "--to VERIFIED --revision <sha> --evidence <bundle>",
     "python3 scripts/state.py transition .orcinus/state.json "
     "--to AWAITING_APPROVAL --revision <sha>",
-    "python3 scripts/state.py transition .orcinus/state.json "
-    "--to RELEASE_READY --revision <sha>",
+    "python3 scripts/state.py transition .orcinus/state.json --to RELEASE_READY --revision <sha>",
 )
 
 
