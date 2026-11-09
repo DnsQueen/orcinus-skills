@@ -13,8 +13,11 @@ Run: python3 -m pytest skills/orcinus-verify/scripts/test_record_check.py -q
 
 import hashlib
 import json
+import os
+import signal
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -87,6 +90,123 @@ def _run_record(repo, out_dir, name, argv, extra=()):
     )
     fragment = json.loads(proc.stdout) if proc.stdout.strip() else None
     return proc, fragment
+
+
+def _pid_is_gone(pid):
+    """True when pid no longer names a live process: a zombie
+    (state Z in /proc) is already dead, only unreaped by its
+    parent, so it counts as gone."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    except OSError:
+        return True
+    return stat.rsplit(")", 1)[1].split()[0] == "Z"
+
+
+def _assert_pid_gone(pid, timeout=5):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _pid_is_gone(pid):
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"pid {pid} still alive after {timeout}s")
+
+
+def _kill_pid_quietly(pid):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def _interrupt_case(tmp_path, signum):
+    """FND-004 (round 11): interrupting the wrapper must kill the
+    whole child process group and leave no temp files. SIGTERM
+    used to kill only the wrapper (the child survived and
+    .test.stdout.* / .test.stderr.* were left behind) and SIGINT
+    used to leave the wrapper itself stuck in proc.wait() while
+    orphans accumulated. Linux only: the assertions read /proc
+    and pgrep."""
+    import pytest
+
+    if sys.platform != "linux":
+        pytest.skip("orphan assertions need Linux /proc and pgrep")
+    repo = _repo(tmp_path)
+    out_dir = tmp_path / "bundle"
+    # The tag is unique per run, so a pgrep sweep for it can match
+    # nothing but this sleeper — the wrapper's own argv names the
+    # script too, so the sweep runs only after the wrapper exits.
+    tag = f"fnd004_sleeper_{signum}_{os.getpid()}"
+    sleeper = tmp_path / f"{tag}.py"
+    pid_file = tmp_path / f"{tag}.pid"
+    sleeper.write_text(
+        "import os, time\n"
+        f"with open({str(pid_file)!r}, 'w') as f:\n"
+        "    f.write(str(os.getpid()))\n"
+        "time.sleep(120)\n",
+        encoding="utf-8",
+    )
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            str(_RECORD_CHECK),
+            "--name",
+            "test",
+            "--out-dir",
+            str(out_dir),
+            "--repo",
+            str(repo),
+            "--",
+            sys.executable,
+            str(sleeper),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=repo,
+    )
+    child_pid = None
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if pid_file.is_file():
+                try:
+                    child_pid = int(pid_file.read_text(encoding="utf-8").strip())
+                except ValueError:
+                    pass
+                if child_pid is not None:
+                    break
+            time.sleep(0.05)
+        assert child_pid is not None, "sleeper never started"
+        os.kill(proc.pid, signum)
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            raise AssertionError(f"wrapper survived {signal.Signals(signum).name}")
+        # The wrapper dies by the signal it received.
+        assert proc.returncode == -signum, proc.returncode
+        _assert_pid_gone(child_pid)
+        # No process anywhere still carries the sleeper's path.
+        sweep = subprocess.run(["pgrep", "-f", tag], capture_output=True, text=True)
+        assert sweep.returncode != 0, sweep.stdout
+        assert list(out_dir.iterdir()) == []
+    finally:
+        # A failing test must not leak processes into the next run.
+        if child_pid is not None:
+            _kill_pid_quietly(child_pid)
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+
+
+def test_sigterm_kills_child_group_and_leaves_no_temp_files(tmp_path):
+    _interrupt_case(tmp_path, signal.SIGTERM)
+
+
+def test_sigint_kills_child_group_and_leaves_no_temp_files(tmp_path):
+    _interrupt_case(tmp_path, signal.SIGINT)
 
 
 def test_bundled_content_digest_is_byte_identical():

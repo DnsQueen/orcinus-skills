@@ -61,7 +61,10 @@ Exit code: the command's exit code when the command ran (the fragment
 is still printed, so a failing gate is a recorded failure, not a
 missing recording); 2 when the recording itself failed (no fragment:
 command not found, timeout, output over the cap, no git repo, no
-content_digest module). The stdout/stderr cap is the validator's
+content_digest module). Interrupted (SIGTERM/SIGINT) while a check
+runs, the wrapper stops the whole child process group, removes the
+temp files, and dies by the same signal (round 11, FND-004).
+The stdout/stderr cap is the validator's
 10 MiB (MAX_CAPTURE_BYTES must equal validate_evidence.MAX_ARTIFACT_BYTES;
 a test pins the agreement). A capture over the cap is a recording
 failure, not a truncation: a truncated artifact would hash cleanly
@@ -99,6 +102,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -155,6 +159,18 @@ _SHA_RE = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 
 class RecordError(Exception):
     """A recording failure: the command did not produce a fragment."""
+
+
+class _Interrupted(Exception):
+    """The wrapper received SIGTERM/SIGINT while a check was
+    running. By the time this reaches main() the child group is
+    already dead and the temp files are gone (see
+    _run_capped_inner); main() re-raises the signal so the wrapper
+    dies by it, as if no handler had been installed."""
+
+    def __init__(self, signum):
+        super().__init__(f"interrupted by signal {signum}")
+        self.signum = signum
 
 
 def canonical_json(obj):
@@ -362,6 +378,97 @@ def _pump(stream, path, cap, state):
     state["sha256"] = hasher.hexdigest()
 
 
+def _kill_tree_windows(pid):
+    """Kill a process and all its children on Windows (taskkill /T).
+    terminate() kills only the process itself, so a child that
+    spawned its own children would leave them running. Mirrors
+    with_server.py's _kill_tree_windows (that script lives in
+    another skill folder, so it cannot be imported from a
+    skills-only install of this one). taskkill ships with Windows
+    (System32). Returns True when taskkill reported success."""
+    try:
+        result = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
+
+
+def _terminate_process_group(proc, timeout=5):
+    """Stop a process and everything it started. The child runs in
+    its own process group (start_new_session on POSIX), so
+    signalling the group reaches the real command, not just the
+    shell that launched it — and a descendant that ignores SIGTERM
+    still dies: the SIGKILL half runs whenever the group is not
+    empty after the grace period, even when the leader exited
+    promptly. Mirrors with_server.py's _stop_process_group, same
+    5 s grace; silent and best-effort here (the wrapper's stdout
+    is the fragment, and a failed kill has nothing to report to).
+    On Windows there are no process groups (start_new_session is
+    POSIX-only), so the whole tree is killed with taskkill /T /F.
+    (Residual, as in with_server.py: a pgid reused by an unrelated
+    group in the milliseconds between the leader's exit and the
+    SIGKILL check would be killed too; only a container/cgroup or
+    job object closes that hole.)"""
+    if os.name == "nt":
+        if proc.poll() is None:
+            _kill_tree_windows(proc.pid)
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except (OSError, ProcessLookupError):
+                pass
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            pass
+        return
+    pgid = None
+    try:
+        pgid = os.getpgid(proc.pid)
+    except (OSError, ProcessLookupError):
+        pgid = None
+    try:
+        if pgid is not None:
+            os.killpg(pgid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except (OSError, ProcessLookupError):
+        pass
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
+    # The leader may have exited promptly while a descendant that
+    # ignores SIGTERM survives: verify the group is empty either
+    # way, and SIGKILL what is left.
+    if pgid is not None:
+        try:
+            os.killpg(pgid, 0)
+        except (OSError, ProcessLookupError):
+            pass  # the group is gone: nothing left to kill
+        else:
+            try:
+                os.killpg(pgid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+    elif proc.poll() is None:
+        try:
+            proc.kill()
+        except (OSError, ProcessLookupError):
+            pass
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def _run_capped(command_argv, cwd, timeout, out_dir, name):
     """Run the command, streaming its stdout/stderr to temp files
     in `out_dir` with a LIVE cap (round 9, F2): the cap is enforced
@@ -384,7 +491,10 @@ def _run_capped(command_argv, cwd, timeout, out_dir, name):
         return _run_capped_inner(
             command_argv, cwd, timeout, out_dir, Path(stdout_tmp), Path(stderr_tmp)
         )
-    except RecordError:
+    except BaseException:
+        # Any failure — RecordError, timeout, or an interrupt while
+        # the command ran — removes the temp files, so a refused or
+        # interrupted capture leaves nothing behind.
         for tmp in (stdout_tmp, stderr_tmp):
             try:
                 os.unlink(tmp)
@@ -395,62 +505,108 @@ def _run_capped(command_argv, cwd, timeout, out_dir, name):
 
 def _run_capped_inner(command_argv, cwd, timeout, out_dir, stdout_tmp, stderr_tmp):
     """The run itself; _run_capped owns the temp files' lifetime."""
+    # FND-004 (round 11): the child runs in its own process group
+    # (start_new_session on POSIX, the with_server.py pattern), and
+    # SIGTERM/SIGINT are caught here — a signal sets a flag the
+    # wait loop acts on, instead of killing the wrapper mid-run
+    # and orphaning the child. Installed only in the main thread
+    # (signal.signal raises ValueError elsewhere); a signal the
+    # platform will not let us catch leaves the default behaviour.
+    # The handlers are restored before this returns, so calling
+    # record() in-process never leaks a handler into the caller.
+    interrupted = []
+    old_handlers = {}
+    if threading.current_thread() is threading.main_thread():
+
+        def _on_signal(signum, _frame):
+            interrupted.append(signum)
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                old_handlers[sig] = signal.signal(sig, _on_signal)
+            except (OSError, ValueError, RuntimeError):
+                pass
     try:
-        proc = subprocess.Popen(
-            command_argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd
+        try:
+            proc = subprocess.Popen(
+                command_argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=cwd,
+                start_new_session=(os.name == "posix"),
+            )
+        except FileNotFoundError as e:
+            raise RecordError(f"command not found: {command_argv[0]!r}") from e
+        stdout_state: dict = {}
+        stderr_state: dict = {}
+        out_thread = threading.Thread(
+            target=_pump, args=(proc.stdout, stdout_tmp, MAX_CAPTURE_BYTES, stdout_state)
         )
-    except FileNotFoundError as e:
-        raise RecordError(f"command not found: {command_argv[0]!r}") from e
-    stdout_state: dict = {}
-    stderr_state: dict = {}
-    out_thread = threading.Thread(
-        target=_pump, args=(proc.stdout, stdout_tmp, MAX_CAPTURE_BYTES, stdout_state)
-    )
-    err_thread = threading.Thread(
-        target=_pump, args=(proc.stderr, stderr_tmp, MAX_CAPTURE_BYTES, stderr_state)
-    )
-    out_thread.start()
-    err_thread.start()
-    deadline = time.monotonic() + timeout
-    exit_code = None
-    try:
-        while True:
-            exit_code = proc.poll()
-            if exit_code is not None:
-                break
-            if stdout_state.get("exceeded") or stderr_state.get("exceeded"):
-                proc.kill()
-                break
-            if time.monotonic() > deadline:
-                proc.kill()
+        err_thread = threading.Thread(
+            target=_pump, args=(proc.stderr, stderr_tmp, MAX_CAPTURE_BYTES, stderr_state)
+        )
+        out_thread.start()
+        err_thread.start()
+        deadline = time.monotonic() + timeout
+        exit_code = None
+        try:
+            while True:
+                if interrupted:
+                    # The wrapper was signalled: stop the whole
+                    # group, reap the leader, and report the
+                    # interrupt — _run_capped unlinks the temp
+                    # files, main() dies by the same signal.
+                    _terminate_process_group(proc)
+                    exit_code = proc.wait()
+                    out_thread.join(timeout=5)
+                    err_thread.join(timeout=5)
+                    raise _Interrupted(interrupted[0])
+                exit_code = proc.poll()
+                if exit_code is not None:
+                    break
+                if stdout_state.get("exceeded") or stderr_state.get("exceeded"):
+                    proc.kill()
+                    break
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    exit_code = proc.wait()
+                    out_thread.join(timeout=5)
+                    err_thread.join(timeout=5)
+                    raise RecordError(f"command timed out after {timeout}s")
+                time.sleep(0.02)
+        finally:
+            # Reap the process even on the kill paths above — and
+            # kill the whole group, not just the leader, so a
+            # child that spawned its own children leaves no
+            # orphans behind.
+            if exit_code is None:
+                _terminate_process_group(proc)
                 exit_code = proc.wait()
-                out_thread.join(timeout=5)
-                err_thread.join(timeout=5)
-                raise RecordError(f"command timed out after {timeout}s")
-            time.sleep(0.02)
+        out_thread.join()
+        err_thread.join()
+        if stdout_state.get("error") or stderr_state.get("error"):
+            raise RecordError(f"cannot write the capture files in {out_dir}")
+        if stdout_state.get("exceeded"):
+            stream = "stdout"
+        elif stderr_state.get("exceeded"):
+            stream = "stderr"
+        else:
+            stream = None
+        if stream is not None:
+            raise RecordError(f"{stream} is larger than the {MAX_CAPTURE_BYTES}-byte artifact cap")
+        return (
+            exit_code,
+            stdout_tmp,
+            stderr_tmp,
+            stdout_state["sha256"],
+            stderr_state["sha256"],
+        )
     finally:
-        # Reap the process even on the kill paths above.
-        if exit_code is None:
-            exit_code = proc.wait()
-    out_thread.join()
-    err_thread.join()
-    if stdout_state.get("error") or stderr_state.get("error"):
-        raise RecordError(f"cannot write the capture files in {out_dir}")
-    if stdout_state.get("exceeded"):
-        stream = "stdout"
-    elif stderr_state.get("exceeded"):
-        stream = "stderr"
-    else:
-        stream = None
-    if stream is not None:
-        raise RecordError(f"{stream} is larger than the {MAX_CAPTURE_BYTES}-byte artifact cap")
-    return (
-        exit_code,
-        stdout_tmp,
-        stderr_tmp,
-        stdout_state["sha256"],
-        stderr_state["sha256"],
-    )
+        for sig, old in old_handlers.items():
+            try:
+                signal.signal(sig, old)
+            except (OSError, ValueError, RuntimeError):
+                pass
 
 
 def record(name, argv, shell, out_dir, cwd, repo, digest_module, timeout):
@@ -612,6 +768,21 @@ def main(argv):
             digest_module=args.digest_module,
             timeout=args.timeout,
         )
+    except _Interrupted as e:
+        # The child group is already dead and the temp files are
+        # gone; die by the same signal, as if no handler had been
+        # installed — a supervisor sees the signal, not a synthetic
+        # exit code. The 128+signum return is only reached when the
+        # platform will not let this process kill itself that way.
+        try:
+            signal.signal(e.signum, signal.SIG_DFL)
+        except (OSError, ValueError, RuntimeError):
+            pass
+        try:
+            os.kill(os.getpid(), e.signum)
+        except OSError:
+            pass
+        return 128 + e.signum
     except RecordError as e:
         print(f"record_check: {e}", file=sys.stderr)
         return 2
