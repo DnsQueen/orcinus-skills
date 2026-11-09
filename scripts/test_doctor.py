@@ -837,11 +837,27 @@ def _real_repo_version():
     )["version"]
 
 
+def _with_version(bundle_text, version):
+    """Return bundle_text with its version line set to `version`.
+
+    The shipped bundle now carries a version line (round 11: the
+    doctor Hermes check pins it), so prepending a second one would
+    leave two version keys and the parser would read the last.
+    Replace the existing line when present, else prepend one.
+    """
+    import re
+
+    replaced, n = re.subn(
+        r"^version: .*$", f"version: {version}", bundle_text, count=1, flags=re.M
+    )
+    return replaced if n else f"version: {version}\n{bundle_text}"
+
+
 def test_hermes_bundle_version_match_passes(tmp_path, monkeypatch):
     """A bundle carrying a version equal to the repo version passes,
     with the version in the detail."""
     version = _real_repo_version()
-    _hermes_fixture(tmp_path, monkeypatch, f"version: {version}\n{_real_bundle_text()}")
+    _hermes_fixture(tmp_path, monkeypatch, _with_version(_real_bundle_text(), version))
     result = doctor.check_hermes_bundle()
     assert result["status"] == "ready"
     assert version in result["detail"]
@@ -850,7 +866,9 @@ def test_hermes_bundle_version_match_passes(tmp_path, monkeypatch):
 def test_hermes_bundle_wrong_version_fails(tmp_path, monkeypatch):
     """A bundle version that does not match the repo version fails
     the check — a stale bundle must not report ready."""
-    version = _hermes_fixture(tmp_path, monkeypatch, f"version: 9.9.9\n{_real_bundle_text()}")
+    version = _hermes_fixture(
+        tmp_path, monkeypatch, _with_version(_real_bundle_text(), "9.9.9")
+    )
     result = doctor.check_hermes_bundle()
     assert result["status"] == "incompatible"
     assert "9.9.9" in result["detail"]
