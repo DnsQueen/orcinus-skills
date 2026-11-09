@@ -1,14 +1,20 @@
 # Persistent project state — `.orcinus/state.json`
 
-Date: 2026-11-06
+Date: 2026-11-09
 Status: spec (v0.9.1), enforced locally by scripts/state.py since
-round 7. Nothing else reads or writes this file: the router does
+round 7, with the VERIFIED attestation gate added in v0.11.0.
+Nothing else reads or writes this file: the router does
 not — no code path calls the state machine, so there is no router
 integration to claim. The enforcement layer that would make it
 tamper-proof is v1.1 (see SCOPE.md). This spec defines the file so the router, the verifier,
 and the human all agree on what "verified" means. v0.9.1 fixes the
 v0.9 self-contradiction: VERIFIED is bound to the *content digest*,
 not to the commit SHA (see Rule 2 and "The content digest").
+v0.11.0: a local PASS bundle is provisional — structurally valid,
+not CI-attested. VERIFIED additionally requires a live CI
+attestation for the revision, checked at transition time, or an
+explicit targeted-rerun proof file; `validate` is local-only and
+does not check attestation (see Rule 1).
 
 ## Why
 
@@ -100,7 +106,7 @@ verified. Record VERIFIED only when the tree is clean.
 | `BUILDING` | A slice is being built. Nothing in this stage is verified. |
 | `VERIFYING` | The verifier is running. The `revision` is the one being checked. |
 | `BLOCKED` | Verification found a blocking finding. The `evidence_bundle` says what. |
-| `VERIFIED` | The content digest passed verification. Bound to the `evidence_bundle` for that exact content digest. A commit that changes the content digest moves the project back to `BUILDING`; a commit that only records the state file or an evidence bundle leaves the digest unchanged and does not reset the stage. |
+| `VERIFIED` | The content digest passed verification. Bound to the `evidence_bundle` for that exact content digest. A commit that changes the content digest moves the project back to `BUILDING`; a commit that only records the state file or an evidence bundle leaves the digest unchanged and does not reset the stage. VERIFIED additionally requires a live CI attestation for the revision (or an explicit targeted-rerun proof file) — see Rule 1. |
 | `AWAITING_APPROVAL` | Verified, and waiting for the human to approve the next step (release, merge, publish). |
 | `RELEASE_READY` | The human approved the verified content digest for release. The `approval` field records who approved, what content digest, and what artifact. |
 
@@ -123,7 +129,18 @@ verified. Record VERIFIED only when the tree is clean.
    state file that says VERIFIED without an `evidence_bundle` that
    validates (see `skills/orcinus-verify/scripts/validate_evidence.py`) is corrupt, not
    verified. scripts/state.py enforces this: VERIFIED requires a
-   bundle that exists and validates with verdict PASS.
+   bundle that exists and validates with verdict PASS. A bundle that
+   validates locally is provisional: it proves the bundle is complete
+   and self-consistent, not that CI ran. Since v0.11.0, VERIFIED
+   additionally requires a CI attestation for the revision, checked
+   live at transition time (`scripts/verify_attestation.py` —
+   `gh attestation verify` on the content digest, pinned to this
+   repo's CI workflow and the revision), or an explicit targeted-rerun
+   proof file (`--attestation-proof`, produced by
+   `scripts/rerun_check.py`). `validate` is local-only and never checks
+   attestation: a state file that says VERIFIED and validates locally
+   may never have been attested — only the transition gate enforces
+   it, at the moment VERIFIED is minted.
 2. **A content change resets the stage.** When the content digest
    changes, the stage goes back to BUILDING. A commit that leaves the
    digest unchanged — for example a commit that only records the
@@ -142,6 +159,10 @@ verified. Record VERIFIED only when the tree is clean.
    audit, not a lock. Hand-editing is still possible — but the next
    `validate` detects an edited digest, because the stored value is
    compared with the digest recomputed from the revision's tree.
+   The v0.11.0 attestation gate does not change this: the attestation
+   is checked at transition time and never recorded in the state file,
+   so a hand-written VERIFIED stage still validates locally — only a
+   fresh transition re-checks attestation.
 
 ## Schema and transitions
 
@@ -149,8 +170,8 @@ The machine-readable form of this spec is `scripts/state_schema.json`,
 enforced by `scripts/state.py` (standard library only):
 
 - `python3 scripts/state.py validate <state.json> [--repo <repo>]` — checks the file against the schema and recomputes the stored digest from the state's revision (exit 0 when valid).
-- `python3 scripts/state.py transition <state.json> --to <stage> --revision <sha> [--expect-digest sha256:<hex>] [--evidence <bundle>] [--note <text>] [--repo <repo>]` — moves the file to a new stage, appending one history entry. The digest is recomputed from the revision's tree; there is no `--digest` flag anymore (a caller-supplied digest was trusted input — round 7, F-07). `--expect-digest` only asserts against the recomputed digest and is never stored.
+- `python3 scripts/state.py transition <state.json> --to <stage> --revision <sha> [--expect-digest sha256:<hex>] [--evidence <bundle>] [--attestation-proof <proof>] [--note <text>] [--repo <repo>]` — moves the file to a new stage, appending one history entry. The digest is recomputed from the revision's tree; there is no `--digest` flag anymore (a caller-supplied digest was trusted input — round 7, F-07). `--expect-digest` only asserts against the recomputed digest and is never stored.
 
-Allowed transitions: BUILDING → VERIFYING → BLOCKED / VERIFIED → AWAITING_APPROVAL → RELEASE_READY; any stage returns to BUILDING on rework, and a content-digest change forces BUILDING from any stage (Rule 2). VERIFIED requires an evidence bundle that exists and validates with verdict PASS — the `--evidence` flag, or the stored value when it names an existing validating file (a stale stored path never silently satisfies the gate; the flag is required only when the stored value is absent or blank). VERIFIED and RELEASE_READY refuse on a dirty tree at HEAD (the digest describes committed content only). RELEASE_READY requires an approval bound to the recomputed content digest. A transition from an invalid state, or to a stage the table does not allow, is refused.
+Allowed transitions: BUILDING → VERIFYING → BLOCKED / VERIFIED → AWAITING_APPROVAL → RELEASE_READY; any stage returns to BUILDING on rework, and a content-digest change forces BUILDING from any stage (Rule 2). VERIFIED requires an evidence bundle that exists and validates with verdict PASS — the `--evidence` flag, or the stored value when it names an existing validating file (a stale stored path never silently satisfies the gate; the flag is required only when the stored value is absent or blank). VERIFIED additionally requires a live CI attestation for the revision, checked at transition time, or an explicit `--attestation-proof` targeted-rerun proof file; without either, the transition is refused. `validate` does not check attestation. VERIFIED and RELEASE_READY refuse on a dirty tree at HEAD (the digest describes committed content only). RELEASE_READY requires an approval bound to the recomputed content digest. A transition from an invalid state, or to a stage the table does not allow, is refused.
 
-This is a local check, not the v1.1 enforcement layer (Rule 4): it refuses an impossible transition instead of silently recording it, but anyone with write access can still edit the file — and the next `validate` detects an edited digest by recomputation.
+This is a local check, not the v1.1 enforcement layer (Rule 4): it refuses an impossible transition instead of silently recording it, but anyone with write access can still edit the file — and the next `validate` detects an edited digest by recomputation. The attestation gate is enforced only by the transition, not by `validate`: a hand-written VERIFIED stage passes `validate` when its digest and bundle check out, even though no attestation was ever checked.

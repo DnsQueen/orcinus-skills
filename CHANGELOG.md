@@ -3,6 +3,77 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.11.0] — 2026-11-09
+
+Attested verification: a local validator PASS is now provisional —
+structurally valid, not CI-attested. VERIFIED requires an
+independent observer: a live CI attestation for the revision, or an
+explicit targeted-rerun proof file.
+
+### Added
+
+- **CI attestation gate for VERIFIED:** CI gains an `attest` job
+  (`needs: [test]`) that attests the tree content digest with
+  `actions/attest@v4.2.2` (SLSA L2 — the direct action, not the
+  `attest-build-provenance` wrapper, per current GitHub guidance),
+  so an attestation existing for a run implies the test job passed
+  in that same run. `scripts/state.py` refuses a VERIFIED
+  transition without a live attestation check
+  (`scripts/verify_attestation.py`: `gh attestation verify` on the
+  content digest, pinned to this repo's CI workflow and the
+  revision; exit 0 verified / 1 not verified / 2 unavailable) or
+  an explicit `--attestation-proof` targeted-rerun proof file. No
+  silent fallback: without `gh`/network and without a proof file
+  the transition is refused. The check never trusts `gh`'s exit
+  code alone — the JSON subjects must contain the file's sha256
+  (CVE-2025-25204 defence: older `gh` returned exit 0 with no
+  attestations present).
+- **Targeted re-run checker (`scripts/rerun_check.py`):** the
+  offline fallback for consumers with no CI. Re-runs only the
+  bundle's fail-first test and the changed test files in a clean
+  worktree at the exact revision (SWE-bench FAIL_TO_PASS /
+  PASS_TO_PASS style, never the full suite), compares the rerun's
+  own JUnit against its own stdout summary (parsed the same way
+  the validator parses it — reused, not duplicated), and writes a
+  targeted-rerun proof file the VERIFIED gate consumes. A bundle
+  whose fabricated JUnit claims a nodeid passed that fails in the
+  rerun is caught (exit 1, no proof); un-runnable inputs fail
+  closed (exit 2).
+
+### Changed
+
+- A local validator PASS is provisional: `orcinus-verify` and the
+  router now say so ("structurally valid, not CI-attested").
+  `validate` is local-only and never checks attestation; only the
+  transition gate enforces it, at the moment VERIFIED is minted.
+
+### Known limits (documented, not fixed)
+
+- The tamper-proof layer is still NOT built (v1.1, see SCOPE.md):
+  anyone with write access can still edit the state file, and a
+  hand-written VERIFIED stage still validates locally. 0.11.0 adds
+  an independent-observer check on minting VERIFIED, not a lock
+  on the file afterwards.
+- Offline / no-`gh`: without `gh` authenticated and network access
+  the live check is unavailable (exit 2) and VERIFIED is refused
+  unless a targeted-rerun proof file is supplied; offline
+  verification from a downloaded bundle still needs a cached
+  Sigstore trusted root (`--custom-trusted-root`).
+- Forks: the attestation is derived from the repo's origin remote,
+  so a fork's attestation proves a run in that fork's CI, not
+  upstream's.
+- Targeted re-run limits: no transitive test discovery — only the
+  fail-first test plus the changed test files run, so a change
+  that breaks an unlisted test is not caught; only pytest stdout
+  summaries are reconciled against JUnit; the rerun verifies the
+  claim that the tests pass, not the artifacts' provenance — a
+  fabricated JUnit that exactly matches what a real run would
+  produce still agrees with the rerun.
+- No live attested transition has been observed yet in this
+  environment (`gh` unauthenticated here; the `attest` job first
+  runs on the next CI run after merge) — no numbers are claimed
+  (see `docs/verification/HONEST-NUMBERS.md`).
+
 ## [0.10.13] — 2026-11-09
 
 CI follow-up to the round 11 fix pass. 0.10.12 was never tagged or

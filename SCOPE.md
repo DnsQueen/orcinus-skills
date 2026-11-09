@@ -43,6 +43,28 @@
 - Shared glossary and boundaries.
 - Eval scenarios for the flagship, run on a demo repo.
 
+## In v0.11
+
+- Attested verification for the VERIFIED transition. CI gains an
+  `attest` job (`needs: [test]`) that attests the tree content digest
+  with `actions/attest@v4.2.2` (SLSA L2 — the direct action, not the
+  `attest-build-provenance` wrapper), so an attestation existing for
+  a run implies the test job passed in that same run.
+  `scripts/state.py` now refuses a VERIFIED transition without a live
+  CI attestation for the revision, checked at transition time
+  (`scripts/verify_attestation.py`: `gh attestation verify` on the
+  content digest, pinned to this repo's CI workflow and the revision;
+  exit 0 verified / 1 not verified / 2 unavailable), or an explicit
+  targeted-rerun proof file (`--attestation-proof`, produced by
+  `scripts/rerun_check.py`, which re-runs only the bundle's
+  fail-first test and the changed test files in a clean worktree at
+  the exact revision). A local validator PASS is provisional —
+  structurally valid, not CI-attested — and `validate` is local-only:
+  it never checks attestation. Recorded limit: no live attested
+  transition has been observed yet in this environment (`gh`
+  unauthenticated here; the `attest` job first runs on the next CI
+  run after merge) — see `docs/verification/HONEST-NUMBERS.md`.
+
 ## Out of v0.10
 
 - Full implementations of every sub-skill in the map. They are added one at a time, each proven before it ships.
@@ -109,6 +131,13 @@ it (scripts/state.py refuses a transition
 the evidence does not support — round 7), but it is not the
 tamper-proof layer: anyone with write access can still edit the
 state file, and the next validate only detects the edit.
+v0.11.0 does not build it: the attestation is an
+independent-observer check on minting VERIFIED, not the
+tamper-proof layer — it is checked live at transition time and
+never recorded in the state file, and a hand-written VERIFIED stage
+still validates locally. What 0.11.0 adds is a refusal to mint
+VERIFIED without an attestation (or a targeted-rerun proof), not a
+lock on the file afterwards.
 Harness-executed evidence (the harness, not the LLM, running the
 commands and writing the bundle — reviewer 2's 2-V8/Rec2) is 0.10
 scope, not v1.1: the validator proves a bundle is complete and
