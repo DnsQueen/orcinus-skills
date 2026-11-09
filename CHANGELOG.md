@@ -3,6 +3,95 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.10.12] — 2026-11-09
+
+Round 11 audit fix pass (audit of v0.10.11/3f06ffa, 14 findings:
+13 confirmed, 1 partial — FND-013's count was wrong on one skill —
+0 refuted). Every finding is fixed or honestly limited below; no
+test was weakened, skipped, deleted, or rewritten to make code pass.
+
+### Fixed
+
+- **FND-001 (High):** the `test` gate must now invoke a recognised
+  test runner — a command that never runs a test is INCOMPLETE, not
+  PASS, and the state machine stays at VERIFYING. Shell strings are
+  parsed (shlex, per shell segment) and fail closed unless a runner
+  is invoked as an actual command; the substring `-m` fallback is
+  gone. `tool_version` must agree with the invoked runner when it
+  names one. The repo's own fixtures no longer use a printing
+  one-liner as a `test` gate: `_good_bundle` runs a real pytest once
+  per module and reuses its real stdout and JUnit.
+- **FND-002:** a behaviour change whose changed test files contain
+  no assertions (AST count: `assert`, `assert*` calls,
+  `pytest.raises`/`warns`) is INCOMPLETE. The verification plan
+  gains an optional `mutation_gate` (`{check, min_score?}`); when
+  declared, a passing recorded mutation check must exist.
+- **FND-003:** the JUnit report must be the output of the recorded
+  test command — its artifact path must appear in the test check's
+  `command_argv`, and its counts must agree with the pytest summary
+  in the recorded stdout; mismatch is INCOMPLETE.
+- **FND-004:** `record_check.py` is signal-safe — the child runs in
+  its own process group (`start_new_session`), SIGTERM/SIGINT kill
+  the group (SIGTERM, 5 s grace, then SIGKILL), and temp captures
+  are unlinked on any exit path. The wrapper dies by the signal it
+  received.
+- **FND-005:** the router's Gates section now names the three
+  `scripts/state.py transition` commands verbatim, and
+  `validate_repo.py` asserts they are present.
+- **FND-006:** `mcp-builder` and `monitoring-observability` declare
+  their dependencies (`compatibility` frontmatter + install notes);
+  the host-app scripts are declared in place as examples, not moved.
+- **FND-007:** `fail_first.red_check` accepts the verbatim
+  `record_check.py` fragment (`name` added to the schema, still v6).
+- **FND-008:** the bundled-digest test skips when the repo-root
+  file is absent (skills-only install) instead of failing.
+- **FND-013:** `compatibility` frontmatter added for
+  breaking-change (oasdiff), mutation-testing-python (mutmut), and
+  accessibility (Node); `doctor.py` probes oasdiff, Stryker, and
+  mutmut (MISS, never a hard fail). `mutation-testing` already had
+  one — the auditor's "none of the four" was wrong on that skill.
+
+### Added
+
+- Waza eval specs (real executor, never run, no numbers claimed)
+  for `finalize`, `registry-publish`, `independent-review`, and
+  `handoff`, plus router-snapshot coverage for all four (16/16 per
+  arm, self-check pin, `live` still null).
+- `doctor.py` checks the Hermes bundle (parses, lists only the
+  router, version matches the repo version); the bundle now carries
+  `version: 0.10.12`.
+- README: the three-verdict findings contract and the validator
+  hard limits in "What it is"; HONEST-NUMBERS.md and the router
+  snapshot in the doc inventory; the "only harness-scored evals"
+  sentence corrected. `plugin.json` now says bundles are
+  tamper-evident, not proof of execution, with the runner rule and
+  its residual stated.
+
+### Changed
+
+- `# nosec B608` at all 14 sites in `migration_generator.py`
+  (FND-010, false positives — only `quote_literal()`/`quote_ident()`
+  output is interpolated); `hashlib.md5(..., usedforsecurity=False)`
+  at both non-security step-id sites (FND-011).
+- The trust-root residual is documented, not fixed (FND-012): the
+  SHA-256 pin `doctor.py` gates the /tmp waza fallback on lives in
+  this same repo, so a repo compromise could replace the hash and
+  the binary together.
+
+### Known limits (documented, not fixed)
+
+- A command that runs a real runner and then fabricates consistent
+  artifacts (JUnit + stdout summary agreeing) can still validate;
+  bundles are tamper-evident, not proof of execution.
+- `mutation_gate` is opt-in; the validator does not measure the
+  50-line threshold and does not parse `min_score` from output.
+- Only pytest's stdout summary format is reconciled (FND-003);
+  other runners never reject on an unparseable summary.
+- `record_check.py --timeout` kill is still leader-only
+  (pre-existing); the Windows signal branch is untested here.
+- No live-agent run exists for any eval (Phase 9, n=0); the four
+  new waza suites have never run.
+
 ## [0.10.11] — 2026-11-09
 
 CI fix for the 0.10.10 failures (run 42534376893: 7 of 14 jobs,
