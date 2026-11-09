@@ -1,12 +1,12 @@
 {
   "metadata": {
-    "generated_at": "2026-11-08T22:34:24.476131+00:00",
+    "generated_at": "2026-11-09T15:59:57.284381+00:00",
     "generated_by": "scripts/router_eval.py grade_arms on REFERENCE_DECISIONS (self-check)",
     "harness": "scripts/router_eval.py",
     "eval": "evals/router-01.md",
-    "total_scenarios": 12,
+    "total_scenarios": 16,
     "live_run": false,
-    "note": "Self-check pin, not an agent measurement: every arm grades REFERENCE_DECISIONS, the expected answers written out in scripts/router_eval.py, so every arm scores 12/12 and the honest delta is 0. These numbers pin the grader and the honest-delta computation — they say nothing about how a real agent routes. No live-agent run has been recorded yet, so there is no live honest delta; live is null until a recorded three-arm run replaces it. Do not cite the delta here as skill performance."
+    "note": "Self-check pin, not an agent measurement: every arm grades REFERENCE_DECISIONS, the expected answers written out in scripts/router_eval.py, so every arm scores 16/16 and the honest delta is 0. These numbers pin the grader and the honest-delta computation \u2014 they say nothing about how a real agent routes. No live-agent run has been recorded yet, so there is no live honest delta; live is null until a recorded three-arm run replaces it. Do not cite the delta here as skill performance."
   },
   "self_check": {
     "decisions": {
@@ -97,20 +97,48 @@
         "missing": [
           "SWE-bench"
         ]
+      },
+      "independent-review-requested": {
+        "stage": "Independent review",
+        "routes": [
+          "independent-review"
+        ],
+        "mode": "full"
+      },
+      "finalize-ready": {
+        "stage": "Finalize",
+        "routes": [
+          "finalize"
+        ],
+        "mode": "full"
+      },
+      "publish-package": {
+        "stage": "Publish",
+        "routes": [
+          "registry-publish"
+        ],
+        "mode": "full"
+      },
+      "handoff-needed": {
+        "stage": "Handoff",
+        "routes": [
+          "handoff"
+        ],
+        "mode": "full"
       }
     },
     "arms": {
       "__baseline__": {
-        "passed": 12,
-        "total": 12
+        "passed": 16,
+        "total": 16
       },
       "__terse__": {
-        "passed": 12,
-        "total": 12
+        "passed": 16,
+        "total": 16
       },
       "orcinus": {
-        "passed": 12,
-        "total": 12
+        "passed": 16,
+        "total": 16
       }
     },
     "honest_delta": {

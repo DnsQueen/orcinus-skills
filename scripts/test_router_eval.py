@@ -3,7 +3,7 @@
 
 The router itself is prose (an LLM following skills/orcinus/SKILL.md),
 so this eval cannot run the router: it scores a recorded routing
-decision (JSON: stage, routes, mode, missing) against 12 repo-state
+decision (JSON: stage, routes, mode, missing) against 16 repo-state
 scenarios with a deterministic grader. A scenario's expected stage
 and route come from the repo's own routing table, stages.json, and
 skill-status — the test below pins the scenarios to those sources,
@@ -40,11 +40,11 @@ def _routing_table_stages():
     return stages
 
 
-def test_twelve_scenarios_grounded_in_repo():
-    """~12 scenarios (reviewer 2's ask), each grounded: every expected
+def test_sixteen_scenarios_grounded_in_repo():
+    """~16 scenarios (reviewer 2's ask), each grounded: every expected
     route is a real skill, every expected stage is a Stage cell in
     the router's own routing table."""
-    assert len(rev.SCENARIOS) == 12
+    assert len(rev.SCENARIOS) == 16
     skills = _manifest_skills()
     stages = _routing_table_stages()
     kinds = set()
@@ -54,7 +54,7 @@ def test_twelve_scenarios_grounded_in_repo():
         for route in scenario["expected_routes"]:
             assert route in skills, (scenario["id"], route)
         kinds.add(scenario["id"])
-    assert len(kinds) == 12  # ids unique
+    assert len(kinds) == 16  # ids unique
     # The required coverage: a cross-cutting scenario, a Lite-mode
     # scenario, and a missing-sub-skill scenario.
     by_id = {s["id"]: s for s in rev.SCENARIOS}
@@ -67,7 +67,7 @@ def test_reference_decisions_all_pass():
     """The reference decision for every scenario grades PASS — the
     grader accepts a correct routing."""
     result = rev.grade_run(rev.REFERENCE_DECISIONS)
-    assert result["passed"] == 12 and result["failed"] == []
+    assert result["passed"] == 16 and result["failed"] == []
 
 
 def test_wrong_stage_fails():
@@ -132,13 +132,13 @@ def test_grade_run_scores_partial():
     wrong["stage"] = "Verify"
     decisions["builds-slice"] = wrong
     result = rev.grade_run(decisions)
-    assert result["passed"] == 11 and result["total"] == 12
+    assert result["passed"] == 15 and result["total"] == 16
     assert [f["id"] for f in result["failed"]] == ["builds-slice"]
 
 
 def test_cli_no_args_grades_reference_decisions(capsys):
     assert rev.main([]) == 0
-    assert "12/12" in capsys.readouterr().out
+    assert "16/16" in capsys.readouterr().out
 
 
 def test_cli_no_args_labels_self_check_not_an_agent_measurement(capsys):
@@ -159,7 +159,7 @@ def test_cli_decisions_file_has_no_self_check_label(tmp_path, capsys):
     path.write_text(json.dumps(rev.REFERENCE_DECISIONS), encoding="utf-8")
     assert rev.main([str(path)]) == 0
     out = capsys.readouterr().out
-    assert "12/12" in out
+    assert "16/16" in out
     assert "not an agent measurement" not in out
 
 
@@ -180,7 +180,7 @@ def test_router_eval_doc_exists():
     assert doc.is_file()
     text = doc.read_text(encoding="utf-8")
     assert "router_eval.py" in text
-    assert "12" in text
+    assert "16" in text  # 16 scenarios since round 11 (was 12)
 
 
 # Three-arm eval (caveman takeaway 3, Track 3): grade_arms,
@@ -213,7 +213,7 @@ def _three_arm_run(*, baseline_wrong=(), terse_wrong=(), skill_wrong=()):
 
 def test_grade_arms_honest_delta_is_skill_minus_terse():
     """The honest delta is skill minus TERSE, not skill minus
-    baseline: baseline 10/12, terse 11/12, skill 12/12 gives
+    baseline: baseline 14/16, terse 15/16, skill 16/16 gives
     honest delta +1 and vs-baseline delta +2 — the two numbers
     must not be conflated."""
     run = _three_arm_run(
@@ -221,9 +221,9 @@ def test_grade_arms_honest_delta_is_skill_minus_terse():
         terse_wrong=("builds-slice",),
     )
     result = rev.grade_arms(run)
-    assert result["arms"]["__baseline__"]["passed"] == 10
-    assert result["arms"]["__terse__"]["passed"] == 11
-    assert result["arms"]["orcinus"]["passed"] == 12
+    assert result["arms"]["__baseline__"]["passed"] == 14
+    assert result["arms"]["__terse__"]["passed"] == 15
+    assert result["arms"]["orcinus"]["passed"] == 16
     assert result["honest_delta"] == {"orcinus": 1}
     assert result["vs_baseline_delta"] == {"orcinus": 2}
     by_id = {row["id"]: row for row in result["per_scenario"]}
@@ -408,9 +408,9 @@ def test_snapshot_self_check_reproduces():
     assert "not an agent measurement" in metadata["note"]
     assert snapshot["live"] is None
     self_check = snapshot["self_check"]
-    assert self_check["arms"]["__baseline__"]["passed"] == 12
-    assert self_check["arms"]["__terse__"]["passed"] == 12
-    assert self_check["arms"]["orcinus"]["passed"] == 12
+    assert self_check["arms"]["__baseline__"]["passed"] == 16
+    assert self_check["arms"]["__terse__"]["passed"] == 16
+    assert self_check["arms"]["orcinus"]["passed"] == 16
     assert self_check["honest_delta"] == {"orcinus": 0}
 
 
@@ -451,9 +451,9 @@ def test_cli_three_arm_run_reports_honest_delta(tmp_path, capsys):
     path.write_text(json.dumps({"arms": run}), encoding="utf-8")
     assert rev.main([str(path)]) == 0
     out = capsys.readouterr().out
-    assert "__baseline__: 10/12" in out
-    assert "__terse__: 11/12" in out
-    assert "orcinus: 12/12" in out
+    assert "__baseline__: 14/16" in out
+    assert "__terse__: 15/16" in out
+    assert "orcinus: 16/16" in out
     assert "honest delta (orcinus minus __terse__): +1" in out
     assert "vs baseline" in out
 

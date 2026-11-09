@@ -3,7 +3,7 @@
 
 The router is prose — an LLM following skills/orcinus/SKILL.md — so
 no code here runs the router. This module scores a recorded routing
-decision against 12 repo-state scenarios with a deterministic grader:
+decision against 16 repo-state scenarios with a deterministic grader:
 each scenario names a repo state, the expected stage (a Stage cell
 from the router's routing table), the expected route(s) (skill
 folders from skills/manifest.json), the expected mode, and — for the
@@ -82,7 +82,7 @@ delta. scripts/test_router_eval.py runs the check in CI.
 Usage:
     python3 scripts/router_eval.py
         Grade the reference decisions (self-check against
-        REFERENCE_DECISIONS: 12/12 — not an agent measurement).
+        REFERENCE_DECISIONS: 16/16 — not an agent measurement).
     python3 scripts/router_eval.py <decisions.json>
         Grade a recorded run: a JSON object mapping scenario id to
         a decision. Prints per-scenario PASS/FAIL and the score;
@@ -198,10 +198,38 @@ SCENARIOS = [
         "expected_mode": "full",
         "expected_missing": ["SWE-bench"],
     },
+    {
+        "id": "independent-review-requested",
+        "repo_state": "A verified slice is ready to merge; six reviewers must read the diff and list every critical issue before it lands.",
+        "expected_stage": "Independent review",
+        "expected_routes": ["independent-review"],
+        "expected_mode": "full",
+    },
+    {
+        "id": "finalize-ready",
+        "repo_state": "The work claims to be complete and ready to publish; the release checklist must pass and a rollback plan must exist.",
+        "expected_stage": "Finalize",
+        "expected_routes": ["finalize"],
+        "expected_mode": "full",
+    },
+    {
+        "id": "publish-package",
+        "repo_state": "The release is cut and the package must be published to the registry; the dry-run file list is to be read first and the published artifact must install and run.",
+        "expected_stage": "Publish",
+        "expected_routes": ["registry-publish"],
+        "expected_mode": "full",
+    },
+    {
+        "id": "handoff-needed",
+        "repo_state": "The session is ending with work in flight; a fresh session must be able to resume from the handoff file alone.",
+        "expected_stage": "Handoff",
+        "expected_routes": ["handoff"],
+        "expected_mode": "full",
+    },
 ]
 
 # The reference decisions: the expected answer for every scenario,
-# written out so the grader can be self-checked (12/12).
+# written out so the grader can be self-checked (16/16).
 REFERENCE_DECISIONS = {
     s["id"]: {
         "stage": s["expected_stage"],

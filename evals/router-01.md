@@ -1,6 +1,6 @@
 # EVAL — router-01
 
-How to check whether `orcinus` (the router) routes correctly. The router is prose — an LLM following `skills/orcinus/SKILL.md` — so this eval does not run the router: it scores a recorded routing decision against 12 repo-state scenarios with a deterministic grader, `scripts/router_eval.py`. No criterion may be skipped.
+How to check whether `orcinus` (the router) routes correctly. The router is prose — an LLM following `skills/orcinus/SKILL.md` — so this eval does not run the router: it scores a recorded routing decision against 16 repo-state scenarios with a deterministic grader, `scripts/router_eval.py`. No criterion may be skipped.
 
 ## How to run it
 
@@ -10,7 +10,7 @@ Record one routing decision per scenario as JSON — `{scenario id: {"stage": ..
 python3 scripts/router_eval.py <decisions.json>
 ```
 
-Exit 0 only when all 12 scenarios pass. `python3 scripts/router_eval.py` with no argument grades the reference decisions (the expected answers) as a self-check: 12/12.
+Exit 0 only when all 16 scenarios pass. `python3 scripts/router_eval.py` with no argument grades the reference decisions (the expected answers) as a self-check: 16/16.
 
 ## Scenarios (repo state → expected stage and route)
 
@@ -26,6 +26,10 @@ Exit 0 only when all 12 scenarios pass. `python3 scripts/router_eval.py` with no
 10. **shipped-telemetry** — A service has shipped and needs logs, metrics, traces, and drift detection. → Telemetry / instrumentation, `monitoring-observability`.
 11. **typo-patch-lite** — A one-line typo fix in docs; no gate is touched. → Build, `build`, in **Lite** mode (Full mode, or routing to independent review, fails).
 12. **benchmark-missing** — The project needs a benchmark run (SWE-bench), which the MAP marks `todo` — no such skill exists in this install. → Evidence / eval, `waza`, with `missing: ["SWE-bench"]` named (routing as if the skill existed, or not naming it, fails).
+13. **independent-review-requested** — A verified slice is ready to merge; six reviewers must read the diff and list every critical issue before it lands. → Independent review, `independent-review`.
+14. **finalize-ready** — The work claims to be complete and ready to publish; the release checklist must pass and a rollback plan must exist. → Finalize, `finalize`.
+15. **publish-package** — The release is cut and the package must be published to the registry; the dry-run file list is to be read first and the published artifact must install and run. → Publish, `registry-publish`.
+16. **handoff-needed** — The session is ending with work in flight; a fresh session must be able to resume from the handoff file alone. → Handoff, `handoff`.
 
 ## Pass criteria
 
@@ -62,7 +66,7 @@ the output shape and nothing else: no routing table, no stage
 names, no skill names. `scripts/router_eval.py` defines it as
 `TERSE_CONTROL` and the arm prompts as `system_prompt_for_arm()`.
 
-Record one decision set per arm (the same 12 scenarios), as
+Record one decision set per arm (the same 16 scenarios), as
 `{"arms": {"__baseline__": {...}, "__terse__": {...}, "orcinus": {...}}}`,
 then grade it:
 
@@ -101,8 +105,13 @@ no live-agent run exists yet. Honest numbers, wins and losses:
 - 2026-11-09: three-arm harness added (Track 3, caveman takeaway 3):
   `scripts/router_eval.py` grades three-arm runs and reports the
   honest delta; `evals/snapshots/router-results.json` pins the
-  self-check (12/12 per arm on REFERENCE_DECISIONS — not an agent
+  self-check (16/16 per arm on REFERENCE_DECISIONS — not an agent
   measurement). Still no live-agent run: the honest delta for a
   real run is unknown.
+
+- 2026-11-09 (round 11, FND-014 follow-up): four scenarios added
+  (independent-review-requested, finalize-ready, publish-package,
+  handoff-needed), 12 → 16 scenarios; snapshot regenerated 16/16
+  per arm. Still no live-agent run.
 
 - 2026-11-07: grader self-check passes (12/12 reference decisions score PASS; the negative cases — wrong stage, wrong route, dropped cross-cutting route, Full mode on the Lite scenario, unnamed missing skill, unknown route — are all rejected by `scripts/test_router_eval.py`). No live-agent run yet: the 12 scenarios have not been put to a real agent on a host, so this eval is programmatic only until such a run is recorded here.
