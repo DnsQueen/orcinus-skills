@@ -83,17 +83,26 @@ def _write_junit_reports(bundle, directory, red_cases=None, green_cases=None):
 
 
 def _write_test_report(bundle, directory):
-    """Write the required 'test' gate's JUnit report under
-    `directory` and record it as the bundle's test_report (FND-005,
-    round 8): the cached real pytest run's own --junitxml output —
-    two passing tests, so tests>0 and passed>0."""
+    """Record the required 'test' gate's JUnit report as the
+    bundle's test_report (FND-005, round 8): the cached real pytest
+    run's own --junitxml output — two passing tests, so tests>0 and
+    passed>0. The report is the run's own green.xml (round 11,
+    FND-003): the recorded test command names that file in its
+    --junitxml argv, so test_report must name the same file — a
+    second copy under another name would be a report no recorded
+    command wrote. green.xml is written by _write_junit_reports
+    just before this runs; the sha is read back from the file on
+    disk, so a caller that wrote explicit green cases gets a
+    test_report matching those cases, not the cached ones."""
     import hashlib
 
     directory = Path(directory)
-    _fragment, _captures, data = _cached_test_capture()
-    (directory / "test-report.xml").write_bytes(data)
+    if not (directory / "green.xml").exists():
+        _fragment, _captures, data = _cached_test_capture()
+        (directory / "green.xml").write_bytes(data)
+    data = (directory / "green.xml").read_bytes()
     bundle["test_report"] = {
-        "artifact": "test-report.xml",
+        "artifact": "green.xml",
         "sha256": hashlib.sha256(data).hexdigest(),
         "format": "junit-xml",
     }
@@ -388,6 +397,15 @@ def _recorded_bundle(bundle, directory, commands=None, repo=None):
         cmd = cmds.get(check.get("name"))
         if cmd is None:
             continue
+        if check.get("name") == "test" and isinstance(cmd, list):
+            # Round 11, FND-003: a real test recording must name its
+            # JUnit report in the argv it records — pytest writes
+            # the report the bundle's test_report names (green.xml).
+            # A caller that already names a report (the equals-form
+            # control) is left alone; shell strings name their own.
+            # A new list: never mutate the shared _RECORD_COMMANDS.
+            if not any(t == "--junitxml" or t.startswith("--junitxml=") for t in cmd):
+                cmd = [*cmd, "--junitxml", str(directory / "green.xml")]
         if (
             check.get("name") == "test"
             and not explicit_repo
@@ -1926,7 +1944,11 @@ def test_noop_recorded_shell_fallback_passes(tmp_path):
 
         pytest.skip("sh is not installed")
     python = sys.executable.replace("\\", "/")
-    fallback = f"{python} -m pytest tests/test_capture.py -v || {python} -c \"print('fallback')\""
+    fallback = (
+        f"{python} -m pytest tests/test_capture.py -v "
+        f"--junitxml {tmp_path / 'green.xml'} "
+        f"|| {python} -c \"print('fallback')\""
+    )
     b = _good_bundle()
     _recorded_bundle(b, tmp_path, commands={"test": fallback})
     assert _problems(b, tmp_path) == []
@@ -2135,7 +2157,14 @@ def test_fail_first_class_nodeid_links_by_classname(tmp_path):
         b,
         tmp_path,
         red_cases=[("tests.test_capture.TestCapture", _CANONICAL_NAME, "failed")],
-        green_cases=[("tests.test_capture.TestCapture", _CANONICAL_NAME, "passed")],
+        # Both tests the recorded run ran, so the green report's
+        # counts agree with its stdout ("2 passed", round 11,
+        # FND-003): the class test is the link, the plain test is
+        # the second passing test of the same run.
+        green_cases=[
+            (_CANONICAL_CLASSNAME, _CANONICAL_NAME, "passed"),
+            ("tests.test_capture.TestCapture", _CANONICAL_NAME, "passed"),
+        ],
     )
     _write_test_report(b, tmp_path)
     assert ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path) == []
@@ -2812,7 +2841,7 @@ def test_test_gate_with_failing_only_report_fails(tmp_path):
 def test_test_gate_report_hash_mismatch_fails(tmp_path):
     # FND-005: the report artifact must match its recorded sha256.
     b, repo = _bound_bundle(tmp_path)
-    (tmp_path / "test-report.xml").write_bytes(b"tampered")
+    (tmp_path / b["test_report"]["artifact"]).write_bytes(b"tampered")
     problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
     assert any("test_report" in p for p in problems)
 
@@ -2826,6 +2855,129 @@ def test_test_gate_report_not_required_when_verdict_not_pass(tmp_path):
     b["checks"][0]["verdict"] = "FAIL"
     b["checks"][0]["exit_code"] = 1
     assert _problems(b) == []
+
+
+def test_test_report_artifact_not_in_test_argv_fails(tmp_path):
+    # FND-003 (round 11): the JUnit report must be the file the
+    # recorded test command wrote — a report whose path never
+    # appears in the test check's argv is not that run's report,
+    # however well-formed the XML is. The counts agree here (2
+    # passed in both), so the argv rule is the only reason to
+    # reject.
+    import hashlib
+
+    b, repo = _bound_bundle(tmp_path)
+    _fragment, _captures, data = _cached_test_capture()
+    (tmp_path / "other.xml").write_bytes(data)
+    b["test_report"] = {
+        "artifact": "other.xml",
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "format": "junit-xml",
+    }
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("test_report" in p and "command_argv" in p for p in problems), problems
+
+
+def test_test_report_counts_disagree_with_stdout_fails(tmp_path):
+    # FND-003: the JUnit counts must agree with the recorded stdout
+    # summary — a report listing 1 passed for a run whose stdout
+    # says "2 passed" is not that run's report.
+    b, repo = _bound_bundle(tmp_path)
+    _test_report_with_cases(b, tmp_path, [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "passed")])
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("test_report" in p and "stdout" in p for p in problems), problems
+
+
+def test_test_report_stdout_claiming_more_passed_fails(tmp_path):
+    # FND-003, the other direction: the stdout summary claims 45
+    # passed while the report lists 2. The stdout artifact is
+    # rewritten and the capture hash reforged, so the count
+    # mismatch is the only difference under test.
+    import hashlib
+
+    b, repo = _bound_bundle(tmp_path)
+    check = b["checks"][0]
+    stdout = (
+        "tests/test_capture.py::test_capture_persian_only PASSED\n"
+        "tests/test_capture.py::TestCapture::test_capture_persian_only PASSED\n"
+        "============================== 45 passed in 0.42s ===============================\n"
+    )
+    (tmp_path / check["stdout_artifact"]).write_bytes(stdout.encode())
+    check["stdout_sha256"] = hashlib.sha256(stdout.encode()).hexdigest()
+    _reforge(check, tmp_path)
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("test_report" in p and "stdout" in p for p in problems), problems
+
+
+def test_test_report_junitxml_equals_form_passes(tmp_path):
+    # FND-003 control: the `--junitxml=<path>` spelling (one token)
+    # names the report just as `--junitxml <path>` (two tokens)
+    # does — a matching bundle recorded that way still validates.
+    b = _good_bundle()
+    _recorded_bundle(
+        b,
+        tmp_path,
+        commands={
+            "test": [
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/test_capture.py",
+                "-v",
+                "--junitxml=" + str(tmp_path / "green.xml"),
+            ],
+        },
+    )
+    assert _problems(b, tmp_path) == []
+
+
+def test_argv_mentions_path_shapes():
+    # FND-003, the argv rule directly: both --junitxml spellings,
+    # absolute and ./ paths, a nested report path, and the
+    # non-matches. A shell string counts only when a segment that
+    # runs a runner names the path — `echo green.xml` is a mention,
+    # not a write. A non-runner argv naming the path passes this
+    # rule alone; the runner rule is what rejects that shape.
+    cases = [
+        (["pytest", "--junitxml", "green.xml"], "green.xml", True),
+        (["pytest", "--junitxml=green.xml"], "green.xml", True),
+        (["pytest", "--junitxml", "/tmp/bundle/green.xml"], "green.xml", True),
+        (["pytest", "--junitxml", "./green.xml"], "green.xml", True),
+        (["pytest", "--junitxml", "/tmp/bundle/reports/test.xml"], "reports/test.xml", True),
+        (["pytest", "--junitxml", "test.xml"], "reports/test.xml", False),
+        (["pytest", "--junitxml", "other.xml"], "green.xml", False),
+        (["pytest", "--junitxml", "/tmp/bundle/other.xml"], "green.xml", False),
+        (["pytest", "tests/test_x.py"], "green.xml", False),
+        (["python", "fake.py", "green.xml"], "green.xml", True),
+        (["bash", "-c", "pytest --junitxml green.xml"], "green.xml", True),
+        (["bash", "-c", "echo green.xml"], "green.xml", False),
+        (["bash", "-c", "cd x && python3 -m pytest --junitxml green.xml"], "green.xml", True),
+        (["bash", "-c", "echo 'unterminated"], "green.xml", False),
+        ([], "green.xml", False),
+        (None, "green.xml", False),
+    ]
+    for argv, artifact, expected in cases:
+        assert ve._argv_mentions_path(argv, artifact) is expected, argv
+
+
+def test_parse_pytest_summary_counts():
+    # FND-003, the stdout summary parser directly: the counts
+    # pytest prints, a category omitted (zero), warnings and
+    # deselected tests (not tests run), "no tests ran", and the
+    # shapes left unparsed — no summary line, and xfailed/xpassed,
+    # whose JUnit mapping is not established here.
+    assert ve._parse_pytest_summary("== 2 passed in 0.02s ==") == (2, 2)
+    assert ve._parse_pytest_summary("== 1 failed, 1 passed in 0.12s ==") == (2, 1)
+    assert ve._parse_pytest_summary("== 2 passed, 3 skipped in 0.12s ==") == (5, 2)
+    assert ve._parse_pytest_summary("== 1 failed in 0.12s ==") == (1, 0)
+    assert ve._parse_pytest_summary("== 2 passed, 1 warning in 0.02s ==") == (2, 2)
+    assert ve._parse_pytest_summary("== 2 passed, 1 deselected in 0.02s ==") == (2, 2)
+    assert ve._parse_pytest_summary("== no tests ran in 0.02s ==") == (0, 0)
+    assert ve._parse_pytest_summary("tests/x.py::test_y PASSED [100%]\n") is None
+    assert ve._parse_pytest_summary("== 1 xfailed, 2 passed in 0.02s ==") is None
+    assert ve._parse_pytest_summary("== 1 xpassed, 2 passed in 0.02s ==") is None
+    assert ve._parse_pytest_summary("") is None
+    assert ve._parse_pytest_summary(None) is None
 
 
 # Round 11, FND-002: an assertion-free suite passes identically for
@@ -3499,6 +3651,7 @@ def test_shell_test_gate_running_a_runner_passes(tmp_path):
         commands={
             "test": (
                 f"{sys.executable} -m pytest tests/test_capture.py -v "
+                f"--junitxml {tmp_path / 'green.xml'} "
                 f"|| {sys.executable} -c \"print('fallback')\""
             ),
         },

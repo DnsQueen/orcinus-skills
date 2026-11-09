@@ -160,7 +160,7 @@ import types
 import unicodedata
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 # The binding hash lives in one place: record_check.py in this same
 # skill folder. The import is guarded so the validator module still
@@ -1033,6 +1033,119 @@ def check_fail_first(bundle, problems, bundle_dir=None):
             )
 
 
+def _argv_path_tokens(argv):
+    """The path values a recorded argv names, as plain tokens: the
+    argv itself, or — for a shell string — the tokens of each
+    command in it that actually invokes a runner, split by the
+    FND-001 hardened parser (_shell_segments). `sh -c "pytest
+    --junitxml green.xml"` names green.xml; `sh -c "echo
+    green.xml"` names nothing — a mention inside an echo is not a
+    command that could have written the report. An unparseable
+    shell string names no path (fails closed)."""
+    if not isinstance(argv, list) or not argv:
+        return []
+    parts = [str(a) for a in argv]
+    if parts[:2] == ["sh", "-c"] or parts[:2] == ["bash", "-c"]:
+        if len(parts) < 3:
+            return []
+        segments = _shell_segments(parts[2])
+        if segments is None:
+            return []
+        return [
+            token
+            for segment in segments
+            if _argv_runner_tool_name(segment) is not None
+            for token in segment
+        ]
+    return parts
+
+
+def _argv_mentions_path(argv, artifact):
+    """True when `artifact` (a bundle-relative report path) is a
+    path the recorded argv names: a bare token, the value of a
+    `--flag=<path>` token, or the token after `--junitxml`. Paths
+    are compared by trailing components, so an absolute
+    `--junitxml /tmp/.../green.xml` names the bundle-relative
+    `green.xml`, and `./green.xml` names `green.xml`; a different
+    filename never matches. No runner's report flag is assumed
+    beyond that: pytest's `--junitxml` is the only spelling this
+    repo documents, and any token naming the path counts, whatever
+    flag carried it. Written here (own code): no borrowed
+    argv/report reconciliation approach was found to reuse."""
+    if not isinstance(artifact, str) or not artifact:
+        return False
+    art_parts = PurePosixPath(artifact).parts
+    tokens = _argv_path_tokens(argv)
+    candidates = []
+    for i, token in enumerate(tokens):
+        if token == "--junitxml":
+            if i + 1 < len(tokens):
+                candidates.append(tokens[i + 1])
+            continue
+        if "=" in token:
+            candidates.append(token.split("=", 1)[1])
+        else:
+            candidates.append(token)
+    for candidate in candidates:
+        if not candidate:
+            continue
+        cand_parts = PurePosixPath(candidate).parts
+        if len(cand_parts) >= len(art_parts) and cand_parts[-len(art_parts) :] == art_parts:
+            return True
+    return False
+
+
+# pytest's short summary line, as this repo's own captures carry
+# it: `=== 2 passed in 0.02s ===`, `=== 1 failed, 1 passed in
+# 0.12s ===`, `=== 2 passed, 1 warning in 0.02s ===`.
+_PYTEST_SUMMARY_RE = re.compile(r"^=+\s*(?P<body>.+?)\s+in\s+[\d.]+s\s*=+\s*$", re.MULTILINE)
+_PYTEST_SUMMARY_COUNTS_RE = re.compile(
+    r"(\d+)\s+(passed|failed|skipped|errors?|xfailed|xpassed|deselected|warnings?)"
+)
+_PYTEST_SUMMARY_KINDS = {
+    "passed": "passed",
+    "failed": "failed",
+    "skipped": "skipped",
+    "error": "error",
+    "errors": "error",
+    "xfailed": "xfailed",
+    "xpassed": "xpassed",
+    "deselected": "deselected",
+    "warning": "warning",
+    "warnings": "warning",
+}
+
+
+def _parse_pytest_summary(stdout):
+    """(total, passed) from pytest's short summary line, or None
+    when the stdout has no parseable pytest summary. Only pytest's
+    "N passed[, M failed, ...] in Xs" line is parsed — the one this
+    repo's own captures carry. Any other runner's summary format is
+    not known here, so an unparseable stdout never rejects the
+    bundle on its own (documented limitation: a mismatch can only
+    be caught when the summary is pytest-shaped). A summary
+    mentioning xfailed/xpassed is left unparsed rather than
+    guessed: their JUnit mapping is not established here.
+    Deselected tests and warnings are not tests run, so they never
+    count toward the total; a category pytest omits counts as
+    zero, since pytest lists every non-zero category."""
+    if not isinstance(stdout, str) or not stdout:
+        return None
+    matches = _PYTEST_SUMMARY_RE.findall(stdout)
+    if not matches:
+        return None
+    body = matches[-1].strip()
+    if body == "no tests ran":
+        return (0, 0)
+    counts = {}
+    for number, kind in _PYTEST_SUMMARY_COUNTS_RE.findall(body):
+        counts[_PYTEST_SUMMARY_KINDS[kind]] = int(number)
+    if "xfailed" in counts or "xpassed" in counts:
+        return None
+    total = sum(counts.get(kind, 0) for kind in ("passed", "failed", "skipped", "error"))
+    return (total, counts.get("passed", 0))
+
+
 def check_test_report(bundle, problems, bundle_dir):
     """A required test gate must be backed by a JUnit XML report
     with tests>0 and passed>0 (round 8, FND-005): a command printing
@@ -1042,10 +1155,15 @@ def check_test_report(bundle, problems, bundle_dir):
     legitimately waived docs-only/config-only gate — and only for
     PASS (an honest FAIL/INCOMPLETE bundle needs no report). The
     report is read through the same artifact path as the fail-first
-    reports, so a tampered file fails its sha256. What this does NOT
-    close: a lying command printing fake output. The report file
-    itself can be fabricated the same way; only a trust boundary
-    the job cannot touch closes that (see the module docstring)."""
+    reports, so a tampered file fails its sha256. Round 11, FND-003:
+    the report must also be the file the recorded test command
+    wrote — its artifact path must appear in the passing 'test'
+    check's command_argv — and its counts must agree with that
+    check's stdout summary. A mismatch on either is INCOMPLETE,
+    never PASS. What this does NOT close: a lying command printing
+    fake output. The report file itself can be fabricated the same
+    way; only a trust boundary the job cannot touch closes that
+    (see the module docstring)."""
     if bundle.get("verdict") != "PASS":
         return
     plan = bundle.get("verification_plan")
@@ -1068,6 +1186,38 @@ def check_test_report(bundle, problems, bundle_dir):
             f"test_report lists {total} test(s) but none passed: a required test gate "
             "must have at least one passing test (an all-skipped suite ran no test)"
         )
+    for check in _checks(bundle):
+        if check.get("name") != "test" or check.get("verdict") != "PASS":
+            continue
+        report = bundle.get("test_report")
+        artifact = report.get("artifact") if isinstance(report, dict) else None
+        argv = check.get("command_argv")
+        if (
+            isinstance(artifact, str)
+            and artifact
+            and argv is not None
+            and not _argv_mentions_path(argv, artifact)
+        ):
+            problems.append(
+                f"test_report artifact {artifact!r} does not appear in the "
+                f"test check's command_argv: the report must be the file "
+                f"the recorded command wrote (--junitxml <artifact>)"
+            )
+        # The stdout read reports nothing here: an unreadable
+        # stdout artifact is already reported by check_fail_first
+        # / the recorded-binding check — this read must not
+        # double-report it.
+        stdout = _green_test_output(bundle, bundle_dir, [])
+        if stdout is not None and stdout is not _UNREADABLE:
+            summary = _parse_pytest_summary(stdout)
+            if summary is not None and summary != (total, passed):
+                problems.append(
+                    f"test_report lists {total} test(s) with {passed} passed "
+                    f"but the test check's stdout summary says {summary[0]} "
+                    f"test(s) with {summary[1]} passed: the report does not "
+                    f"match the run that produced it"
+                )
+        return
 
 
 # A test file, by the Python naming convention: test_*.py or

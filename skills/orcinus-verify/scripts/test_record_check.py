@@ -784,7 +784,21 @@ def test_recorded_check_validates_in_a_pass_bundle(tmp_path):
     _git(repo, "commit", "-qm", "test")
     out_dir = tmp_path / "bundle"
     proc, fragment = _run_record(
-        repo, out_dir, "test", [sys.executable, "-m", "pytest", "tests/test_ok.py", "-v"]
+        repo,
+        out_dir,
+        "test",
+        # Round 11, FND-003: the recorded command must name the
+        # JUnit report in its argv — pytest writes the report the
+        # bundle's test_report names (test-report.xml here).
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "tests/test_ok.py",
+            "-v",
+            "--junitxml",
+            str(out_dir / "test-report.xml"),
+        ],
     )
     assert proc.returncode == 0, proc.stderr
     check = dict(fragment)
