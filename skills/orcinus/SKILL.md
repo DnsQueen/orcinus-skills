@@ -106,7 +106,7 @@ Minor gates are checked by running the commands and reading their real output.
 
 Record the lifecycle stage in `.orcinus/state.json` with the state machine — no other step invokes it (see `references/project-state.md`). `<sha>` is the commit under verification; `<bundle>` is the evidence bundle path. Run each transition at its gate:
 
-- After `orcinus-verify` passes: `python3 scripts/state.py transition .orcinus/state.json --to VERIFIED --revision <sha> --evidence <bundle>`
+- After `orcinus-verify` passes: `python3 scripts/state.py transition .orcinus/state.json --to VERIFIED --revision <sha> --evidence <bundle>` — a local PASS is provisional; the transition additionally requires a CI attestation for `<sha>`, checked live, or `--attestation-proof <proof.json>` with a targeted-rerun proof. Without either, VERIFIED is refused.
 - When the verified work is ready for the human to approve the next step: `python3 scripts/state.py transition .orcinus/state.json --to AWAITING_APPROVAL --revision <sha>`
 - After the human approves the verified digest for release: `python3 scripts/state.py transition .orcinus/state.json --to RELEASE_READY --revision <sha>`
 

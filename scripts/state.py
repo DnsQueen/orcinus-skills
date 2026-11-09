@@ -19,6 +19,19 @@ hand-written approval reached RELEASE_READY. The old required
 `--digest` flag is gone; `--expect-digest` only asserts against
 the recomputed digest and is never stored.
 
+0.11.0: the VERIFIED gate additionally requires a CI
+attestation, checked LIVE at transition time
+(scripts/verify_attestation.py — `gh attestation verify` on the
+content digest, pinned to this repo's CI workflow and the
+revision). A local PASS bundle is provisional: it proves the
+bundle is complete and self-consistent, not that CI ran. The
+attestation is never a recorded claim in the bundle — a state
+file that says VERIFIED without a live check (or an explicit
+targeted-rerun proof file, --attestation-proof) is refused.
+`validate_state` keeps doing the local structural check only
+(no network): the transition gate, not validate, enforces
+attestation.
+
 This is a local check, not the v1.1 tamper-proof enforcement layer:
 any agent (or human) with write access can still edit the file
 (project-state.md Rule 4). What this adds is a machine that refuses
@@ -32,7 +45,8 @@ Usage:
     python3 scripts/state.py validate <state.json> [--repo <repo>] [--no-require-head]
     python3 scripts/state.py transition <state.json> --to STAGE
         --revision <sha> [--expect-digest sha256:<hex>]
-        [--evidence <bundle path>] [--note <text>] [--repo <repo>]
+        [--evidence <bundle path>] [--attestation-proof <proof path>]
+        [--note <text>] [--repo <repo>]
 
 Stdlib only.
 """
@@ -74,6 +88,19 @@ sys.path.insert(0, str(ROOT / "skills" / "orcinus-verify" / "scripts"))
 _validate_evidence: types.ModuleType | None = None
 try:
     import validate_evidence as _validate_evidence  # type: ignore[import-not-found]  # noqa: E402
+except ImportError:
+    pass
+
+# The live attestation check lives beside this file
+# (scripts/verify_attestation.py). Imported, like the digest —
+# but guarded like the validator: with no checker available,
+# VERIFIED is refused instead of passed. The seam is the
+# `attestation_checker` parameter of transition(): it defaults
+# to the real check, in production and in tests alike, and tests
+# inject a stub explicitly, never by making the check optional.
+_verify_attestation: types.ModuleType | None = None
+try:
+    import verify_attestation as _verify_attestation  # type: ignore[import-not-found]  # noqa: E402
 except ImportError:
     pass
 
@@ -123,21 +150,26 @@ def load_state(path):
 def validate_state(data, repo=None, require_head=False):
     """Problems with a state dict, [] when valid. Mirrors
     scripts/state_schema.json (hand-rolled, stdlib only — the repo
-    has no jsonschema dependency). With `repo` given, the stored
-    digest is also recomputed from the state's revision and
-    compared: a stored digest that does not match the tree it
-    claims to describe is corrupt, not verified (F-07) — this is
-    what detects a hand-edited state file. With `repo` None only
-    the structural checks run. With `require_head` (round 8,
-    FND-008; the `validate` CLI passes it by default) the state's
-    revision must also be HEAD: a state for a revision HEAD has
-    moved past is stale, not valid — the digest may still match
-    its own revision, but the stage no longer describes the
-    current tree. `require_head` defaults off for in-process
-    callers (transition() has its own stage-specific staleness
-    refusal); pass it explicitly to inspect a state as the CLI
-    does, or --no-require-head on the CLI to inspect a
-    historical state on purpose."""
+    has no jsonschema dependency). This is the LOCAL structural
+    check only: it never touches the network and never checks an
+    attestation. A VERIFIED state that validates here may still
+    never have been attested — the transition gate (transition(),
+    0.11.0) is what enforces attestation, at the moment VERIFIED
+    is minted. With `repo` given, the stored digest is also
+    recomputed from the state's revision and compared: a stored
+    digest that does not match the tree it claims to describe is
+    corrupt, not verified (F-07) — this is what detects a
+    hand-edited state file. With `repo` None only the structural
+    checks run. With `require_head` (round 8, FND-008; the
+    `validate` CLI passes it by default) the state's revision
+    must also be HEAD: a state for a revision HEAD has moved past
+    is stale, not valid — the digest may still match its own
+    revision, but the stage no longer describes the current tree.
+    `require_head` defaults off for in-process callers
+    (transition() has its own stage-specific staleness refusal);
+    pass it explicitly to inspect a state as the CLI does, or
+    --no-require-head on the CLI to inspect a historical state on
+    purpose."""
     problems = []
     if not isinstance(data, dict):
         return ["state is not an object"]
@@ -304,6 +336,140 @@ def _evidence_problems(value, repo, require_valid, expected_revision=None):
     if bundle.get("verdict") != "PASS":
         return [f"evidence_bundle {value!r} has verdict {bundle.get('verdict')!r}, not PASS"]
     return []
+
+
+def _is_int(value):
+    # bool is a subclass of int in Python; an exit code or a
+    # junit count of True is not an integer.
+    return type(value) is int
+
+
+def _default_attestation_checker(repo, revision):
+    """The live check, defaulting to verify_attestation: the same
+    default in production and in tests. With no checker module
+    available the result is unavailable, never verified."""
+    if _verify_attestation is None:
+        return types.SimpleNamespace(
+            status="unavailable",
+            reason="scripts/verify_attestation.py is not available",
+        )
+    return _verify_attestation.verify_attestation(repo, revision)
+
+
+def _check_attestation_proof(proof_path, repo, revision, content_digest, fail_first_test=None):
+    """Check an explicit targeted-rerun proof file against the
+    recomputed digest. Raises ValueError on any mismatch — the
+    proof's digest is compared, never trusted; the method must be
+    "targeted-rerun"; the exit code must be 0; the junit counts
+    must show a passing rerun (total == passed > 0); the proof
+    must name the revision being transitioned to; and when the
+    bundle has a fail-first test it must be listed in the proof's
+    tests. Returns None when the proof is valid. The proof shape
+    is {"method": "targeted-rerun", "revision": "<40-hex>",
+    "content_digest": "<digest>", "tests": ["<nodeid>", ...],
+    "junit": {"total": N, "passed": N}, "exit_code": 0}."""
+    try:
+        proof = json.loads(Path(proof_path).read_text(encoding="utf-8"))
+    except OSError as e:
+        raise ValueError(f"attestation proof {proof_path!r} could not be read: {e}") from e
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise ValueError(f"attestation proof {proof_path!r} is not valid JSON: {e}") from e
+    if not isinstance(proof, dict):
+        raise ValueError(f"attestation proof {proof_path!r} is not a JSON object")
+    if proof.get("method") != "targeted-rerun":
+        raise ValueError(
+            f"attestation proof {proof_path!r} has method {proof.get('method')!r}, "
+            "not 'targeted-rerun'"
+        )
+    proof_revision = proof.get("revision")
+    if not isinstance(proof_revision, str) or not _SHA_RE.match(proof_revision):
+        raise ValueError(
+            f"attestation proof {proof_path!r} has revision {proof_revision!r}, not a commit SHA"
+        )
+    resolved_proof = _resolve_revision(repo, proof_revision)
+    resolved = _resolve_revision(repo, revision)
+    if resolved_proof is None or resolved is None or resolved_proof != resolved:
+        raise ValueError(
+            f"attestation proof {proof_path!r} is for revision {proof_revision!r}, not {revision!r}"
+        )
+    if proof.get("content_digest") != content_digest:
+        raise ValueError(
+            f"attestation proof {proof_path!r} has content_digest "
+            f"{proof.get('content_digest')!r}, not the recomputed digest {content_digest}"
+        )
+    if not _is_int(proof.get("exit_code")) or proof["exit_code"] != 0:
+        raise ValueError(
+            f"attestation proof {proof_path!r} has exit_code {proof.get('exit_code')!r}, not 0"
+        )
+    junit = proof.get("junit")
+    if not isinstance(junit, dict):
+        raise ValueError(f"attestation proof {proof_path!r} has no junit counts")
+    total, passed = junit.get("total"), junit.get("passed")
+    if not _is_int(total) or not _is_int(passed) or total <= 0 or total != passed:
+        raise ValueError(
+            f"attestation proof {proof_path!r} junit counts do not show a passing rerun "
+            f"(total={total!r}, passed={passed!r})"
+        )
+    tests = proof.get("tests")
+    if not isinstance(tests, list) or not all(isinstance(t, str) for t in tests):
+        raise ValueError(f"attestation proof {proof_path!r} has no tests list")
+    if fail_first_test is not None and fail_first_test not in tests:
+        raise ValueError(
+            f"attestation proof {proof_path!r} does not list the fail-first test "
+            f"{fail_first_test!r}: the rerun must be the rerun of that test"
+        )
+    return None
+
+
+def _check_attestation_gate(repo, revision, computed, bundle_path, checker, proof_path):
+    """The VERIFIED attestation gate, checked live at transition
+    time — never a recorded claim. With an explicit proof file the
+    proof is checked and the live check never runs; otherwise the
+    checker (default: the real verify_attestation check) must
+    return verified. Raises ValueError otherwise. No silent
+    fallback: without a live check AND without a proof file the
+    transition is refused, and the refusal names both options."""
+    if proof_path is not None:
+        fail_first_test = None
+        if bundle_path is not None:
+            path = Path(bundle_path)
+            if not path.is_absolute():
+                path = Path(repo) / path
+            try:
+                bundle = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+                raise ValueError(
+                    f"cannot read the evidence bundle for the attestation proof: {e}"
+                ) from e
+            if isinstance(bundle, dict):
+                fail_first = bundle.get("fail_first")
+                if isinstance(fail_first, dict) and isinstance(fail_first.get("test"), str):
+                    fail_first_test = fail_first["test"]
+        _check_attestation_proof(proof_path, repo, revision, computed, fail_first_test)
+        return
+    check = checker if checker is not None else _default_attestation_checker
+    result = check(repo, revision)
+    status = getattr(result, "status", None)
+    reason = getattr(result, "reason", "")
+    if status == "verified":
+        return
+    if status == "not_verified":
+        raise ValueError(
+            f"VERIFIED requires a CI attestation for revision {revision!r} "
+            f"(content digest {computed}): no matching attestation found "
+            f"({reason}) — the revision was never attested in CI, or the "
+            "attestation is for another revision or digest; re-run CI on "
+            "this revision, or pass --attestation-proof <file> with a "
+            "targeted-rerun proof"
+        )
+    if status == "unavailable":
+        raise ValueError(
+            f"VERIFIED requires a CI attestation for revision {revision!r}, "
+            f"but the live check could not run ({reason}); re-run with gh "
+            "authenticated and network access, or pass --attestation-proof "
+            "<file> with a targeted-rerun proof"
+        )
+    raise ValueError(f"attestation check returned unknown status {status!r} — refusing VERIFIED")
 
 
 def _git_output(repo, *args):
@@ -599,7 +765,15 @@ def _release_lock(fd, lock_path) -> None:
 
 
 def transition(
-    data, to_stage, revision, evidence_bundle=None, note="", repo=None, expect_digest=None
+    data,
+    to_stage,
+    revision,
+    evidence_bundle=None,
+    note="",
+    repo=None,
+    expect_digest=None,
+    attestation_checker=None,
+    attestation_proof=None,
 ):
     """Move a state dict to `to_stage`, returning a new dict (the
     input is not mutated). The content digest is recomputed here,
@@ -621,8 +795,16 @@ def transition(
     bundle is checked in the VERIFIED gate. VERIFIED and
     RELEASE_READY also refuse on a dirty tree at HEAD: the digest
     describes committed content only, and `ls-tree` cannot see
-    untracked files, so the tree is checked separately. The history
-    is append-only: the old entries are kept verbatim and one entry
+    untracked files, so the tree is checked separately. VERIFIED
+    additionally requires a CI attestation, checked LIVE at
+    transition time (0.11.0): `attestation_checker` defaults to
+    the real verify_attestation check — the same default in
+    production and in tests, with tests injecting a stub
+    explicitly — and `attestation_proof` is the explicit-only
+    fallback, a targeted-rerun proof file (see
+    _check_attestation_proof). Without a live check AND without
+    a proof file the transition is refused. The history is
+    append-only: the old entries are kept verbatim and one entry
     is added."""
     # Round 8, FND-007 / N-B3: `repo` defaults to the caller's
     # working directory, resolved at call time — not to the
@@ -716,6 +898,14 @@ def transition(
                 f"VERIFIED requires a valid evidence bundle ({source} {candidate!r}): "
                 f"{'; '.join(problems)}"
             )
+        # 0.11.0: a local PASS is provisional — VERIFIED
+        # additionally requires a CI attestation for this revision,
+        # checked live at transition time (or an explicit
+        # targeted-rerun proof file). The bundle alone never
+        # suffices, whatever it says.
+        _check_attestation_gate(
+            repo, revision, computed, candidate, attestation_checker, attestation_proof
+        )
     if to_stage == "RELEASE_READY":
         approval = data.get("approval")
         if not approval or approval.get("content_digest") != computed:
@@ -763,6 +953,14 @@ def main(argv):
         help="assert the recomputed digest equals this (never stored)",
     )
     move.add_argument("--evidence")
+    move.add_argument(
+        "--attestation-proof",
+        default=None,
+        metavar="<file>",
+        help="explicit fallback for the VERIFIED attestation gate: "
+        "a targeted-rerun proof file (see scripts/state.py) — "
+        "only when the live CI attestation cannot be checked",
+    )
     move.add_argument("--note", default="")
     move.add_argument(
         "--repo",
@@ -826,6 +1024,7 @@ def main(argv):
                 args.note,
                 repo=repo,
                 expect_digest=args.expect_digest,
+                attestation_proof=args.attestation_proof,
             )
         except ValueError as e:
             print(f"refused: {e}")

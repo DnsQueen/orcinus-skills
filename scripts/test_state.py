@@ -24,6 +24,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import state as st  # noqa: E402
 import content_digest as cd  # noqa: E402
+import verify_attestation as va  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 DIGEST = "sha256:" + "a" * 64
@@ -98,6 +99,37 @@ def _pass_bundle_dict():
             ],
         },
     }
+
+
+def _stub_verified_attestation(repo, revision):
+    """The attestation stub for tests whose subject is not the
+    gate itself: the live check is replaced by a verified result,
+    explicitly — never by making the check optional. Tests that
+    exercise the gate itself use their own stub (not-verified /
+    unavailable) or a proof file instead."""
+    return va.AttestationResult("verified", "stubbed attestation")
+
+
+def _proof_dict(repo, revision, digest, **overrides):
+    """A targeted-rerun attestation proof for `revision`'s tree:
+    the exact shape scripts/state.py accepts (method,
+    revision, content_digest, tests, junit totals, exit_code)."""
+    proof = {
+        "method": "targeted-rerun",
+        "revision": revision,
+        "content_digest": digest,
+        "tests": ["tests/test_x.py::test_y"],
+        "junit": {"total": 2, "passed": 2},
+        "exit_code": 0,
+    }
+    proof.update(overrides)
+    return proof
+
+
+def _write_proof(tmp_path, proof, name="proof.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps(proof), encoding="utf-8")
+    return path
 
 
 def _write_bundle(repo, name="x.json", bundle=None, revision=None):
@@ -228,7 +260,7 @@ def test_allowed_transitions(tmp_path):
         revision = _head(repo)
         digest = cd.content_digest(repo, revision)
         data = _at_stage(repo, frm, revision, digest)
-        kwargs = {"repo": repo}
+        kwargs = {"repo": repo, "attestation_checker": _stub_verified_attestation}
         if to == "VERIFIED":
             kwargs["evidence_bundle"] = _write_bundle(repo, revision=revision)
         elif to == "RELEASE_READY":
@@ -426,7 +458,14 @@ def test_verified_refused_on_dirty_tree(tmp_path):
     (repo / ".orcinus" / "state.json").write_text("{}\n", encoding="utf-8")
     (repo / "docs" / "verification" / "other.json").write_text("{}\n", encoding="utf-8")
     (repo / "x.log").write_text("log\n", encoding="utf-8")
-    data = st.transition(data, "VERIFIED", revision, repo=repo, evidence_bundle=bundle)
+    data = st.transition(
+        data,
+        "VERIFIED",
+        revision,
+        repo=repo,
+        evidence_bundle=bundle,
+        attestation_checker=_stub_verified_attestation,
+    )
     assert data["stage"] == "VERIFIED"
 
 
@@ -574,7 +613,9 @@ def test_stored_evidence_bundle_rule(tmp_path):
     data = _building(digest=digest, revision=revision)
     data["stage"] = "VERIFYING"
     data["evidence_bundle"] = _write_bundle(repo, revision=revision)
-    data = st.transition(data, "VERIFIED", revision, repo=repo)
+    data = st.transition(
+        data, "VERIFIED", revision, repo=repo, attestation_checker=_stub_verified_attestation
+    )
     assert data["stage"] == "VERIFIED"
     # (b) Stored path names no file: refused.
     data = _building(digest=digest, revision=revision)
@@ -601,6 +642,7 @@ def test_stored_evidence_bundle_rule(tmp_path):
         revision,
         repo=repo,
         evidence_bundle=_write_bundle(repo, revision=revision),
+        attestation_checker=_stub_verified_attestation,
     )
     assert data["stage"] == "VERIFIED"
     assert data["evidence_bundle"] == "docs/verification/x.json"
@@ -789,12 +831,17 @@ def test_six_sequential_cli_transitions_print_no_stale_lock_note(tmp_path):
     state_path = state_dir / "state.json"
     state_path.write_text(json.dumps(_building(digest=digest, revision=revision)), encoding="utf-8")
     script = Path(__file__).resolve().parent / "state.py"
+    # The VERIFIED step runs through the real CLI, which has no
+    # stub to inject: it takes the explicit --attestation-proof
+    # path (the honest CLI route where no live attestation exists
+    # for this throwaway repo).
+    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest))
     steps = [
         ("VERIFYING", []),
         ("BLOCKED", []),
         ("BUILDING", []),
         ("VERIFYING", []),
-        ("VERIFIED", ["--evidence", bundle]),
+        ("VERIFIED", ["--evidence", bundle, "--attestation-proof", str(proof)]),
         ("AWAITING_APPROVAL", []),
     ]
     for to_stage, extra in steps:
@@ -1199,3 +1246,325 @@ def test_lock_released_after_refused_transition(tmp_path):
         )
         == 0
     )
+
+
+# --- 0.11.0: the VERIFIED gate additionally requires a CI attestation ---
+# The attestation is checked LIVE at transition time, never as a
+# recorded claim in the bundle. The default checker is the real
+# verify_attestation check, in production and in tests alike;
+# tests inject a stub explicitly, never by making the check
+# optional. The explicit fallback is a --attestation-proof file
+# (a targeted-rerun proof, produced by the Layer 2 producer).
+
+
+def _not_verified_attestation(repo, revision):
+    return va.AttestationResult("not_verified", "no attestations found")
+
+
+def _unavailable_attestation(repo, revision):
+    return va.AttestationResult("unavailable", "gh is not authenticated (run: gh auth login)")
+
+
+def _failing_attestation(repo, revision):
+    raise AssertionError("the live check must not run when a proof file is given")
+
+
+def _verified_state_data(repo, revision, digest):
+    data = _building(digest=digest, revision=revision)
+    data["stage"] = "VERIFYING"
+    return data
+
+
+def test_verified_refused_without_attestation(tmp_path):
+    """A valid PASS bundle with no CI attestation for the revision
+    is not VERIFIED: the live check says not-verified, and the
+    transition is refused naming the attestation."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _verified_state_data(repo, revision, digest)
+    with pytest.raises(ValueError, match="attestation"):
+        st.transition(
+            data,
+            "VERIFIED",
+            revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, revision=revision),
+            attestation_checker=_not_verified_attestation,
+        )
+
+
+def test_verified_allowed_with_stubbed_attestation(tmp_path):
+    """The same transition with a verified attestation succeeds:
+    the stub stands in for the live check, explicitly."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _verified_state_data(repo, revision, digest)
+    data = st.transition(
+        data,
+        "VERIFIED",
+        revision,
+        repo=repo,
+        evidence_bundle=_write_bundle(repo, revision=revision),
+        attestation_checker=_stub_verified_attestation,
+    )
+    assert data["stage"] == "VERIFIED"
+
+
+def test_verified_refused_when_attestation_unavailable_names_both_options(tmp_path):
+    """No gh / no network / no auth is not a pass and not a
+    'not verified': the transition is refused, naming both ways
+    forward — a live check, or an explicit --attestation-proof."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _verified_state_data(repo, revision, digest)
+    with pytest.raises(ValueError, match="attestation") as exc:
+        st.transition(
+            data,
+            "VERIFIED",
+            revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, revision=revision),
+            attestation_checker=_unavailable_attestation,
+        )
+    assert "--attestation-proof" in str(exc.value)
+
+
+def test_verified_default_checker_is_the_live_check(tmp_path, monkeypatch):
+    """The default in production and in tests is the same: with
+    no checker injected, transition() calls the real
+    verify_attestation check — proved by recording the call,
+    not by reaching the network."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    calls = []
+
+    def _recording(repo_arg, revision_arg):
+        calls.append((repo_arg, revision_arg))
+        return va.AttestationResult("verified", "recorded live check")
+
+    monkeypatch.setattr(st._verify_attestation, "verify_attestation", _recording)
+    data = _verified_state_data(repo, revision, digest)
+    data = st.transition(
+        data,
+        "VERIFIED",
+        revision,
+        repo=repo,
+        evidence_bundle=_write_bundle(repo, revision=revision),
+    )
+    assert data["stage"] == "VERIFIED"
+    assert calls == [(repo, revision)]
+
+
+def test_verified_with_valid_proof_file(tmp_path):
+    """The explicit fallback: a targeted-rerun proof whose
+    revision and content digest match the transition, with a
+    passing JUnit count and exit 0, satisfies the gate — and the
+    live check is never consulted."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest))
+    data = _verified_state_data(repo, revision, digest)
+    data = st.transition(
+        data,
+        "VERIFIED",
+        revision,
+        repo=repo,
+        evidence_bundle=_write_bundle(repo, revision=revision),
+        attestation_checker=_failing_attestation,
+        attestation_proof=str(proof),
+    )
+    assert data["stage"] == "VERIFIED"
+
+
+def test_verified_proof_digest_mismatch_refused(tmp_path):
+    """A proof for another tree's digest is not proof for this
+    revision: the digest is recomputed, never trusted from the
+    file."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    proof = _write_proof(
+        tmp_path, _proof_dict(repo, revision, digest, content_digest="sha256:" + "f" * 64)
+    )
+    data = _verified_state_data(repo, revision, digest)
+    with pytest.raises(ValueError, match="content_digest"):
+        st.transition(
+            data,
+            "VERIFIED",
+            revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, revision=revision),
+            attestation_proof=str(proof),
+        )
+
+
+def test_verified_proof_wrong_method_refused(tmp_path):
+    """Only method 'targeted-rerun' is a proof: any other method
+    is refused, even with a matching digest."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest, method="full-run"))
+    data = _verified_state_data(repo, revision, digest)
+    with pytest.raises(ValueError, match="method"):
+        st.transition(
+            data,
+            "VERIFIED",
+            revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, revision=revision),
+            attestation_proof=str(proof),
+        )
+
+
+def test_verified_proof_nonzero_exit_refused(tmp_path):
+    """A rerun that exited non-zero proves nothing, whatever its
+    junit counts say."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest, exit_code=1))
+    data = _verified_state_data(repo, revision, digest)
+    with pytest.raises(ValueError, match="exit_code"):
+        st.transition(
+            data,
+            "VERIFIED",
+            revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, revision=revision),
+            attestation_proof=str(proof),
+        )
+
+
+def test_verified_proof_junit_mismatch_refused(tmp_path):
+    """A proof whose junit counts do not add up (total != passed,
+    or no tests at all) is refused."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    data = _verified_state_data(repo, revision, digest)
+    for junit in ({"total": 2, "passed": 1}, {"total": 0, "passed": 0}):
+        proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest, junit=junit))
+        with pytest.raises(ValueError, match="junit"):
+            st.transition(
+                data,
+                "VERIFIED",
+                revision,
+                repo=repo,
+                evidence_bundle=_write_bundle(repo, revision=revision),
+                attestation_proof=str(proof),
+            )
+
+
+def test_verified_proof_revision_mismatch_refused(tmp_path):
+    """A proof recorded at another revision is not proof for this
+    one, even when the trees happen to share a digest."""
+    repo = _repo(tmp_path)
+    old_revision = _head(repo)
+    _commit_change(repo)  # HEAD moves on; the proof names the old revision
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    proof = _write_proof(tmp_path, _proof_dict(repo, old_revision, digest))
+    data = _verified_state_data(repo, revision, digest)
+    with pytest.raises(ValueError, match="revision"):
+        st.transition(
+            data,
+            "VERIFIED",
+            revision,
+            repo=repo,
+            evidence_bundle=_write_bundle(repo, revision=revision),
+            attestation_proof=str(proof),
+        )
+
+
+def test_attestation_proof_requires_fail_first_nodeid(tmp_path):
+    """The proof must name the fail-first test: the rerun is the
+    rerun OF that test, not of an unrelated passing subset."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    nodeid = "tests/test_x.py::test_y"
+    proof = _write_proof(
+        tmp_path, _proof_dict(repo, revision, digest, tests=["tests/test_other.py::test_z"])
+    )
+    with pytest.raises(ValueError, match=nodeid):
+        st._check_attestation_proof(str(proof), repo, revision, digest, fail_first_test=nodeid)
+    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest, tests=[nodeid]))
+    assert (
+        st._check_attestation_proof(str(proof), repo, revision, digest, fail_first_test=nodeid)
+        is None
+    )
+
+
+def test_cli_verified_refused_without_attestation_or_proof(tmp_path):
+    """The CLI, with no --attestation-proof and no live
+    attestation for this throwaway repo, refuses VERIFIED (exit
+    1) naming the attestation — the refusal holds whether the
+    live check fails as not-verified or as unavailable."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_verified_state_data(repo, revision, digest)), encoding="utf-8")
+    bundle = _write_bundle(repo, revision=revision)
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "scripts" / "state.py"),
+            "transition",
+            str(path),
+            "--to",
+            "VERIFIED",
+            "--revision",
+            revision,
+            "--repo",
+            str(repo),
+            "--evidence",
+            bundle,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 1
+    assert "attestation" in proc.stdout + proc.stderr
+
+
+def test_cli_verified_with_proof_file(tmp_path):
+    """The CLI --attestation-proof path: a valid proof file
+    carries the VERIFIED transition with no live check."""
+    repo = _repo(tmp_path)
+    revision = _head(repo)
+    digest = cd.content_digest(repo, revision)
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps(_verified_state_data(repo, revision, digest)), encoding="utf-8")
+    bundle = _write_bundle(repo, revision=revision)
+    proof = _write_proof(tmp_path, _proof_dict(repo, revision, digest))
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(REPO / "scripts" / "state.py"),
+            "transition",
+            str(path),
+            "--to",
+            "VERIFIED",
+            "--revision",
+            revision,
+            "--repo",
+            str(repo),
+            "--evidence",
+            bundle,
+            "--attestation-proof",
+            str(proof),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert json.loads(path.read_text(encoding="utf-8"))["stage"] == "VERIFIED"

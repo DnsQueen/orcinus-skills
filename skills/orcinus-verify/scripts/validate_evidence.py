@@ -77,9 +77,12 @@ array limits) is a controlled error with exit 2, never a
 traceback.
 
 Usage: python3 skills/orcinus-verify/scripts/validate_evidence.py <bundle.json> [--verdict-block <response.md>] [--repo <repo>] [--expected-revision <rev>] [--expected-diff <sha256>]
-Exit 0 when the bundle is valid and consistent; exit 1 otherwise,
-with each problem on its own line; exit 2 for a usage error, a
-missing or unreadable schema, or an internal validator error.
+Exit 0 when the bundle is valid and consistent — provisionally:
+structurally valid, not CI-attested (VERIFIED requires a CI
+attestation, checked live by scripts/state.py at transition
+time); exit 1 otherwise, with each problem on its own line;
+exit 2 for a usage error, a missing or unreadable schema, or an
+internal validator error.
 --repo defaults to the working directory: the bundle is bound to
 that repo's tree (every check's revision and content digest are
 recomputed from it, and a dirty-tree PASS has its diff recomputed).
@@ -99,7 +102,14 @@ it, and no skill text relies on the host substituting it.
 The validator does not prove the evidence is true — a bundle can
 claim a command passed while the command never ran. It proves the
 bundle is complete and self-consistent, so a missing check or a
-contradicted verdict cannot slip through as a PASS. Since v3 every
+contradicted verdict cannot slip through as a PASS. Since 0.11.0
+a local PASS is provisional: the validator's OK means the bundle
+is structurally valid, not CI-attested — the project stage
+VERIFIED additionally requires a CI attestation for the revision,
+checked live at transition time (scripts/state.py,
+scripts/verify_attestation.py), or an explicit targeted-rerun
+proof file. A bundle that validates locally is not, by itself,
+VERIFIED. Since v3 every
 executed check must also carry its output, so a PASS with no
 reviewable output is rejected — but the output itself can still be
 fabricated, which is what the agent-behaviour eval measures. Since v6
@@ -3492,7 +3502,11 @@ def main(argv):
         for p in problems:
             print(f"  - {p}")
         return 1
-    print(f"OK: {path} is a valid, consistent evidence bundle")
+    print(
+        f"OK: {path} is a valid, consistent evidence bundle "
+        "(provisional: structurally valid, not CI-attested — "
+        "VERIFIED requires attestation)"
+    )
     return 0
 
 

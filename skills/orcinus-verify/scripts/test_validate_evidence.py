@@ -3788,3 +3788,41 @@ def test_shell_test_gate_mentioning_a_runner_fails(tmp_path):
     )
     problems = _problems(b, tmp_path)
     assert any("test runner" in p for p in problems), problems
+
+
+def test_cli_ok_output_says_pass_is_provisional(tmp_path, capsys):
+    """0.11.0: a local PASS is provisional — structurally valid,
+    not CI-attested. The validator's OK line must say so, because
+    VERIFIED additionally requires a CI attestation (checked live
+    by scripts/state.py at transition time)."""
+    import json
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["config", "user.email", "test@orcinus.local"],
+        ["config", "user.name", "ORCINUS Test"],
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+    (repo / "README.md").write_text("x\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "docs"], check=True, capture_output=True
+    )
+    revision = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    bundle = _docs_only_no_checks_bundle()
+    bundle["revision"] = revision
+    path = tmp_path / "bundle.json"
+    path.write_text(json.dumps(bundle), encoding="utf-8")
+    assert ve.main(["validate_evidence.py", str(path), "--repo", str(repo)]) == 0
+    out = capsys.readouterr().out
+    assert "provisional" in out
+    assert "not CI-attested" in out
+    assert "VERIFIED requires attestation" in out

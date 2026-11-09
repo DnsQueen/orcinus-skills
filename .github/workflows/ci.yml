@@ -70,6 +70,36 @@ jobs:
       - name: Run the script tests
         run: python -m pytest -q
 
+  attest:
+    # 0.11.0: attests the tree content digest, so a later VERIFIED
+    # transition can prove CI ran on that exact content. `needs:
+    # [test]` means an attestation existing for a run implies the
+    # test job passed in that same run — the attestation is only
+    # minted after the tests are green, never instead of them.
+    # The subject is a FILE (content-digest.txt): `gh attestation
+    # verify` has no --subject-digest mode, so the digest is
+    # written to a file and the file is attested. The job adds only
+    # seconds: it computes one digest and signs it, and runs no
+    # test of its own.
+    # actions/attest, not actions/attest-build-provenance: the
+    # latter is a thin wrapper around the former, and current
+    # GitHub guidance is that new implementations use
+    # actions/attest directly (default SLSA provenance predicate).
+    needs: [test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+      - name: Compute the content digest
+        run: python3 scripts/content_digest.py > content-digest.txt
+      - name: Attest the content digest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # actions/attest@v4.2.2
+        with:
+          subject-path: content-digest.txt
+
   waza:
     runs-on: ubuntu-latest
     steps:
