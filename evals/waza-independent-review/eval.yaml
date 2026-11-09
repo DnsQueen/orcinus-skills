@@ -1,0 +1,23 @@
+name: independent-review-eval
+description: |
+  Graded eval for the independent-review skill, run with a REAL agent executor (not the mock). The prompts do NOT state the expected verdict — the agent must read the diff and the code and decide. This suite has never run: there is no real agent executor in this environment (no Copilot CLI/auth, no waza binary), so no live run exists and no numbers are claimed for it. The suite has 3 tasks, the three cases of evals/independent-review-01.md: a change with planted defects (FAIL), a clean change (PASS), and a change whose author summary claims no behavior change while the diff changes behavior (FAIL). Honest limits: the fixture diff stands in for a repo the agent would otherwise diff itself, and the graders see only the agent's output text, not its tool calls, so a fabricated report can still pass — the suite measures verdict accuracy, not whether the checks really ran. The degenerate policies score below the 0.8 threshold (always-FAIL 1/3, always-PASS 1/3). At least 5 trials per task with a real executor are needed before Agent Evaluation can be called demonstrated (round 9, N-A).
+skill: independent-review
+schemaVersion: "1.0"
+version: "1.0"
+config:
+  trials_per_task: 1
+  timeout_seconds: 300
+  parallel: false
+  executor: copilot-sdk
+metrics:
+  - name: task_completion
+    weight: 1.0
+    threshold: 0.8
+graders:
+  - type: code
+    name: output_nonempty
+    config:
+      assertions:
+        - "len(output) > 0"
+tasks:
+  - "tasks/*.yaml"

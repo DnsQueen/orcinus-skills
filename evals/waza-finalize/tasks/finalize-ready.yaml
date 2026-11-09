@@ -1,0 +1,42 @@
+id: finalize-ready
+name: "A verified slice gets a dry-run release report"
+description: |
+  The fixture is a verified slice ready to release: version 0.1.0, orcinus-verify PASS, security-review PASS, the four commands green, release-please not set up, a library with no runtime to monitor. The agent must prepare the dry-run release report in the form the finalize skill specifies and end with the finalize block. The prompt does NOT state the version, which tool wrote the notes, or the monitoring conclusion — the agent must read the fixture files.
+tags:
+  - finalize
+  - pass
+inputs:
+  prompt: |
+    Prepare the dry-run release report for the project in this fixture, following the finalize skill. Read package.json for the version, the git log for the release notes, verify-results.txt for the verification, and release-tools.txt for which release tooling is set up. Write the report in the form the skill specifies — version, release notes and which tool wrote them, verification, CI gates, rollback plan, monitoring plan, handoff, what was not published and why — then ask the user to confirm it in writing. End your response with the finalize block, as the last thing in the response:
+
+    ```finalize
+    {"ready": true|false, "version": "<version>", "release_notes": "hand-written"|"release-please", "not_published": true|false}
+    ```
+
+    Do not publish, merge, or tag anything.
+  context:
+    skill: finalize
+  files:
+    - path: package.json
+    - path: git-log.txt
+    - path: verify-results.txt
+    - path: release-tools.txt
+expected:
+  output_contains:
+    - "0.1.0"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: report_is_ready_with_evidence
+    type: code
+    config:
+      assertions:
+        - 'len(re.findall(r"```finalize\n(.*?)\n```", output, re.S)) == 1 and output.rstrip().endswith("```")'
+        - 're.search(r"\"ready\"\s*:\s*true", (re.findall(r"```finalize\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"version\"\s*:\s*\"0\.1\.0\"", (re.findall(r"```finalize\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"release_notes\"\s*:\s*\"hand-written\"", (re.findall(r"```finalize\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"not_published\"\s*:\s*true", (re.findall(r"```finalize\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - '"rollback" in output.lower()'
+        - '"no runtime" in output.lower()'

@@ -1,0 +1,38 @@
+id: review-misleading
+name: "The review does not trust the author's summary"
+description: |
+  The fixture moves the budget-warning threshold from budget * 0.8 to budget * 0.9, and the author's summary claims "just a refactor, no behavior change". The existing test now fails. The agent must read the diff, not the summary: the behavior changed, and the verdict is FAIL. The prompt does NOT state the verdict or the threshold — the agent must read the fixture.
+tags:
+  - independent-review
+  - fail
+inputs:
+  prompt: |
+    Review the change in this fixture, following the independent-review skill. Read diff.txt, the changed files, and author-summary.txt — the summary is a claim, not evidence. Run the reviewers that apply and aggregate them into the report in the form the skill specifies, with a verdict. End your response with the review block, as the last thing in the response:
+
+    ```review
+    {"verdict": "PASS"|"FAIL", "file": "<file or null>", "finding": "<one line of evidence>"}
+    ```
+  context:
+    skill: independent-review
+  files:
+    - path: diff.txt
+    - path: budget.ts
+    - path: budget.test.ts
+    - path: author-summary.txt
+expected:
+  output_contains:
+    - "budget.ts"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: verdict_is_fail_on_behavior_change
+    type: code
+    config:
+      assertions:
+        - 'len(re.findall(r"```review\n(.*?)\n```", output, re.S)) == 1 and output.rstrip().endswith("```")'
+        - 're.search(r"\"verdict\"\s*:\s*\"FAIL\"", (re.findall(r"```review\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"file\"\s*:\s*\"budget\.ts\"", (re.findall(r"```review\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"finding\"\s*:\s*\"((?:[^\"\\]|\\.)*)0\.9", (re.findall(r"```review\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - '"behavior changed" in output.lower()'

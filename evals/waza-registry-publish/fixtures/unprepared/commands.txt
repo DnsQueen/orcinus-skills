@@ -1,0 +1,4 @@
+build: exit 0
+lint: exit 0
+typecheck: exit 0
+test: 7 passed, 0 failed

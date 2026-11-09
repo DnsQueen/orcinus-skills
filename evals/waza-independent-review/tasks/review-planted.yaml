@@ -1,0 +1,38 @@
+id: review-planted
+name: "The review finds planted defects"
+description: |
+  The fixture adds applyDiscount with three planted defects: the comment says 10% off but the code returns total * 0.8 (20% off); a bare catch swallows the unknown-code error and silently returns the full total; the only test covers the happy path. The agent must review the diff and the code — never an author's summary — run the reviewers that apply, and return FAIL naming the defects. The prompt does NOT state the verdict or the defects — the agent must read the fixture.
+tags:
+  - independent-review
+  - fail
+inputs:
+  prompt: |
+    Review the change in this fixture, following the independent-review skill. Read diff.txt and the changed files, run the reviewers that apply, and aggregate them into the report in the form the skill specifies, with a verdict. End your response with the review block, as the last thing in the response:
+
+    ```review
+    {"verdict": "PASS"|"FAIL", "file": "<file or null>", "finding": "<one line of evidence>"}
+    ```
+  context:
+    skill: independent-review
+  files:
+    - path: diff.txt
+    - path: discount.ts
+    - path: discount.test.ts
+expected:
+  output_contains:
+    - "discount.ts"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: verdict_is_fail_with_evidence
+    type: code
+    config:
+      assertions:
+        - 'len(re.findall(r"```review\n(.*?)\n```", output, re.S)) == 1 and output.rstrip().endswith("```")'
+        - 're.search(r"\"verdict\"\s*:\s*\"FAIL\"", (re.findall(r"```review\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"file\"\s*:\s*\"discount\.ts\"", (re.findall(r"```review\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"finding\"\s*:\s*\"((?:[^\"\\]|\\.)*)0\.8", (re.findall(r"```review\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - '"catch" in output.lower()'
+        - '"unknown" in output.lower()'

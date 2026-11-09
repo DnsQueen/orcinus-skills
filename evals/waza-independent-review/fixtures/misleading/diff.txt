@@ -1,0 +1,10 @@
+diff --git a/src/budget.ts b/src/budget.ts
+--- a/src/budget.ts
++++ b/src/budget.ts
+@@ -3,7 +3,7 @@
+-// budgetWarning: warn when spending reaches 80% of the budget
++// budgetWarning: warn when spending reaches 90% of the budget
+ export function budgetWarning(spent: number, budget: number): boolean {
+-  return spent >= budget * 0.8;
++  return spent >= budget * 0.9;
+ }

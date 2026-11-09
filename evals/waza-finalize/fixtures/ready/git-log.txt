@@ -1,0 +1,2 @@
+33e8aab scaffold: demo project skeleton
+269bb15 feat: weekly summary with budget warning

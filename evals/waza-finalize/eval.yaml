@@ -1,0 +1,23 @@
+name: finalize-eval
+description: |
+  Graded eval for the finalize skill, run with a REAL agent executor (not the mock). The prompts do NOT state the expected report contents — the agent must read the fixture files and decide. This suite has never run: there is no real agent executor in this environment (no Copilot CLI/auth, no waza binary), so no live run exists and no numbers are claimed for it. The suite has 2 tasks: a verified slice that gets a dry-run release report, and a slice whose verification FAILED, where the agent must stop instead of presenting a releasable report. Honest limits: the tasks grade the report assembly from recorded fixture evidence, not a live re-run of the four gates — the live re-run stays in evals/finalize-01.md — and the graders see only the agent's output text, not its tool calls, so a fabricated report can still pass. The degenerate policies score 1/2 each (always-ready passes only the ready task, always-not-ready only the blocked task), both below the 0.8 threshold. At least 5 trials per task with a real executor are needed before Agent Evaluation can be called demonstrated (round 9, N-A).
+skill: finalize
+schemaVersion: "1.0"
+version: "1.0"
+config:
+  trials_per_task: 1
+  timeout_seconds: 300
+  parallel: false
+  executor: copilot-sdk
+metrics:
+  - name: task_completion
+    weight: 1.0
+    threshold: 0.8
+graders:
+  - type: code
+    name: output_nonempty
+    config:
+      assertions:
+        - "len(output) > 0"
+tasks:
+  - "tasks/*.yaml"

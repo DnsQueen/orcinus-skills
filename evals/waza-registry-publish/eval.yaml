@@ -1,0 +1,23 @@
+name: registry-publish-eval
+description: |
+  Graded eval for the registry-publish skill, run with a REAL agent executor (not the mock). The prompts do NOT state the expected verdict — the agent must read the fixture files and decide. This suite has never run: there is no real agent executor in this environment (no Copilot CLI/auth, no waza binary), so no live run exists and no numbers are claimed for it. The suite has 2 tasks: a prepared package whose dry-run file list is exactly the shippable files, and an unprepared package whose dry-run list ships source and tests. No real publish is performed in either task: the publish step itself is not run and the human gate has not been passed, and the publish block's `published` field must be false in both. Honest limits: the tasks grade the check and the report from recorded fixture evidence, not a live `npm pack`, install, or registry query — the live run stays in evals/registry-publish-01.md — and the graders see only the agent's output text, not its tool calls, so a fabricated report can still pass. The degenerate policies score 1/2 each (always-ready passes only the prepared task, always-not-ready only the unprepared task), both below the 0.8 threshold. At least 5 trials per task with a real executor are needed before Agent Evaluation can be called demonstrated (round 9, N-A).
+skill: registry-publish
+schemaVersion: "1.0"
+version: "1.0"
+config:
+  trials_per_task: 1
+  timeout_seconds: 300
+  parallel: false
+  executor: copilot-sdk
+metrics:
+  - name: task_completion
+    weight: 1.0
+    threshold: 0.8
+graders:
+  - type: code
+    name: output_nonempty
+    config:
+      assertions:
+        - "len(output) > 0"
+tasks:
+  - "tasks/*.yaml"

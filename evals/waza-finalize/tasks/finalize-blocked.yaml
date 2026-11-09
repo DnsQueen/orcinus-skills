@@ -1,0 +1,41 @@
+id: finalize-blocked
+name: "A failing verification stops the release"
+description: |
+  The fixture is a slice whose orcinus-verify verdict is FAIL (percent uses Math.floor in summary.ts). The finalize skill's first step says: if either verification is FAIL or INCOMPLETE, stop and fix that first — finalize does not override verification. The agent must stop and say the release is not ready, not present a releasable report. The prompt does NOT state the verdict — the agent must read verify-results.txt.
+tags:
+  - finalize
+  - fail
+inputs:
+  prompt: |
+    Prepare the dry-run release report for the project in this fixture, following the finalize skill. Read package.json for the version, the git log for the release notes, verify-results.txt for the verification, and release-tools.txt for which release tooling is set up. Write the report in the form the skill specifies — version, release notes and which tool wrote them, verification, CI gates, rollback plan, monitoring plan, handoff, what was not published and why — then ask the user to confirm it in writing. End your response with the finalize block, as the last thing in the response:
+
+    ```finalize
+    {"ready": true|false, "version": "<version>", "release_notes": "hand-written"|"release-please", "not_published": true|false}
+    ```
+
+    Do not publish, merge, or tag anything.
+  context:
+    skill: finalize
+  files:
+    - path: package.json
+    - path: git-log.txt
+    - path: verify-results.txt
+    - path: release-tools.txt
+expected:
+  output_contains:
+    - "FAIL"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: release_stopped_on_failed_verification
+    type: code
+    config:
+      assertions:
+        - 'len(re.findall(r"```finalize\n(.*?)\n```", output, re.S)) == 1 and output.rstrip().endswith("```")'
+        - 're.search(r"\"ready\"\s*:\s*false", (re.findall(r"```finalize\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"version\"\s*:\s*\"0\.1\.0\"", (re.findall(r"```finalize\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"not_published\"\s*:\s*true", (re.findall(r"```finalize\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - '"fail" in output.lower()'
+        - '"summary.ts" in output'

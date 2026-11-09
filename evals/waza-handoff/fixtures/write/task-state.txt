@@ -1,0 +1,17 @@
+Goal: build the 0-100 skill collection as one integrated system.
+Status: In progress. mcp-builder just pushed.
+Decisions:
+- One install, 100% integration, no mid-work fetch — the user rejected a referral model.
+- Verification-first: failing test first, then build.
+Next steps:
+1. Evaluate the onboarding candidate in docs/MAP.md.
+2. Write its skill.
+Open / Blockers:
+- The onboarding candidate is not named yet.
+- The push procedure is only sketched.
+Pointers:
+- Files: docs/MAP.md
+- Files: skills/mcp-builder/SKILL.md:1
+Do NOT:
+- Push without the user's fresh approval.
+- Paste file contents into the handoff.

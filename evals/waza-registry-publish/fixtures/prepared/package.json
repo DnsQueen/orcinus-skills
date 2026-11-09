@@ -1,0 +1,1 @@
+{"exports":{"./budget":"./dist/src/budget.js","./summary":"./dist/src/summary.js"},"files":["dist/src","README.md","LICENSE"],"license":"MIT","name":"orcinus-demo-scaffold","type":"module","version":"0.1.0"}

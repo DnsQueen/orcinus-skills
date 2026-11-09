@@ -1,0 +1,16 @@
+orcinus-demo-scaffold-0.1.0.tgz
+LICENSE (1.1kB)
+README.md (242B)
+dist/src/budget.js (220B)
+dist/src/summary.js (446B)
+dist/tests/budget.test.js
+dist/tests/summary.test.js
+docs/constitution.md
+eslint.config.mjs
+package.json (843B)
+src/budget.ts
+src/summary.ts
+tests/budget.test.ts
+tests/summary.test.ts
+tsconfig.json
+.env.example

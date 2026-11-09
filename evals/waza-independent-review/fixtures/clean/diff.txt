@@ -1,0 +1,34 @@
+diff --git a/src/discount.ts b/src/discount.ts
+new file mode 100644
+--- /dev/null
++++ b/src/discount.ts
+@@ -0,0 +1,10 @@
++// applyDiscount: 10% off with code SAVE10
++const SAVE10_RATE = 0.9;
++
++export function applyDiscount(total: number, code: string): number {
++  if (code !== "SAVE10") {
++    throw new Error("unknown discount code: " + code);
++  }
++  return total * SAVE10_RATE;
++}
+diff --git a/tests/discount.test.ts b/tests/discount.test.ts
+new file mode 100644
+--- /dev/null
++++ b/tests/discount.test.ts
+@@ -0,0 +1,15 @@
++import { test } from "node:test";
++import assert from "node:assert/strict";
++import { applyDiscount } from "./discount.js";
++
++test("SAVE10 gives 10% off", () => {
++  assert.equal(applyDiscount(100, "SAVE10"), 90);
++});
++
++test("unknown code throws", () => {
++  assert.throws(() => applyDiscount(100, "OTHER"), /unknown discount code/);
++});
++
++test("empty code throws", () => {
++  assert.throws(() => applyDiscount(100, ""), /unknown discount code/);
++});

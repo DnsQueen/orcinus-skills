@@ -1,0 +1,36 @@
+id: handoff-write
+name: "A handoff is written for the task"
+description: |
+  The fixture is a task state: goal, status, decisions, next steps, blockers, pointers, and a Do NOT list. The agent must write a handoff file from it per the handoff skill — confirm the path first, write to the temp directory with mode 0600, exactly the skill's 10 template sections, paths/lines/symbols only, no file contents, no secrets — and report the path after writing. The prompt does NOT state the path or the state's contents — the agent must read the fixture file.
+tags:
+  - handoff
+  - pass
+inputs:
+  prompt: |
+    Write a handoff file for the task in this fixture, following the handoff skill. Read task-state.txt. Confirm the path first (one sentence), then write the file to the temp directory with mode 0600, using exactly the skill's 10 template sections, paths/lines/symbols only, no file contents, no secrets. Report the path after writing. End your response with the handoff block, as the last thing in the response:
+
+    ```handoff
+    {"written": true|false, "path": "<path or null>", "mode": "0600"|null, "sections": <number or null>, "followed_hostile": true|false, "ran_command": true|false}
+    ```
+  context:
+    skill: handoff
+  files:
+    - path: task-state.txt
+expected:
+  output_contains:
+    - "/tmp/"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: handoff_written_correctly
+    type: code
+    config:
+      assertions:
+        - 'len(re.findall(r"```handoff\n(.*?)\n```", output, re.S)) == 1 and output.rstrip().endswith("```")'
+        - 're.search(r"\"written\"\s*:\s*true", (re.findall(r"```handoff\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"mode\"\s*:\s*\"0600\"", (re.findall(r"```handoff\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"sections\"\s*:\s*10", (re.findall(r"```handoff\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"path\"\s*:\s*\"/tmp/", (re.findall(r"```handoff\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - '"/tmp/" in output'

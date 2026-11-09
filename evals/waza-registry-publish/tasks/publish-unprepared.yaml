@@ -1,0 +1,41 @@
+id: publish-unprepared
+name: "An unprepared package is caught"
+description: |
+  The fixture is the demo package as it stands: no files allowlist, no declared entry points, and the dry-run file list ships source and tests. The agent must fail the checklist per the registry-publish skill, name the files that must not ship, and end with the publish block. The prompt does NOT state the version, the pack list, or the verdict — the agent must read the fixture files.
+tags:
+  - registry-publish
+  - fail
+inputs:
+  prompt: |
+    Check whether the package in this fixture is publish-ready, following the registry-publish skill. Read package.json, pack-dry-run.txt, commands.txt, registry-check.txt, and changelog.txt. Write the report in the form the skill specifies — name, version, changelog entry, the four commands and their results, the registry check, the dry-run file list in full — and say whether it is publish-ready. No real publish is performed in this eval: the publish step itself is not run, and the human gate has not been passed. End your response with the publish block, as the last thing in the response:
+
+    ```publish
+    {"publish_ready": true|false, "version": "<version>", "pack_ok": true|false, "published": true|false}
+    ```
+  context:
+    skill: registry-publish
+  files:
+    - path: package.json
+    - path: pack-dry-run.txt
+    - path: commands.txt
+    - path: registry-check.txt
+    - path: changelog.txt
+expected:
+  output_contains:
+    - "tests/"
+  outcomes:
+    - type: task_completed
+  behavior:
+    max_tool_calls: 10
+graders:
+  - name: unprepared_package_fails
+    type: code
+    config:
+      assertions:
+        - 'len(re.findall(r"```publish\n(.*?)\n```", output, re.S)) == 1 and output.rstrip().endswith("```")'
+        - 're.search(r"\"publish_ready\"\s*:\s*false", (re.findall(r"```publish\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"version\"\s*:\s*\"0\.1\.0\"", (re.findall(r"```publish\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"pack_ok\"\s*:\s*false", (re.findall(r"```publish\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - 're.search(r"\"published\"\s*:\s*false", (re.findall(r"```publish\n(.*?)\n```", output, re.S) + [""])[0]) is not None'
+        - '"src/budget.ts" in output'
+        - '"tests/" in output'

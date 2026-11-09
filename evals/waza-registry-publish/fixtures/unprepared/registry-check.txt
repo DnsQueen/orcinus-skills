@@ -1,0 +1,2 @@
+npm view orcinus-demo-scaffold@0.1.0 version
+E404: 'orcinus-demo-scaffold@0.1.0' is not in this registry
