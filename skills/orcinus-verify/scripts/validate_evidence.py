@@ -1314,6 +1314,255 @@ def check_plan_coverage(bundle, problems):
         )
 
 
+# P0 fix for FND-001: a check named after the `test` gate must actually
+# invoke a test runner. The no-op allowlist (NOOP_COMMANDS) and the
+# masking regexes are syntactic; they cannot tell `python3 tools/fake.py`
+# from `python3 -m pytest`. A required `test` gate whose recorded argv
+# invokes no recognised runner is not evidence that a test ran.
+TEST_RUNNERS = (
+    ("pytest",),
+    ("py.test",),
+    ("python", "-m", "pytest"),
+    ("python3", "-m", "pytest"),
+    ("python", "-m", "unittest"),
+    ("python3", "-m", "unittest"),
+    ("tox",),
+    ("nox",),
+    ("node", "--test"),
+    ("npx", "vitest"),
+    ("npx", "jest"),
+    ("npx", "mocha"),
+    ("vitest",),
+    ("jest",),
+    ("mocha",),
+    ("go", "test"),
+    ("cargo", "test"),
+    ("cargo", "nextest"),
+    ("dotnet", "test"),
+    ("mvn", "test"),
+    ("gradle", "test"),
+    ("./gradlew", "test"),
+    ("phpunit",),
+    ("rspec",),
+    ("bats",),
+    ("ctest",),
+)
+
+
+# Single-token runner names (a runner binary by path: `.../pytest -q`
+# runs pytest) and the modules runnable as `<python> -m <module>`,
+# both derived from TEST_RUNNERS so the lists cannot drift apart.
+_SINGLE_TOKEN_RUNNERS = frozenset(r[0] for r in TEST_RUNNERS if len(r) == 1)
+_M_RUNNERS = frozenset(r[-1] for r in TEST_RUNNERS if len(r) == 3 and r[1] == "-m")
+
+# Shell operators that separate commands in a `sh -c` / `bash -c`
+# string: a runner after one of these is still a command the shell
+# would run; a runner merely echoed is not.
+_SHELL_OPERATORS = (";", "&&", "||", "|", "&")
+
+
+def _is_python(program):
+    """True when `program` names a Python interpreter: `python`,
+    `python3.11`, `/usr/bin/python3`, `pypy3` — the basename, with
+    an optional version suffix."""
+    name = program.rsplit("/", 1)[-1]
+    return re.fullmatch(r"(python|pypy)[0-9.]*", name) is not None
+
+
+def _shell_segments(command):
+    """The argv lists of the commands in a shell string, split on
+    shell operators — or None when the string cannot be parsed.
+    shlex honours quotes, so `echo "a && b"` is one command and
+    `pytest -q` is one argv. An unparseable string (unbalanced
+    quote) fails closed: it invokes no runner.
+    shortcut: operators must be whitespace-separated (shlex splits
+    on whitespace), so `cd x&&python3 -m pytest` is not split and
+    fails closed; upgrade to a real shell lexer if that spelling
+    ever needs to pass."""
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    segments = [[]]
+    for token in tokens:
+        if token in _SHELL_OPERATORS:
+            segments.append([])
+        else:
+            segments[-1].append(token)
+    return segments
+
+
+def _runner_tool_name(runner):
+    """The tool a runner tuple names, for the tool_version check:
+    `python -m pytest` names pytest, not python; `./gradlew test`
+    names gradle; `npx jest` names jest, not npx."""
+    if "-m" in runner:
+        return runner[runner.index("-m") + 1]
+    if runner[0] == "./gradlew":
+        return "gradle"
+    if runner[0] == "npx":
+        return runner[1]
+    return runner[0]
+
+
+# tool_version spellings that name the same tool as another
+# spelling: `py.test` is pytest's old binary name, and `mvn`
+# reports itself as "Apache Maven".
+_TOOL_NAME_ALIASES = {
+    "py.test": "pytest",
+    "maven": "mvn",
+    "gradlew": "gradle",
+}
+
+
+def _normalise_tool_name(name):
+    return _TOOL_NAME_ALIASES.get(name, name)
+
+
+# The tool names a tool_version may honestly claim: every runner's
+# tool name, normalised. A tool_version naming none of these is
+# never rejected by the tool_version rule (see
+# check_test_gate_tool_version).
+_KNOWN_TOOL_NAMES = frozenset(_normalise_tool_name(_runner_tool_name(r)) for r in TEST_RUNNERS)
+
+
+def _argv_runner_tool_name(parts):
+    """The tool name of the runner an argv list invokes, or None.
+    A TEST_RUNNERS prefix (after leading VAR=value assignments,
+    which are environment, not the command), a runner binary by
+    path, or a real `<python> -m <runner>` token pair. The `-m`
+    pair is real only when the token before `-m` is a Python
+    interpreter and the module is a runner: `python3.11 -m pytest`
+    runs pytest, `script.py -m pytest` runs script.py with
+    arguments, not pytest."""
+    parts = [str(p) for p in parts]
+    while parts and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", parts[0]):
+        parts = parts[1:]
+    if not parts:
+        return None
+    for runner in TEST_RUNNERS:
+        if tuple(parts[: len(runner)]) == runner:
+            return _normalise_tool_name(_runner_tool_name(runner))
+    basename = parts[0].rsplit("/", 1)[-1]
+    if basename in _SINGLE_TOKEN_RUNNERS:
+        return _normalise_tool_name(basename)
+    for i, token in enumerate(parts):
+        if token != "-m" or i == 0 or i + 1 >= len(parts):
+            continue
+        if parts[i + 1] in _M_RUNNERS and _is_python(parts[i - 1]):
+            return _normalise_tool_name(parts[i + 1])
+    return None
+
+
+def _invoked_runner_tool_name(argv):
+    """The tool name of the test runner `argv` invokes, or None.
+    A shell string is opaque as a single token, so it is parsed: a
+    segment must actually invoke a runner as a command.
+    `bash -c "echo pytest"` merely mentions the runner;
+    `bash -c "python3 -m pytest -q"` runs it. An unparseable
+    string fails closed."""
+    if not isinstance(argv, list) or not argv:
+        return None
+    parts = [str(a) for a in argv]
+    if parts[:2] == ["sh", "-c"] or parts[:2] == ["bash", "-c"]:
+        if len(parts) < 3:
+            return None
+        segments = _shell_segments(parts[2])
+        if segments is None:
+            return None
+        for segment in segments:
+            name = _argv_runner_tool_name(segment)
+            if name is not None:
+                return name
+        return None
+    return _argv_runner_tool_name(parts)
+
+
+def _invokes_test_runner(argv):
+    """True when the argv runs a recognised test runner."""
+    return _invoked_runner_tool_name(argv) is not None
+
+
+def check_test_gate_invokes_runner(bundle, problems):
+    """FND-001: a PASS whose required `test` gate is covered by a check
+    that never invokes a test runner is a false success. The check's
+    recorded `command_argv` must run a recognised runner (TEST_RUNNERS),
+    or the bundle is INCOMPLETE — never PASS. Only PASS bundles are
+    affected: an honest FAIL/INCOMPLETE bundle may record any command.
+    """
+    if bundle.get("verdict") != "PASS":
+        return
+    plan = bundle.get("verification_plan")
+    if not isinstance(plan, dict):
+        return
+    required = plan.get("required_gates")
+    if not isinstance(required, list) or "test" not in required:
+        return
+    for check in _checks(bundle):
+        if check.get("name") != "test" or check.get("verdict") != "PASS":
+            continue
+        argv = check.get("command_argv")
+        if argv is None:
+            # Unrecorded checks are already rejected for a PASS by
+            # check_recorded_checks; nothing more to say here.
+            continue
+        if not _invokes_test_runner(argv):
+            problems.append(
+                f"check 'test' command {check.get('command')!r} invokes no "
+                f"recognised test runner: a test gate must run the tests, "
+                f"not a command that merely exits 0 and prints a summary"
+            )
+        return
+
+
+def check_test_gate_tool_version(bundle, problems):
+    """FND-001 (auditor recommendation): the recorded `tool_version`
+    must not name a different runner than the one the `test` gate
+    ran. A PASS whose test gate ran pytest but claims "jest 29.0.0"
+    is a self-contradiction: the version must name the runner that
+    ran the gate. The rule is narrow on purpose and fires only when
+    tool_version's first token names a known runner — an agent may
+    honestly record the interpreter version ("python 3.12.3") for a
+    `python -m <runner>` run, and a version naming no runner at all
+    is not evidence of a lie, so those are never rejected here.
+    Only PASS bundles with a required `test` gate are affected; a
+    gate that invoked no runner is the runner rule's problem, not
+    this one's.
+    """
+    if bundle.get("verdict") != "PASS":
+        return
+    plan = bundle.get("verification_plan")
+    if not isinstance(plan, dict):
+        return
+    required = plan.get("required_gates")
+    if not isinstance(required, list) or "test" not in required:
+        return
+    for check in _checks(bundle):
+        if check.get("name") != "test" or check.get("verdict") != "PASS":
+            continue
+        argv = check.get("command_argv")
+        if argv is None:
+            # Unrecorded checks are already rejected for a PASS by
+            # check_recorded_checks; nothing more to say here.
+            continue
+        tool_version = check.get("tool_version")
+        if not isinstance(tool_version, str) or not tool_version.strip():
+            continue
+        claimed = _normalise_tool_name(tool_version.strip().split()[0])
+        if claimed not in _KNOWN_TOOL_NAMES:
+            continue
+        invoked = _invoked_runner_tool_name(argv)
+        if invoked is None:
+            continue
+        if claimed != invoked:
+            problems.append(
+                f"check 'test' tool_version {tool_version!r} names {claimed} "
+                f"but the recorded command runs {invoked}: the tool "
+                f"version must name the runner that ran the gate"
+            )
+        return
+
+
 # File suffixes that mean the change touches code: a change that
 # touches one cannot call itself docs-only or config-only.
 CODE_SUFFIXES = (
@@ -2673,6 +2922,8 @@ def _validate_bundle_inner(
     check_test_report(bundle, problems, bundle_dir)
     check_identities(bundle, problems)
     check_noop_commands(bundle, problems)
+    check_test_gate_invokes_runner(bundle, problems)
+    check_test_gate_tool_version(bundle, problems)
     check_plan_coverage(bundle, problems)
     check_change_type_files(bundle, problems)
     check_files_changed_for_behaviour_change(bundle, problems)

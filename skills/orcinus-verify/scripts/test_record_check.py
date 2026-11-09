@@ -771,10 +771,21 @@ def test_recorded_check_validates_in_a_pass_bundle(tmp_path):
     # End to end: a check recorded by the wrapper validates as part
     # of a PASS bundle (docs-only, so no fail-first proof is needed).
     # The schema version is read from the schema itself, so this
-    # test survives the next bump.
+    # test survives the next bump. The recorded `test` gate runs a
+    # real pytest against a fixture test in the repo (round 11,
+    # FND-001): a print one-liner used to stand here, and the runner
+    # rule rejects it now.
     repo = _repo(tmp_path)
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_ok.py").write_text(
+        "def test_ok():\n    assert True\n", encoding="utf-8"
+    )
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "test")
     out_dir = tmp_path / "bundle"
-    proc, fragment = _run_record(repo, out_dir, "test", [sys.executable, "-c", "print('ok')"])
+    proc, fragment = _run_record(
+        repo, out_dir, "test", [sys.executable, "-m", "pytest", "tests/test_ok.py", "-v"]
+    )
     assert proc.returncode == 0, proc.stderr
     check = dict(fragment)
     # The fragment records the run, not the judgement: the agent adds
@@ -788,7 +799,7 @@ def test_recorded_check_validates_in_a_pass_bundle(tmp_path):
     report = (
         b'<?xml version="1.0" encoding="utf-8"?><testsuites>'
         b'<testsuite name="pytest" tests="1">'
-        b'<testcase classname="tests.test_x" name="test_ok" time="0.01" />'
+        b'<testcase classname="tests.test_ok" name="test_ok" time="0.01" />'
         b"</testsuite></testsuites>"
     )
     (out_dir / "test-report.xml").write_bytes(report)

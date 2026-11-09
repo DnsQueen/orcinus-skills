@@ -54,19 +54,26 @@ def _junit_xml(cases):
 def _write_junit_reports(bundle, directory, red_cases=None, green_cases=None):
     """Write real JUnit red/green reports for the canonical test
     under `directory` and record them on the bundle's fail_first
-    (red_report / green_report, with the sha256 of each file)."""
+    (red_report / green_report, with the sha256 of each file). The
+    green report is the cached real pytest run's own --junitxml
+    output (round 11, FND-001) unless the caller passes explicit
+    cases — a test that needs a specific green shape (a failed
+    green report, a different test id) still gets exactly the XML
+    it asked for. The red report stays fixture-written: the red run
+    is the print one-liner, not a real failing run, so there is no
+    real red JUnit to reuse."""
     import hashlib
 
     directory = Path(directory)
     if red_cases is None:
         red_cases = [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "failed")]
+    reports = [("red_report", "red.xml", _junit_xml(red_cases))]
     if green_cases is None:
-        green_cases = [(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "passed")]
-    for field, filename, cases in (
-        ("red_report", "red.xml", red_cases),
-        ("green_report", "green.xml", green_cases),
-    ):
-        data = _junit_xml(cases)
+        _fragment, _captures, junit = _cached_test_capture()
+        reports.append(("green_report", "green.xml", junit))
+    else:
+        reports.append(("green_report", "green.xml", _junit_xml(green_cases)))
+    for field, filename, data in reports:
         (directory / filename).write_bytes(data)
         bundle["fail_first"][field] = {
             "artifact": filename,
@@ -76,21 +83,14 @@ def _write_junit_reports(bundle, directory, red_cases=None, green_cases=None):
 
 
 def _write_test_report(bundle, directory):
-    """Write a real JUnit report for the required 'test' gate under
+    """Write the required 'test' gate's JUnit report under
     `directory` and record it as the bundle's test_report (FND-005,
-    round 8): two passing tests, so tests>0 and passed>0. The
-    fixture's test gate prints '45 passed', but the report is the
-    structured evidence — the counts are what the rule checks, and
-    no stdout count is ever trusted (the lying-command half stays
-    out of scope)."""
+    round 8): the cached real pytest run's own --junitxml output —
+    two passing tests, so tests>0 and passed>0."""
     import hashlib
 
     directory = Path(directory)
-    cases = [
-        (_CANONICAL_CLASSNAME, _CANONICAL_NAME, "passed"),
-        ("tests.test_other", "test_other", "passed"),
-    ]
-    data = _junit_xml(cases)
+    _fragment, _captures, data = _cached_test_capture()
     (directory / "test-report.xml").write_bytes(data)
     bundle["test_report"] = {
         "artifact": "test-report.xml",
@@ -139,17 +139,24 @@ def _problems(bundle, bundle_dir=None, **validate_kwargs):
     return ve.validate_bundle(bundle, _SCHEMA, **validate_kwargs)
 
 
-# The real commands the fixture's checks are recorded with: trivial
-# commands that print exactly the stdout the old hand-written fixture
-# claimed, so a recorded capture is genuine and the fail-first
-# corroboration (the nodeid in the red/green output) still holds.
-# _recorded_bundle runs record_check.py on these argv lists — never
-# on the hand-written command strings in _good_bundle.
+# The real commands the fixture's checks are recorded with. The
+# `test` gate runs a real pytest against the recording repo's
+# fixture test file (round 11, FND-001): a PASS fixture's test gate
+# must invoke a test runner, never a command that merely prints a
+# passing-looking summary. The lint check has no runner to invoke,
+# so it stays a print (the runner rule applies to the `test` gate
+# only). _recorded_bundle runs record_check.py on these argv lists
+# — never on the hand-written command strings in _good_bundle.
+# The `test` entry is the command the cache in _cached_test_capture
+# records once per module; a recording against an explicit repo
+# runs it for real against that repo instead.
 _RECORD_COMMANDS = {
     "test": [
         sys.executable,
-        "-c",
-        "print('tests/test_capture.py::test_capture_persian_only passed; 45 passed in 0.42s')",
+        "-m",
+        "pytest",
+        "tests/test_capture.py",
+        "-v",
     ],
     "lint": [sys.executable, "-c", "print('All checks passed!')"],
 }
@@ -195,12 +202,22 @@ def _recording_repo(directory):
     # that shape: its red would sit on the bundle revision itself,
     # which is exactly the mislabelled shape the validator rejects.
     (repo / "code.py").write_text("x = 1\n", encoding="utf-8")
+    # A real pytest run in this repo writes __pycache__ and
+    # .pytest_cache: ignored, so the tree stays clean after the run
+    # (round 11, FND-001 — the print one-liner never wrote anything).
+    (repo / ".gitignore").write_text("__pycache__/\n.pytest_cache/\n", encoding="utf-8")
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "code")
     (repo / "code.py").write_text("x = 2\n", encoding="utf-8")
     (repo / "tests").mkdir(exist_ok=True)
     (repo / "tests" / "test_capture.py").write_text(
-        "def test_capture_persian_only():\n    assert True\n", encoding="utf-8"
+        "def test_capture_persian_only():\n    assert True\n"
+        "\n"
+        "\n"
+        "class TestCapture:\n"
+        "    def test_capture_persian_only(self):\n"
+        "        assert True\n",
+        encoding="utf-8",
     )
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "fix")
@@ -245,6 +262,66 @@ def _run_record_check(directory, name, argv, repo, shell=False):
     return json.loads(proc.stdout)
 
 
+# The one real pytest run this module reuses (round 11, FND-001):
+# the recorded `test` check from `python -m pytest` against the
+# canonical fixture test file, with its stdout/stderr capture files
+# and its JUnit report. _good_bundle is built by dozens of tests,
+# so a fresh pytest subprocess per call would add a process spawn
+# to each of them; the run happens once per module instead, and
+# _recorded_bundle reuses the fragment (deep-copied) plus the
+# capture bytes. The capture binds to the cache's own throwaway
+# repo — its revision and content digest — never to the caller's
+# repo, so it is used only when no explicit repo was given; a
+# recording against an explicit repo runs the real command against
+# that repo instead. The TemporaryDirectory is held in a module
+# global so it lives for the module and cleans up at exit.
+_CACHED_TEST_CAPTURE = None
+_CACHED_TEST_CAPTURE_DIR = None
+
+
+def _cached_test_capture():
+    """(fragment, {capture filename: bytes}, junit bytes): the one
+    real pytest run, recorded by record_check.py itself — never
+    hand-written. The JUnit is pytest's own --junitxml output for
+    the run, so the green report and the test report reuse real
+    artifacts too."""
+    global _CACHED_TEST_CAPTURE, _CACHED_TEST_CAPTURE_DIR
+    if _CACHED_TEST_CAPTURE is None:
+        import tempfile
+
+        _CACHED_TEST_CAPTURE_DIR = tempfile.TemporaryDirectory(
+            prefix="orcinus-verify-test-capture-"
+        )
+        cache_dir = Path(_CACHED_TEST_CAPTURE_DIR.name)
+        # The bundle dir and the repo both live inside the temporary
+        # directory, so both are cleaned up with it.
+        bundle_dir = cache_dir / "bundle"
+        repo = _recording_repo(bundle_dir)
+        junit_path = bundle_dir / "green.xml"
+        fragment = _run_record_check(
+            bundle_dir,
+            "test",
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "tests/test_capture.py",
+                "-v",
+                "--junitxml",
+                str(junit_path),
+            ],
+            repo,
+        )
+        fragment.pop("stdout_text", None)
+        fragment.pop("stderr_text", None)
+        captures = {
+            fragment["stdout_artifact"]: (bundle_dir / fragment["stdout_artifact"]).read_bytes(),
+            fragment["stderr_artifact"]: (bundle_dir / fragment["stderr_artifact"]).read_bytes(),
+        }
+        _CACHED_TEST_CAPTURE = (fragment, captures, junit_path.read_bytes())
+    return _CACHED_TEST_CAPTURE
+
+
 def _red_worktree(directory, repo):
     """A worktree of `repo` at the base commit (HEAD~1, the pre-fix
     tree), with the canonical test file copied in: the tree the red
@@ -286,8 +363,17 @@ def _recorded_bundle(bundle, directory, commands=None, repo=None):
     the argv to actually run — a list for argv mode, or a string for
     --shell mode; the default is the fixture's trivial commands above.
     `repo` is the git repo the captures bind to; the default is a
-    throwaway repo beside `directory` (see _recording_repo)."""
+    throwaway repo beside `directory` (see _recording_repo). The
+    `test` check is the exception: unless an explicit repo was given
+    or the caller overrides the `test` command, it reuses the one
+    real pytest run from _cached_test_capture — the fragment is
+    deep-copied (tests mutate recorded checks) and its capture
+    files are copied into `directory`, so the binding recomputes
+    there. A recording against an explicit repo runs the real
+    `test` command against that repo instead, so the capture binds
+    to the repo the caller named."""
     directory = Path(directory)
+    explicit_repo = repo is not None
     if repo is None:
         repo = _recording_repo(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -298,11 +384,23 @@ def _recorded_bundle(bundle, directory, commands=None, repo=None):
         cmd = cmds.get(check.get("name"))
         if cmd is None:
             continue
-        if isinstance(cmd, str):
+        if (
+            check.get("name") == "test"
+            and not explicit_repo
+            and not (commands and "test" in commands)
+        ):
+            import copy
+
+            fragment, captures, _junit = _cached_test_capture()
+            for filename, data in captures.items():
+                (directory / filename).write_bytes(data)
+            check.update(copy.deepcopy(fragment))
+        elif isinstance(cmd, str):
             fragment = _run_record_check(directory, check["name"], [cmd], repo, shell=True)
+            check.update(fragment)
         else:
             fragment = _run_record_check(directory, check["name"], cmd, repo)
-        check.update(fragment)
+            check.update(fragment)
         check.pop("stdout_text", None)
         check.pop("stderr_text", None)
     ff = bundle.get("fail_first")
@@ -334,10 +432,14 @@ def _recorded_bundle(bundle, directory, commands=None, repo=None):
 
 
 def _good_bundle():
-    # The check commands are the trivial recordable commands
-    # _recorded_bundle runs (they print the stdout the old fixture
-    # claimed): a PASS fixture's captures must be generated by
-    # record_check.py itself, never hand-written.
+    # The check commands are the real commands _recorded_bundle
+    # runs: the `test` gate runs pytest against the fixture test
+    # file (round 11, FND-001), and the lint check prints its
+    # result. A PASS fixture's captures must be generated by
+    # record_check.py itself, never hand-written; the hand-written
+    # command and stdout below are what the recorded fragment
+    # overwrites, kept so the unrecorded shape still describes the
+    # same real run.
     return {
         "schema_version": 6,
         "revision": "abc1234",
@@ -348,14 +450,16 @@ def _good_bundle():
         "checks": [
             {
                 "name": "test",
-                "command": "python3 -c \"print('tests/test_capture.py::test_capture_persian_only passed; 45 passed in 0.42s')\"",
+                "command": "python3 -m pytest tests/test_capture.py -v",
                 "cwd": "/repo",
                 "exit_code": 0,
                 "verdict": "PASS",
                 "tool_version": "pytest 8.4.2",
                 "started_at": "2026-11-06T10:00:00Z",
                 "finished_at": "2026-11-06T10:00:12Z",
-                "stdout_text": "tests/test_capture.py::test_capture_persian_only passed; 45 passed in 0.42s",
+                "stdout_text": "tests/test_capture.py::test_capture_persian_only PASSED\n"
+                "tests/test_capture.py::TestCapture::test_capture_persian_only PASSED\n"
+                "2 passed in 0.42s",
             },
             {
                 "name": "lint",
@@ -754,14 +858,18 @@ def test_validator_is_self_contained_outside_the_repo(tmp_path):
     # The captures are recorded into the bundle directory (elsewhere)
     # before the validator runs there: the copied validator must
     # recompute the binding from the copied record_check.py alone,
-    # with no repo checkout.
-    _recorded_bundle(b, elsewhere)
+    # with no repo checkout. The repo is named explicitly so the
+    # captures bind to it: the shared cached test capture binds to
+    # its own repo (round 11, FND-001), and the CLI run below names
+    # this repo.
+    repo = _recording_repo(elsewhere)
+    _recorded_bundle(b, elsewhere, repo=repo)
     _write_junit_reports(b, elsewhere)
     _write_test_report(b, elsewhere)
     # FND-004 (round 8): the bundle revision is the recording
     # repo's HEAD, so the checks' revisions agree with it.
     b["revision"] = subprocess.run(
-        ["git", "-C", str(_recording_repo(elsewhere)), "rev-parse", "HEAD"],
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
         check=True,
         capture_output=True,
         text=True,
@@ -776,7 +884,7 @@ def test_validator_is_self_contained_outside_the_repo(tmp_path):
             # (cwd), and the copied skill runs from a non-repo dir —
             # so the run names the repo the captures bind to.
             "--repo",
-            str(_recording_repo(elsewhere)),
+            str(repo),
         ],
         capture_output=True,
         text=True,
@@ -1638,20 +1746,22 @@ def _run_cli_with_verdict_block(bundle, block_text):
     validator = Path(__file__).resolve().parent / "validate_evidence.py"
     with tempfile.TemporaryDirectory() as d:
         bundle_path = Path(d) / "bundle.json"
+        # FND-004 (round 8): the CLI binds the bundle to a repo by
+        # default, so the run names the repo the captures were
+        # recorded against — the checkout cwd is a different repo —
+        # and the bundle revision is that repo's HEAD, so the
+        # checks' revisions agree with it. The repo is named
+        # explicitly so the captures bind to it: the shared cached
+        # test capture binds to its own repo (round 11, FND-001).
+        repo = _recording_repo(Path(d))
         # Record the bundle's captures into the same directory, so
         # the CLI run tests the block comparison — not the recording.
-        _recorded_bundle(bundle, Path(d))
+        _recorded_bundle(bundle, Path(d), repo=repo)
         _write_junit_reports(bundle, Path(d))
         _write_test_report(bundle, Path(d))
         bundle_path.write_text(json.dumps(bundle), encoding="utf-8")
         block_path = Path(d) / "response.md"
         block_path.write_text(block_text, encoding="utf-8")
-        # FND-004 (round 8): the CLI binds the bundle to a repo by
-        # default, so the run names the repo the captures were
-        # recorded against — the checkout cwd is a different repo —
-        # and the bundle revision is that repo's HEAD, so the
-        # checks' revisions agree with it.
-        repo = _recording_repo(Path(d))
         bundle["revision"] = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "HEAD"],
             check=True,
@@ -1812,11 +1922,7 @@ def test_noop_recorded_shell_fallback_passes(tmp_path):
 
         pytest.skip("sh is not installed")
     python = sys.executable.replace("\\", "/")
-    nodeid = "tests/test_capture.py::test_capture_persian_only"
-    fallback = (
-        f"{python} -c \"print('{nodeid} passed; 45 passed in 0.42s')\" "
-        f"|| {python} -c \"print('fallback')\""
-    )
+    fallback = f"{python} -m pytest tests/test_capture.py -v || {python} -c \"print('fallback')\""
     b = _good_bundle()
     _recorded_bundle(b, tmp_path, commands={"test": fallback})
     assert _problems(b, tmp_path) == []
@@ -1997,8 +2103,9 @@ def test_fail_first_class_nodeid_links_by_classname(tmp_path):
     # F-03: a nodeid with a class (tests/test_x.py::TestFoo::
     # test_bar) derives classname tests.test_x.TestFoo — the
     # structural link uses classname + name, not the bare name.
-    # The recorded runs print the class nodeid, so the red/green
-    # corroboration still holds for it.
+    # The recorded green run is a real pytest -v run, so its
+    # output contains the class nodeid, and the red run prints it —
+    # the red/green corroboration still holds for it.
     b = _good_bundle()
     nodeid = "tests/test_capture.py::TestCapture::test_capture_persian_only"
     b["fail_first"]["test"] = nodeid
@@ -2008,8 +2115,10 @@ def test_fail_first_class_nodeid_links_by_classname(tmp_path):
         commands={
             "test": [
                 sys.executable,
-                "-c",
-                f"print('{nodeid} passed; 45 passed in 0.42s')",
+                "-m",
+                "pytest",
+                "tests/test_capture.py",
+                "-v",
             ],
             "red_check": [
                 sys.executable,
@@ -3060,3 +3169,215 @@ def test_confirmed_finding_must_not_carry_unresolved_or_reason():
     ]
     problems = _problems(b)
     assert any("confirmed" in p and "unresolved" in p for p in problems)
+
+
+# --- Round-11 regression tests (FND-001).
+# A `test` gate whose recorded command never runs a test must not
+# validate as PASS. The first test was written red-first: it failed
+# on the unpatched validator (the lying bundle validated clean) and
+# passes with the runner rule. ---
+
+# The lying test runner: prints a pytest-shaped summary and writes a
+# fabricated JUnit report, but never runs a test.
+_LIAR_PYTEST = '''"""A lying test runner: prints a pytest-shaped summary and writes
+a fabricated JUnit report, but never runs a test."""
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text(
+    '<?xml version="1.0" encoding="utf-8"?>'
+    '<testsuites><testsuite name="pytest" tests="1">'
+    '<testcase classname="tests.test_capture" '
+    'name="test_capture_persian_only" time="0.01" />'
+    "</testsuite></testsuites>",
+    encoding="utf-8",
+)
+print("tests/test_capture.py::test_capture_persian_only passed; 45 passed in 0.42s")
+'''
+
+
+def test_lying_test_gate_is_rejected(tmp_path):
+    # FND-001 (round 11, High): a `test` gate recorded from a command
+    # that never runs a test must not validate as PASS, however clean
+    # its exit code and however well-formed its JUnit looks. The liar
+    # is recorded through the genuine record_check.py, exactly as the
+    # attack does it, and the fabricated JUnit it writes is the
+    # bundle's green_report and test_report — so the only thing
+    # standing between this bundle and PASS is the runner rule.
+    import hashlib
+
+    liar = tmp_path / "fake_pytest.py"
+    liar.write_text(_LIAR_PYTEST, encoding="utf-8")
+    b = _good_bundle()
+    _recorded_bundle(
+        b,
+        tmp_path,
+        commands={
+            "test": [sys.executable, str(liar), str(tmp_path / "green.xml")],
+        },
+    )
+    green_data = (tmp_path / "green.xml").read_bytes()
+    red_data = _junit_xml([(_CANONICAL_CLASSNAME, _CANONICAL_NAME, "failed")])
+    (tmp_path / "red.xml").write_bytes(red_data)
+    b["fail_first"]["red_report"] = {
+        "artifact": "red.xml",
+        "sha256": hashlib.sha256(red_data).hexdigest(),
+        "format": "junit-xml",
+    }
+    b["fail_first"]["green_report"] = {
+        "artifact": "green.xml",
+        "sha256": hashlib.sha256(green_data).hexdigest(),
+        "format": "junit-xml",
+    }
+    b["test_report"] = {
+        "artifact": "green.xml",
+        "sha256": hashlib.sha256(green_data).hexdigest(),
+        "format": "junit-xml",
+    }
+    problems = ve.validate_bundle(b, _SCHEMA, bundle_dir=tmp_path)
+    assert any("test runner" in p for p in problems), problems
+
+
+def test_tool_version_naming_another_runner_fails(tmp_path):
+    # FND-001, tool_version recommendation (round 11): a PASS whose
+    # test gate ran pytest but claims "jest 29.0.0" is a
+    # self-contradiction. The binding hash does not cover
+    # tool_version (ADR 0005), so no reforge is needed to edit it.
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    b["checks"][0]["tool_version"] = "jest 29.0.0"
+    problems = _problems(b, tmp_path)
+    assert any("tool_version" in p and "jest" in p for p in problems), problems
+
+
+def test_tool_version_naming_the_interpreter_passes(tmp_path):
+    # FND-001, tool_version narrowing: an agent may honestly record
+    # the interpreter version ("python 3.12.3") for a `python -m
+    # pytest` run — "python" names no runner, so the rule never
+    # fires on it. This pins the narrowing the repo's own
+    # test_record_check fixture relies on.
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    b["checks"][0]["tool_version"] = "python 3.12.3"
+    assert _problems(b, tmp_path) == []
+
+
+def test_tool_version_matching_the_runner_passes(tmp_path):
+    # FND-001, tool_version control: a tool_version naming the
+    # runner that ran the gate validates.
+    b = _good_bundle()
+    _recorded_bundle(b, tmp_path)
+    b["checks"][0]["tool_version"] = "pytest 9.0.3"
+    assert _problems(b, tmp_path) == []
+
+
+def test_invoked_runner_tool_name_mapping():
+    # FND-001, tool_version mapping: `python -m pytest` names
+    # pytest, not python; `./gradlew test` names gradle; `py.test`
+    # is pytest's old binary name; a fake script names nothing.
+    cases = [
+        (["python3", "-m", "pytest", "-q"], "pytest"),
+        (["python3", "-m", "unittest", "-v"], "unittest"),
+        (["pytest", "-q"], "pytest"),
+        (["py.test", "-q"], "pytest"),
+        (["./gradlew", "test"], "gradle"),
+        (["mvn", "test"], "mvn"),
+        (["go", "test", "./..."], "go"),
+        (["cargo", "nextest", "run"], "cargo"),
+        (["npx", "jest"], "jest"),
+        (["node", "--test"], "node"),
+        (["bash", "-c", "python3 -m pytest -q"], "pytest"),
+        (["bash", "-c", "echo pytest"], None),
+        (["python3", "tools/fake_pytest.py"], None),
+        ([], None),
+    ]
+    for argv, expected in cases:
+        assert ve._invoked_runner_tool_name(argv) == expected, argv
+
+
+def test_invokes_test_runner_shell_string_must_run_a_runner():
+    # FND-001 hardening (round 11): the auditor's patch accepted any
+    # `sh -c` / `bash -c` string merely mentioning a runner token
+    # (`bash -c "echo pytest"` passed). A shell string must be parsed
+    # and a segment must actually invoke a runner as a command.
+    cases = [
+        # (argv, expected)
+        (["bash", "-c", "echo pytest"], False),
+        (["bash", "-c", "python3 -m pytest -q"], True),
+        (["bash", "-c", "cd x && python3 -m pytest -q"], True),
+        (["bash", "-c", "echo pytest && true"], False),
+        (["bash", "-c", "pytest -q; echo done"], True),
+        (["bash", "-c", "pytest -q || ruff check"], True),
+        (["sh", "-c", "echo 'pytest'"], False),
+        (["bash", "-c", "echo 'unterminated"], False),
+        (["bash", "-c", ""], False),
+        (["bash", "-c"], False),
+        (["python3", "tools/fake_pytest.py"], False),
+        (["python3", "-m", "pytest", "-q"], True),
+        (["python3", "-m", "unittest", "-v"], True),
+        (["python3", "-m", "mypy", "."], False),
+        (["python3.11", "-m", "pytest", "-q"], True),
+        (["/usr/bin/python3", "-m", "pytest", "-q"], True),
+        (["/usr/local/bin/pytest", "-q"], True),
+        (["python3", "script.py", "-m", "pytest"], False),
+        (["pytest", "-q"], True),
+        (["go", "test", "./..."], True),
+        (["go", "build", "./..."], False),
+        (["cargo", "nextest", "run"], True),
+        (["npx", "vitest", "run"], True),
+        (["node", "--test"], True),
+        (["node", "server.js"], False),
+        ([], False),
+        (None, False),
+    ]
+    for argv, expected in cases:
+        assert ve._invokes_test_runner(argv) is expected, argv
+
+
+def test_shell_test_gate_running_a_runner_passes(tmp_path):
+    # FND-001 control: a `test` gate recorded as a shell string that
+    # really runs pytest still validates — the hardened shell rule
+    # must not reject genuine shell-wrapped runs.
+    import shutil
+
+    if shutil.which("sh") is None:
+        import pytest
+
+        pytest.skip("sh is not installed")
+    b = _good_bundle()
+    _recorded_bundle(
+        b,
+        tmp_path,
+        commands={
+            "test": (
+                f"{sys.executable} -m pytest tests/test_capture.py -v "
+                f"|| {sys.executable} -c \"print('fallback')\""
+            ),
+        },
+    )
+    assert _problems(b, tmp_path) == []
+
+
+def test_shell_test_gate_mentioning_a_runner_fails(tmp_path):
+    # FND-001 hardening, end to end: a `test` gate recorded as a
+    # shell string that only mentions pytest (`echo pytest`) is
+    # rejected, even though it exits 0 and prints a passing-looking
+    # line. The red run still records the canonical test failing.
+    import shutil
+
+    if shutil.which("sh") is None:
+        import pytest
+
+        pytest.skip("sh is not installed")
+    b = _good_bundle()
+    _recorded_bundle(
+        b,
+        tmp_path,
+        commands={
+            "test": (
+                "echo 'tests/test_capture.py::test_capture_persian_only passed; 45 passed in 0.42s'"
+            ),
+        },
+    )
+    problems = _problems(b, tmp_path)
+    assert any("test runner" in p for p in problems), problems
