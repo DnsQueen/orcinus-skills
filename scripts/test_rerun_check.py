@@ -106,13 +106,21 @@ def _run_cli(*args):
 
 
 def _worktrees(repo):
+    """Worktree paths, normalised to forward slashes. Git prints
+    `worktree list --porcelain` paths with forward slashes even on
+    Windows, while str(Path) uses backslashes there — comparing raw
+    strings fails on Windows only (CI run 42687658966)."""
     proc = subprocess.run(
         ["git", "-C", str(repo), "worktree", "list", "--porcelain"],
         check=True,
         capture_output=True,
         text=True,
     )
-    return [line for line in proc.stdout.splitlines() if line.startswith("worktree ")]
+    return [
+        Path(line[len("worktree ") :]).as_posix()
+        for line in proc.stdout.splitlines()
+        if line.startswith("worktree ")
+    ]
 
 
 def test_honest_rerun_writes_exact_proof_shape(tmp_path):
@@ -144,7 +152,8 @@ def test_honest_rerun_writes_exact_proof_shape(tmp_path):
     assert proof["junit"] == {"total": 2, "passed": 2}
     assert proof["exit_code"] == 0
     # The worktree is removed afterwards: no lingering checkout.
-    assert _worktrees(repo) == [f"worktree {repo}"]
+    # _worktrees() returns as_posix() paths; compare the same way.
+    assert _worktrees(repo) == [repo.as_posix()]
 
 
 def test_proof_printed_to_stdout_without_output(tmp_path):
