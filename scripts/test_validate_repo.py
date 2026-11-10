@@ -1325,6 +1325,35 @@ def test_router_note_recorded_in_attribution():
         )
 
 
+def test_attribution_office_skills_licence_is_current():
+    """0.12.3: the three ATTRIBUTION.md files copied from
+    anthropics/skills still said the document skills
+    (docx/pdf/pptx/xlsx) are proprietary — true at install time
+    (2026-11-04), false since upstream relicensed them to
+    Apache-2.0 on 2026-11-06 (commit 2c5958e, PR #2146, verified
+    live from each skill's LICENSE.txt). The note must state the
+    current licence and that the skills are still NOT copied
+    (parked: document generation is out of scope)."""
+    for name in ("mcp-builder", "skill-creator", "webapp-testing"):
+        attribution = (REPO_ROOT / "skills" / name / "ATTRIBUTION.md").read_text(encoding="utf-8")
+        # Present tense only: "were proprietary" is the true history
+        # (they were proprietary at install time, which is why they
+        # were not copied then); the false claim was that they
+        # still are.
+        assert "are proprietary" not in attribution, (
+            f"{name}/ATTRIBUTION.md still calls the Office skills proprietary"
+        )
+        assert "2c5958e" in attribution, (
+            f"{name}/ATTRIBUTION.md does not cite the relicensing commit"
+        )
+        assert "NOT copied" in attribution, (
+            f"{name}/ATTRIBUTION.md must say the Office skills are still not copied"
+        )
+        assert "parked" in attribution.lower(), (
+            f"{name}/ATTRIBUTION.md must record the parked decision"
+        )
+
+
 def test_orcinus_verify_uses_relative_validator_path():
     """The validator is invoked by a path relative to the skill
     folder, not ${CLAUDE_PLUGIN_ROOT} — the host may not substitute
