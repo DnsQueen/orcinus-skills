@@ -42,18 +42,26 @@ before publishing a change to them.
 Agent Skills (generic) — one unit, all 36 skills, no mid-work fetch:
 
 Requires Node.js 22.20 or later — the skills CLI declares
-`node >= 22.20.0` in its engines field. Run this from your project:
+`node >= 22.20.0` in its engines field. On Node below 22.20 the
+installer fails with `SyntaxError: The requested module
+'fs/promises' does not provide an export named 'glob'` — that
+means your Node is too old, not that the install is corrupt.
+Run this from your project:
 
 ```bash
 npx skills@1.7.6 add DnsQueen/orcinus-skills
 ```
 
-The CLI asks which agent to install into and which skills to install. Pick your agent, then the ORCINUS skills — all 36 is the one-install system, the router is the entry point and loads sub-skills on demand. The user never picks a sub-skill mid-work.
+The CLI asks which agent to install into and which skills to install. Pick your agent, then the ORCINUS skills — all 36 is the one-install system, the router is the entry point and loads sub-skills on demand. The user never picks a sub-skill mid-work. That command needs an interactive terminal: on a non-TTY runner (a script, or CI without a TTY) it exits 1 and installs nothing. For scripts, CI, and non-TTY runners, run it non-interactively instead:
+
+```bash
+npx skills@1.7.6 add DnsQueen/orcinus-skills --agent '*' -y
+```
 
 An invalid `--agent` name prints `Invalid agents: <name>`, installs
 nothing, and exits 1 (verified 2026-11-08 with `skills@1.7.6`).
 An exit code of 0 is still not proof the install worked: the real
-confirmation is the `✓ <skill> (copied)` line for each skill.
+confirmation is a `✓ ~/<path>/.agents/skills/<name>` line for each skill.
 
 To install every skill to every agent without prompting (for example in CI), add `--all` (`--skill '*' --agent '*' -y`).
 

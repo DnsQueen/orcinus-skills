@@ -152,6 +152,31 @@ def test_readme_install_has_no_all_default():
     assert "--all" in text  # still documented as the non-interactive option
 
 
+def test_readme_install_states_tty_and_real_confirmation():
+    """B1 + B3 (0.12.2, arena): the plain install command needs an
+    interactive terminal — on a non-TTY runner it exits 1 and
+    installs nothing — and the README never said so; and the
+    confirmation string `✓ <skill> (copied)` does not exist in
+    skills@1.7.6 output (0 matches; 36 `✓` lines shaped
+    `✓ ~/<path>/.agents/skills/<name>`)."""
+    install = "\n".join(_section(_readme(), "Install"))
+    assert "npx skills@1.7.6 add DnsQueen/orcinus-skills" in install
+    assert "interactive" in install
+    assert "--agent '*' -y" in install
+    assert "(copied)" not in install
+    assert ".agents/skills/<name>" in install
+
+
+def test_readme_install_names_old_node_syntax_error():
+    """B2 (0.12.2, arena): on Node < 22.20 the installer fails with
+    a SyntaxError about fs/promises — the README must name the
+    symptom so a user on old Node reads it as 'your Node is too
+    old', not a corrupt install."""
+    install = "\n".join(_section(_readme(), "Install"))
+    assert "SyntaxError" in install
+    assert "fs/promises" in install
+
+
 def test_readme_quick_start_is_short():
     """A quick start the reader can scan in seconds (R3 #20)."""
     lines = [line for line in _section(_readme(), "Quick start") if line.strip()]
