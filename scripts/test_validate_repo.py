@@ -1521,6 +1521,24 @@ def test_orcinus_verify_mutation_gate_names_formula():
     assert "formula" in gate
 
 
+def test_router_ambiguous_skill_name_guidance():
+    """Collisions (0.12.2, Hermes): api-and-interface-design and
+    performance-optimization exist in both external_dirs with
+    different content, and skill_view refuses the bare name. The
+    router must not guess and must not rename — it names both
+    directories, asks the user, and files INCOMPLETE until the
+    user decides. Renaming is not the fix: both are verbatim
+    upstream copies, and the class of problem stays."""
+    text = _router_text()
+    section = text[text.index("## When a sub-skill is missing") :]
+    section = section[: section.index("\n## ", 1)]
+    assert "ambiguous" in section
+    assert "api-and-interface-design" in section
+    assert "performance-optimization" in section
+    assert "do not rename" in section
+    assert "INCOMPLETE" in section
+
+
 def test_router_gates_branch_on_state_script_presence():
     """L1 (0.12.2, arena): the Gates section ordered
     `python3 scripts/state.py transition ...` unconditionally, but

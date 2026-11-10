@@ -95,6 +95,8 @@ Check the skill's status in `references/skill-status.md` first — the table is 
 
 Before routing, confirm the sub-skill is installed: a host may silently skip a skill that is not present (a Hermes bundle skips missing skills instead of failing), so an absent sub-skill is an absence you must check for, not an error you will see.
 
+If `skill_view(<name>)` refuses a bare name as ambiguous, two installed skill directories carry the same name with different content — on Hermes, two `external_dirs` entries. Do not guess which copy to use and do not rename either copy. Name both directories and the differing files, stop, and ask the user which copy is the ORCINUS one: the ORCINUS copy is the one byte-identical to `<release checkout>/skills/<name>` (check with `diff -r`). Until the user decides, file INCOMPLETE for that step and do the closest covered step the host allows. Known case: `api-and-interface-design` and `performance-optimization` are verbatim copies of the upstream `addyosmani/agent-skills` skills of the same names (see `skills/manifest.json`), so a host that also loads that collection sees both names twice.
+
 ## Gates
 
 Major gates need explicit human confirmation:
@@ -104,15 +106,15 @@ Major gates need explicit human confirmation:
 
 Minor gates are checked by running the commands and reading their real output.
 
-Record the lifecycle stage in `.orcinus/state.json` with the state machine — no other step invokes it (see `references/project-state.md`). `<sha>` is the commit under verification; `<bundle>` is the evidence bundle path. The state machine lives in repo-root `scripts/state.py`, which only the Claude Code plugin install carries — check whether that file exists before running a transition:
+Record the lifecycle stage in `.orcinus/state.json` with the state machine — no other step invokes it (see `references/project-state.md`). `<sha>` is the commit under verification; `<bundle>` is the evidence bundle path. The state machine is the repo-root `state.py` (in `scripts/`), which only the Claude Code plugin install carries — check whether that file exists before running a transition:
 
-- If `scripts/state.py` exists, run each transition at its gate:
+- If `state.py` exists, run each transition at its gate:
 
   - After `orcinus-verify` passes: `python3 scripts/state.py transition .orcinus/state.json --to VERIFIED --revision <sha> --evidence <bundle>` — a local PASS is provisional; the transition additionally requires a CI attestation for `<sha>`, checked live. Without one, VERIFIED is refused. A local targeted rerun mints only RERUN_CONFIRMED (the gate runs the rerun itself — there is no proof file to hand in).
   - When the verified work is ready for the human to approve the next step: `python3 scripts/state.py transition .orcinus/state.json --to AWAITING_APPROVAL --revision <sha>`
   - After the human approves the verified digest for release: `python3 scripts/state.py transition .orcinus/state.json --to RELEASE_READY --revision <sha>`
 
-- If `scripts/state.py` does not exist, file INCOMPLETE for the state-recording step, per the Host-incompatible rule above, and record the stage and the evidence bundle path in the handoff/session record instead — the stage is still recorded, just not in `.orcinus/state.json`. Do not copy `state.py` alone to work around it: it imports its `content_digest` sibling, so a lone copy fails with `ModuleNotFoundError`.
+- If `state.py` does not exist, file INCOMPLETE for the state-recording step, per the Host-incompatible rule above, and record the stage and the evidence bundle path in the handoff/session record instead — the stage is still recorded, just not in `.orcinus/state.json`. Do not copy `state.py` alone to work around it: it imports its `content_digest` sibling, so a lone copy fails with `ModuleNotFoundError`.
 
 ## One session, one slice
 
