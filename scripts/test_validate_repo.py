@@ -1487,6 +1487,27 @@ def test_router_host_incompatibility_is_general():
     assert "any install other than the Claude Code plugin" in readme
 
 
+def test_router_gates_branch_on_state_script_presence():
+    """L1 (0.12.2, arena): the Gates section ordered
+    `python3 scripts/state.py transition ...` unconditionally, but
+    repo-root scripts/ do not travel to non-plugin installs — on a
+    skills-CLI install the command cannot run (exit 2). The Gates
+    section must branch: run the transitions only when
+    scripts/state.py exists, and file INCOMPLETE for the
+    state-recording step per the Host-incompatible rule when it
+    does not, recording the stage and evidence in the
+    handoff/session record instead."""
+    text = _router_text()
+    gates = text[text.index("## Gates") :]
+    gates = gates[: gates.index("\n## ", 1)]
+    assert "does not exist" in gates
+    assert "INCOMPLETE" in gates
+    assert "Host-incompatible" in gates
+    assert "handoff/session record" in gates
+    for command in vr.ROUTER_STATE_COMMANDS:
+        assert command in gates
+
+
 def test_waza_i18n_descriptions_short_and_router_only_is_honest():
     """R8: the two longest descriptions (waza, i18n) must come down
     toward the ~287-char median, waza must not contradict the

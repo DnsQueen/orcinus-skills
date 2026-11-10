@@ -38,7 +38,14 @@ and an evidence bundle.
 project (it is the project's own record, not the agent's). It is
 updated through scripts/state.py (run by the agent or the human),
 which enforces the transition rules and recomputes the content
-digest; the human approves transitions that need approval. It is
+digest; the human approves transitions that need approval. On an
+install without repo-root `scripts/` (any install other than the
+Claude Code plugin), `scripts/state.py` is not present and the
+transitions cannot run — file INCOMPLETE for the state-recording
+step per the router's Host-incompatible rule and record the stage
+and the evidence bundle path in the handoff/session record
+instead. The file format in this spec is unchanged: it still
+defines what a recorded stage means, wherever it is recorded. It is
 never written by hand in the normal flow — but anyone with write
 access still can (Rule 4), and the next `validate` detects a
 hand-edited digest by recomputation.

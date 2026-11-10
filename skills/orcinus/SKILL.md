@@ -104,11 +104,15 @@ Major gates need explicit human confirmation:
 
 Minor gates are checked by running the commands and reading their real output.
 
-Record the lifecycle stage in `.orcinus/state.json` with the state machine — no other step invokes it (see `references/project-state.md`). `<sha>` is the commit under verification; `<bundle>` is the evidence bundle path. Run each transition at its gate:
+Record the lifecycle stage in `.orcinus/state.json` with the state machine — no other step invokes it (see `references/project-state.md`). `<sha>` is the commit under verification; `<bundle>` is the evidence bundle path. The state machine lives in repo-root `scripts/state.py`, which only the Claude Code plugin install carries — check whether that file exists before running a transition:
 
-- After `orcinus-verify` passes: `python3 scripts/state.py transition .orcinus/state.json --to VERIFIED --revision <sha> --evidence <bundle>` — a local PASS is provisional; the transition additionally requires a CI attestation for `<sha>`, checked live. Without one, VERIFIED is refused. A local targeted rerun mints only RERUN_CONFIRMED (the gate runs the rerun itself — there is no proof file to hand in).
-- When the verified work is ready for the human to approve the next step: `python3 scripts/state.py transition .orcinus/state.json --to AWAITING_APPROVAL --revision <sha>`
-- After the human approves the verified digest for release: `python3 scripts/state.py transition .orcinus/state.json --to RELEASE_READY --revision <sha>`
+- If `scripts/state.py` exists, run each transition at its gate:
+
+  - After `orcinus-verify` passes: `python3 scripts/state.py transition .orcinus/state.json --to VERIFIED --revision <sha> --evidence <bundle>` — a local PASS is provisional; the transition additionally requires a CI attestation for `<sha>`, checked live. Without one, VERIFIED is refused. A local targeted rerun mints only RERUN_CONFIRMED (the gate runs the rerun itself — there is no proof file to hand in).
+  - When the verified work is ready for the human to approve the next step: `python3 scripts/state.py transition .orcinus/state.json --to AWAITING_APPROVAL --revision <sha>`
+  - After the human approves the verified digest for release: `python3 scripts/state.py transition .orcinus/state.json --to RELEASE_READY --revision <sha>`
+
+- If `scripts/state.py` does not exist, file INCOMPLETE for the state-recording step, per the Host-incompatible rule above, and record the stage and the evidence bundle path in the handoff/session record instead — the stage is still recorded, just not in `.orcinus/state.json`. Do not copy `state.py` alone to work around it: it imports its `content_digest` sibling, so a lone copy fails with `ModuleNotFoundError`.
 
 ## One session, one slice
 
