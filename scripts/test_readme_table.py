@@ -177,6 +177,17 @@ def test_readme_install_names_old_node_syntax_error():
     assert "fs/promises" in install
 
 
+def test_readme_quick_start_points_non_tty_to_install():
+    """0.12.3: Quick start listed the plain npx install with no TTY
+    pointer, so a reader copying from Quick start hit the same
+    non-TTY failure the Install section documents. It must point
+    to the Install section's non-interactive form."""
+    quick = " ".join(_section(_readme(), "Quick start"))
+    assert "npx skills@1.7.6 add DnsQueen/orcinus-skills" in quick
+    assert "non-interactive" in quick
+    assert "Install below" in quick
+
+
 def test_readme_hermes_has_pre_test_verify_step():
     """H-A1 (0.12.2, Hermes): the installed mutation-testing skill
     was silently rewritten mid-test (67 -> 37 lines) and nothing in

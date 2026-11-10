@@ -10,7 +10,7 @@ ORCINUS is a guided workflow, not an enforcement layer: it tells the agent what 
 
 ## Quick start
 
-1. Install: `/plugin marketplace add DnsQueen/orcinus-skills`, then `/plugin install orcinus-skills@orcinus` (Claude Code), or `npx skills@1.7.6 add DnsQueen/orcinus-skills` (any agent).
+1. Install: `/plugin marketplace add DnsQueen/orcinus-skills`, then `/plugin install orcinus-skills@orcinus` (Claude Code), or `npx skills@1.7.6 add DnsQueen/orcinus-skills` (any agent — non-TTY? use the non-interactive form in Install below).
 2. Invoke the router: `/orcinus` (or `/orcinus-skills:orcinus` for the plugin install).
 3. Say what you want to build; ORCINUS names the stage and routes to the skill for it.
 4. Confirm the two major gates: idea → code, code → done.
