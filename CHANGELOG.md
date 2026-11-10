@@ -3,6 +3,21 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.2] — 2026-11-10
+
+**Fixed:** the arena setup report (12 confirmed, 1 partial) and the Hermes live-test findings, verified against 0.12.1.
+
+### Fixed
+
+- **L1 (router Gates):** the Gates section ordered the three `state.py` transitions unconditionally, but repo-root `scripts/` do not travel to non-plugin installs. The Gates section now branches: run the transitions only when `state.py` exists; when it does not, file INCOMPLETE for the state-recording step per the Host-incompatible rule and record the stage and evidence in the handoff/session record. `references/project-state.md` (and its `docs/` canonical copy) carry the same branch.
+- **L2 (doctor):** `check_node()` now enforces the documented Node >= 22.20 floor (below the floor is `incompatible`); the stale "no minimum node version is documented" comment is corrected and the hint now says "Install Node 22.20 or later".
+- **B1 (README Install):** the plain `npx` command needs an interactive terminal (exits 1 on non-TTY); the non-interactive form (`--agent '*' -y`) is given, and the `--all` form stays documented.
+- **B3 (README Install):** the confirmation string was `✓ <skill> (copied)`, which does not exist in `skills@1.7.6` output; the README now gives the real shape `✓ ~/<path>/.agents/skills/<name>`.
+- **B2 (README Install):** on Node below 22.20 the installer fails with a `SyntaxError` about `fs/promises` — named as the too-old-Node symptom.
+- **H-B1 (mutation scores):** the mutation-testing skill's Step 3 defined the score as killed-only AND told the agent to record Stryker's own (detected) score. Step 3 now names both formulas, requires every printed score to carry its formula, and requires same-formula comparisons; the Report demands both labelled scores and the Verdict pins the break threshold to the Stryker-printed score. The orcinus-verify `mutation_gate` sentence requires the formula to be named when the gate is declared.
+- **H-A1 (installed-skill integrity):** the README Hermes section now documents the pre-test check: `diff -r` the installed skills against the release checkout before a live test, stop on any difference. No doctor probe was added — a probe could only compare against the same checkout it runs from, and the drift manifest does not cover from-scratch skills.
+- **Skill-name collisions:** the router now guides an ambiguous `skill_view` name — do not guess, do not rename; name both directories, ask the user, file INCOMPLETE until decided. Known case: `api-and-interface-design` and `performance-optimization` also exist in the upstream `addyosmani/agent-skills` collection.
+
 ## [0.12.1] — 2026-11-09
 
 **Changed:** the README no longer lists where each skill came from.
