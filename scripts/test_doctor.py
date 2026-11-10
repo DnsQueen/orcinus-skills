@@ -728,6 +728,27 @@ def test_node_real_version_is_ready(monkeypatch):
     assert "24.22.1" in result["detail"]
 
 
+def test_node_below_floor_is_incompatible(monkeypatch):
+    """L2 (0.12.2): the README documents Node >= 22.20, but
+    check_node enforced no minimum — node v20.20.2 (which cannot
+    run the installer at all: fs.glob needs Node 22) reported
+    ready. Below the documented floor is incompatible, like the
+    other MIN_* checks, with the floor in the fix hint."""
+    assert doctor.MIN_NODE == (22, 20)
+    _patched_run(monkeypatch, {("node", "--version"): (0, "v20.20.2")})
+    result = doctor.check_node()
+    assert result["status"] == "incompatible"
+    assert "22.20" in result["detail"]
+    assert result["fix"] == "Install Node 22.20 or later (see docs or nodejs.org)."
+
+
+def test_node_at_floor_is_ready(monkeypatch):
+    """Control: exactly the documented floor (v22.20.0) is ready."""
+    _patched_run(monkeypatch, {("node", "--version"): (0, "v22.20.0")})
+    result = doctor.check_node()
+    assert result["status"] == "ready"
+
+
 # --- Round 11 (2026-11-09): FND-013 — oasdiff/stryker/mutmut probes ---
 
 

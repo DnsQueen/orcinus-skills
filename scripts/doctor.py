@@ -48,6 +48,12 @@ ROOT = Path(__file__).resolve().parent.parent
 MIN_PYTHON = (3, 11)
 MIN_PYTEST = (8, 4)
 MIN_RUFF = (0, 17)
+# Round 11 (arena L2, 0.12.2): the README documents "Requires
+# Node.js 22.20 or later" (README:44), and the skills CLI declares
+# node >= 22.20.0 in its engines field — below that the installer
+# fails with a SyntaxError about fs/promises (fs.glob needs Node
+# 22). The floor is enforced like the other MIN_* floors.
+MIN_NODE = (22, 20)
 MIN_WAZA = (0, 40, 0)
 WAZA_VERSION = "0.40.0"
 # The Linux fallback binary lives in world-writable /tmp, so it is
@@ -213,17 +219,26 @@ def check_node():
             "node is not installed or does not run (needed for "
             "the demo and the JS/TS skills, not for the Python "
             "gates)",
-            fix="Install Node 24 (see docs or nodejs.org).",
+            fix="Install Node 22.20 or later (see docs or nodejs.org).",
         )
     # Round 8, N-B1: same class as FND-025 — the version is
     # parsed, so a node printing garbage is incompatible, not
     # ready. Node is optional when missing (incomplete), but
-    # present-but-unreadable is wrong, not ready. No minimum is
-    # enforced: no minimum node version is documented here.
+    # present-but-unreadable is wrong, not ready. Below the
+    # documented floor (README:44, Node >= 22.20) is incompatible
+    # too, like the other MIN_* floors: a node that old cannot run
+    # the installer at all.
     version = _version_tuple(out)
     if version is None:
         return _check(
             "node", "incompatible", f"node is installed but its version is unreadable: {out!r}"
+        )
+    if version < MIN_NODE:
+        return _check(
+            "node",
+            "incompatible",
+            f"node {out.strip()} is below {'.'.join(map(str, MIN_NODE))}",
+            fix="Install Node 22.20 or later (see docs or nodejs.org).",
         )
     return _check("node", "ready", f"node {out.strip()}")
 
