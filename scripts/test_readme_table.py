@@ -177,6 +177,19 @@ def test_readme_install_names_old_node_syntax_error():
     assert "fs/promises" in install
 
 
+def test_readme_hermes_has_pre_test_verify_step():
+    """H-A1 (0.12.2, Hermes): the installed mutation-testing skill
+    was silently rewritten mid-test (67 -> 37 lines) and nothing in
+    the repo told the operator to check the installed skills match
+    the release copy before a live test. The Hermes section must
+    carry that step: diff the installed dir against the release
+    checkout and stop on any difference."""
+    install = " ".join(_section(_readme(), "Install"))
+    assert "diff -r" in install
+    assert "live test" in install
+    assert "Any difference is a stop" in install
+
+
 def test_readme_quick_start_is_short():
     """A quick start the reader can scan in seconds (R3 #20)."""
     lines = [line for line in _section(_readme(), "Quick start") if line.strip()]

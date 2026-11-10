@@ -101,6 +101,20 @@ a write-protection boundary: if the directory is writable, the
 agent's skill writes can change files there. Keep the checkout
 read-only, or use a separate copy, if the skills must stay pristine.
 
+Before a live test — or any run whose result must be comparable
+across arms — verify the installed skills still match the release
+copy: `diff -r <installed skills dir> <release checkout>/skills`.
+On Hermes, the installed dir is the one Hermes loads and the
+release copy is the checkout named in `external_dirs`. Any
+difference is a stop: restore the file from the release copy,
+re-run the diff until it is empty, and record the check before
+the test starts. In the 2026-11-10 live test the installed
+`mutation-testing` skill had been silently rewritten (67 → 37
+lines, Rules block removed); the check above is what catches
+that. It only proves the installed copy matches this checkout,
+not that the checkout itself is the genuine release — so keep
+the checkout read-only (above) and lock the install (below).
+
 Then install the bundle — it is the `/orcinus` entry point:
 
 ```bash
