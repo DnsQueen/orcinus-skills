@@ -1352,6 +1352,21 @@ def test_attribution_office_skills_licence_is_current():
         assert "parked" in attribution.lower(), (
             f"{name}/ATTRIBUTION.md must record the parked decision"
         )
+    # Same stale claim survived in two more files (found by the
+    # 0.12.3 independent verifier): docs/MAP.md listed the Office
+    # skills as "proprietary / source-available, not open source"
+    # under "Do not use", and THIRD_PARTY_NOTICES.md said the
+    # document skills "are proprietary" in present tense. Both
+    # must state the current licence (citing 2c5958e) and the
+    # parked scope reason instead of the licence as the reason.
+    for rel in ("docs/MAP.md", "THIRD_PARTY_NOTICES.md"):
+        text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        assert "are proprietary" not in text, f"{rel} still calls the Office skills proprietary"
+        assert "proprietary / source-available, not open source" not in text, (
+            f"{rel} still lists the Office skills as not open source"
+        )
+        assert "2c5958e" in text, f"{rel} does not cite the relicensing commit"
+        assert "parked" in text.lower(), f"{rel} must record the parked decision"
 
 
 def test_orcinus_verify_uses_relative_validator_path():

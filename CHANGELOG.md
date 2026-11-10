@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **README Quick start:** the plain `npx skills@1.7.6 add DnsQueen/orcinus-skills` command was listed with no TTY pointer, so a reader copying from Quick start hit the same non-TTY failure the Install section documents. Quick start now points to the Install section's non-interactive form (`--agent '*' -y`).
-- **ATTRIBUTION licence notes:** the ATTRIBUTION.md files for `mcp-builder`, `skill-creator`, and `webapp-testing` still said the Anthropic Office skills (docx/pdf/pptx/xlsx) are proprietary — true at install time (2026-11-04), false since upstream relicensed them to Apache 2.0 on 2026-11-06 (commit `2c5958e`, PR #2146, verified live from each skill's `LICENSE.txt`). The notes now state the current licence and that the Office skills are still NOT copied — document generation is out of scope (parked).
+- **ATTRIBUTION licence notes:** the ATTRIBUTION.md files for `mcp-builder`, `skill-creator`, and `webapp-testing` still said the Anthropic Office skills (docx/pdf/pptx/xlsx) are proprietary — true at install time (2026-11-04), false since upstream relicensed them to Apache 2.0 on 2026-11-06 (commit `2c5958e`, PR #2146, verified live from each skill's `LICENSE.txt`). The notes now state the current licence and that the Office skills are still NOT copied — document generation is out of scope (parked). The same stale claim in `docs/MAP.md` ("Do not use") and `THIRD_PARTY_NOTICES.md` is corrected the same way (found by the independent verifier).
 
 ## [0.12.2] — 2026-11-10
 

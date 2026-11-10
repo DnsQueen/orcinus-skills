@@ -103,7 +103,7 @@ Built already (kept here for the record, not as remaining work): dedicated incom
 ## Do not use
 
 - `openai/skills` — deprecated, points to `openai/plugins`.
-- Anthropic document skills (`docx`/`pdf`/`pptx`/`xlsx`) — proprietary / source-available, not open source.
+- Anthropic document skills (`docx`/`pdf`/`pptx`/`xlsx`) — Apache-2.0 since 2026-11-06 (upstream `2c5958e`); not used: document generation is out of scope (parked).
 - `anthropics/claude-plugins-official` code-review plugin — Apache-2.0 (its own LICENSE file, verified 2026-11-06; the old note calling it proprietary was wrong — that claim was about a different repo, `anthropics/claude-code`, not this plugin). Not bundled: pr-review-toolkit already provides the independent-review capability, and bundling both would duplicate it. Its parallel-review + confidence-filter pattern is a future alternative, not a current gap.
 - Any candidate whose LICENSE was not read directly — rewrite until verified.
 

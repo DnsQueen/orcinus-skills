@@ -40,12 +40,15 @@ licence in the table is the upstream content's licence.
   third-party content carry their own `LICENSE.txt`; see the table
   above and each skill's `ATTRIBUTION.md`.
 - **mcp-builder, skill-creator, webapp-testing:** the upstream repo
-  (anthropics/skills) has a split licence — the example skills are
-  Apache-2.0, the document skills are proprietary. Each of these three
+  (anthropics/skills) had a split licence at install time — the example skills are
+  Apache-2.0, the document skills were proprietary. Since 2026-11-06
+  the document skills are Apache-2.0 too (upstream `2c5958e`, PR #2146,
+  verified live from each skill's `LICENSE.txt`); they are still NOT
+  copied — document generation is out of scope (parked). Each of these three
   is one of the Apache-2.0 example skills, verified from its own
   `LICENSE.txt`. The table above records the licence of the content
   actually taken (Apache-2.0); the per-skill `ATTRIBUTION.md` records
-  the split.
+  the licence history.
 - **independent-review:** the bundled agents and command are
   Apache-2.0, while the method text is ORCINUS's own words (MIT).
   The skill's frontmatter licence is `MIT AND Apache-2.0`; the
