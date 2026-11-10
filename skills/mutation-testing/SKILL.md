@@ -35,7 +35,12 @@ Use Stryker (stryker-mutator/stryker-js, Apache-2.0) as-is. Do not rewrite it, a
 
 ### 3. Read the score
 
-Record the exact numbers: total mutants, killed, survived, timed out, no coverage, compile errors, and the mutation score. The score is killed divided by (total minus no coverage minus compile errors) — record Stryker's own score, do not recompute it by hand.
+Record the exact numbers: total mutants, killed, survived, timed out, no coverage, compile errors, and the mutation score. There are two scores for the same run, and they are different numbers — never print a bare percentage. Label every score with its formula:
+
+- killed-only: killed divided by (total minus no coverage minus compile errors).
+- Stryker-printed: (killed plus timed out) divided by (killed plus timed out plus survived plus no coverage) — this is the score Stryker itself prints, and the score its break threshold gates on. Record it as printed, do not recompute it by hand.
+
+A comparison across arms or runs is only valid when both sides use the same formula — comparing one side's killed-only against the other side's Stryker-printed score is a false comparison, not a result.
 
 Rounding is outside the mutator set: Stryker generates no mutant for Math.round at all — in the demo, the line-16 mutants are only ArithmeticOperator swaps — so even a break threshold of 80 would not have caught a Math.round → Math.floor swap, and a 100.00 score does not cover that class. The boundary test (a non-divisible case) is the only closure for it; record it alongside the score.
 
@@ -53,10 +58,10 @@ Return the report in this form:
 
 - Baseline (four commands, with outputs).
 - Stryker version and config (mutate pattern, test runner, checker).
-- Mutation score with the exact numbers.
+- Mutation score with the exact numbers: both formulas, each labelled (killed-only and Stryker-printed).
 - Killed mutants (at least one, with file and line).
 - Surviving mutants (every one, with file, line, and the missing test).
-- Verdict: PASS (score recorded and at or above the configured break threshold, at least one mutant killed, all survivors listed; a passing score does not cover rounding — see Step 3) or FAIL (Stryker did not run, no mutant killed, survivors hidden, or score below the break threshold).
+- Verdict: PASS (both scores recorded and labelled, Stryker-printed score at or above the configured break threshold — the threshold gates on Stryker's printed score, not on killed-only — at least one mutant killed, all survivors listed; a passing score does not cover rounding — see Step 3) or FAIL (Stryker did not run, no mutant killed, survivors hidden, or Stryker-printed score below the break threshold).
 
 ## Scope
 

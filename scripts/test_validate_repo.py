@@ -1487,6 +1487,40 @@ def test_router_host_incompatibility_is_general():
     assert "any install other than the Claude Code plugin" in readme
 
 
+def test_mutation_testing_names_both_score_formulas():
+    """H-B1 (0.12.2, Hermes): the mutation-testing skill's Step 3
+    was self-contradictory — it defined the score as killed-only
+    AND told the agent to record Stryker's own score, which is the
+    detected (killed + timeout) formula. Arm A followed killed-only
+    (72.44), Arm B reported Stryker's printed score (68.91), and
+    the two were compared as if one number. Step 3 must name both
+    formulas, require every printed score to carry its formula,
+    and require same-formula comparisons; the Report must demand
+    both labelled scores."""
+    text = (REPO_ROOT / "skills" / "mutation-testing" / "SKILL.md").read_text(encoding="utf-8")
+    step3 = text[text.index("### 3. Read the score") :]
+    step3 = step3[: step3.index("\n### ", 1)]
+    assert "killed-only" in step3
+    assert "Stryker" in step3 and "printed" in step3
+    assert "same formula" in step3
+    report = text[text.index("## Report") :]
+    report = report[: report.index("\n## ", 1)]
+    assert "killed-only" in report and "Stryker-printed" in report
+
+
+def test_orcinus_verify_mutation_gate_names_formula():
+    """H-B1 (0.12.2, Hermes): a declared mutation_gate's min_score
+    without its formula is not comparable across runs — the
+    orcinus-verify skill must require the formula to be named when
+    the gate is declared. (Prose only: check_mutation_gate does not
+    parse scores, it only requires the named check to pass.)"""
+    text = (REPO_ROOT / "skills" / "orcinus-verify" / "SKILL.md").read_text(encoding="utf-8")
+    assert "mutation_gate" in text
+    gate = text[text.index("mutation_gate") :]
+    gate = gate[: gate.index("nothing changes.") + len("nothing changes.")]
+    assert "formula" in gate
+
+
 def test_router_gates_branch_on_state_script_presence():
     """L1 (0.12.2, arena): the Gates section ordered
     `python3 scripts/state.py transition ...` unconditionally, but
