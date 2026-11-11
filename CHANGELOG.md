@@ -3,6 +3,20 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.5] — 2026-11-11
+
+**Added:** an animated README banner and journey GIF (light/dark), and the ORCINUS orca visual theme across the README diagrams.
+
+### Added
+
+- **README banner (animated SVG):** `docs/images/orcinus-banner.svg` — a failing test (`208 != 209`), then 7 passed, then the evidence bundle validates. Every line is verbatim real output. Light and dark variants, wired with `#gh-light-mode-only` / `#gh-dark-mode-only`.
+- **Journey GIF (loop):** `docs/images/orcinus-journey-loop.gif` — an idea (the orca: ink on light, white on dark) travels the lifecycle, fails verification once, returns to Build, then passes and ships VERIFIED. Code-drawn frames, light and dark variants.
+- **ORCINUS orca theme:** the lifecycle and verification diagrams re-themed to cool slate-ocean tones with teal as the verification accent, plus dark variants (`lifecycle-dark.svg`, `verification-dark.svg`).
+
+### Fixed
+
+- **README Hermes section:** the "never loaded by a real Hermes CLI" line was stale — the November 2026 live tests loaded the bundle via `external_dirs` (34 of 36 skills in the first test, 2 name collisions; all 36 verified byte-identical to the release in a later run).
+
 ## [0.12.4] — 2026-11-11
 
 **Added:** authoring guidance that matches the guidance form to the failure, a line-ceiling ratchet for skill growth, and guards that fail loudly on empty scans.
