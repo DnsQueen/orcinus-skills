@@ -3,6 +3,18 @@
 All notable changes to ORCINUS are recorded here. Dates are UTC.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.12.4] — 2026-11-11
+
+**Added:** authoring guidance that matches the guidance form to the failure, a line-ceiling ratchet for skill growth, and guards that fail loudly on empty scans.
+
+### Added
+
+- **Form-to-failure guidance (orcinus router):** new `skills/orcinus/references/authoring-guidance.md` — four forms (rule-violations under pressure → prohibition + rationalisation table + red flags; wrong-shaped output → positive recipe/contract, never a prohibition list; omitted elements → REQUIRED template slot; conditional behaviour → conditional keyed to an observable predicate), plus a micro-test protocol (no-guidance control, 5+ reps per variant, manual reading of every flagged match, variance across reps = wording isn't binding). Adapted in our own words from obra/superpowers `writing-skills` (MIT); `skill-creator` stays verbatim Anthropic.
+- **Second-violation policy:** a rule that fails twice must be fixed with a hook, lint rule, or default — never a clearer sentence. Same guidance file; adapted from rebelytics `one-skill-to-rule-them-all` (CC-BY-4.0).
+- **Line-ceiling ratchet:** `scripts/ceilings.txt` + enforcement in `validate_repo.py` — a SKILL.md over its ceiling fails, and a ceiling more than 3 lines above its file fails ("ceiling only ever goes down"). Initial ceilings set at current counts; all 36 skills covered.
+- **Empty-scan guards:** the validator, drift check, and clean-copy gate now fail loudly (`SCAN BROKEN`) when a scan finds nothing over content known to exist — an empty result over known content is a broken instrument, not a pass. Adapted from rebelytics (CC-BY-4.0).
+- **Observed-vs-inferred discipline (`codebase-knowledge-builder`):** every observation grounded in code evidence actually read; observed facts kept separate from inferences; uncertainties recorded with the evidence that would resolve them; code location cited for each observation. Adapted in our own words from Jeffallan `spec-miner` (MIT). The skill is vendored verbatim from OthmanAdi/codebase-knowledge-builder, so its ATTRIBUTION.md records the addition and the drift manifest was regenerated.
+
 ## [0.12.3] — 2026-11-10
 
 **Fixed:** two documentation follow-ups from the 0.12.2 verification (README Quick start, ATTRIBUTION licence notes).
