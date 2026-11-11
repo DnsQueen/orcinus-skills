@@ -72,3 +72,13 @@ def test_micro_test_protocol():
     assert "read every flagged match" in text
     assert "variance" in text
     assert "wording isn't binding" in text
+
+
+def test_second_violation_structural_barrier():
+    text = _lower()
+    assert "second violation" in text
+    assert "structural barrier" in text
+    assert "hook" in text
+    assert "lint" in text
+    assert "default" in text
+    assert "never a clearer sentence" in text

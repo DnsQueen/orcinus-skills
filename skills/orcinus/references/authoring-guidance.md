@@ -4,7 +4,9 @@ Guidance for writing or revising a skill so that it actually changes
 what an agent does. The patterns here are adapted in ORCINUS's own
 words from obra/superpowers (`skills/writing-skills/SKILL.md`,
 "Match the Form to the Failure" and "Micro-Test Wording Before Full
-Scenarios", MIT) — pattern-only; no upstream text is copied.
+Scenarios", MIT) and from rebelytics/one-skill-to-rule-them-all
+(`references/signals.md`, "Second violation — why a barrier, not a
+rewording", CC-BY-4.0) — pattern-only; no upstream text is copied.
 
 ## Match the form to the failure
 
@@ -61,3 +63,28 @@ expensive per iteration. Test the wording itself first, cheaply:
 
 Micro-tests check wording only. They do not replace full pressure
 scenarios for discipline skills.
+
+## Second violation — build a barrier, not a better sentence
+
+When a rule fails for the second time, stop rewriting it. A rule that
+has failed twice must be fixed with a structural barrier — a hook, a
+lint rule, or a default — never a clearer sentence.
+
+Why text loses: a rule sitting in context is re-read and
+re-interpreted on every run, and it competes with everything else
+pulling at the agent in that moment. A barrier at the tool boundary
+does not compete — it refuses the call, fails the artefact, or makes
+the wrong action unavailable. Emphasis does not change that
+asymmetry: a bolder rule is still a rule, and the next rewrite reads
+as diligence while changing nothing measurable.
+
+What counts as a barrier: a hook or permission rule that refuses the
+call; a lint or gate check that fails the artefact; a default or path
+layout that makes the wrong action unavailable; a script that performs
+the step so it cannot be performed differently. What does not count:
+a bolder warning, the same rule moved somewhere more prominent, a
+checklist item, or a promise to be careful.
+
+A barrier counts once it is armed, not once it is written: prove it
+against the real command it must refuse and a legitimate command from
+the real tool record, both run through it.
