@@ -33,6 +33,8 @@ Proceed when the current architecture can be summarized with its evidence, confi
 
 Investigate each requested topic as a separate evidence trail.
 
+Ground every observation in code evidence actually read. State as observed only what the inspected code shows; a comment, a document, or a suggestive name is not code evidence on its own. Keep observed facts separate from inferences. Record what is uncertain, with the evidence that would resolve it. Cite the code location of each observation as `relative/path:line`.
+
 1. Read [references/deep-dive-methodology.md](references/deep-dive-methodology.md) before tracing a topic.
 2. Start from an evidenced entry surface and follow calls, imports, registrations, data transformations, or build relationships within the agreed budget.
 3. Trace the happy path, error path, and relevant edge cases. Mark a path `unknown` or `not applicable` when the repository does not provide evidence; do not invent completeness.
