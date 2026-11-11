@@ -300,16 +300,20 @@ def test_scope_states_five_trials_plan():
     assert "demonstrated" in scope
 
 
-def test_hermes_section_states_untested():
-    """FND-010 + N-C (round 9): the README's Hermes install
-    section must carry its own untested caveat in-section — the
+def test_hermes_section_states_verification_status():
+    """FND-010 + N-C (round 9), updated 0.12.5: the README's Hermes install
+    section must carry its own verification-status caveat in-section — the
     disclosure in SCOPE.md alone does not reach a reader
-    following the install steps."""
+    following the install steps. The November 2026 live tests loaded the
+    bundle via external_dirs, so the section now states that (with the
+    34/36 limit and the 2 name collisions); the install-steps caveat
+    stays, because the steps below are the documented procedure,
+    not a verified run."""
     text = _readme()
     start = text.index("Hermes (Nous Research)")
     end = text.index("\n## ", start)
     # Join wrapped lines: the caveat's phrases span line breaks.
     section = " ".join(text[start:end].split())
-    assert "Untested with a real Hermes installation" in section
-    assert "never loaded by a real Hermes CLI" in section
+    assert "Loaded by real Hermes sessions in live tests" in section
+    assert "34 of 36" in section
     assert "not a verified run" in section
