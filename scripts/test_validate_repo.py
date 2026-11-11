@@ -1770,3 +1770,99 @@ def test_related_skills_must_exist(tmp_path, monkeypatch):
     )
     failures = _run_with_root(monkeypatch, root, vr.check_related_skills_exist)
     assert len(failures) == 1 and "defense-in-depth" in failures[0]
+
+
+def _ceilings_repo(tmp_path):
+    """A minimal repo with scripts/ceilings.txt at each SKILL.md's
+    current line count, so one break at a time can be tested."""
+    root = _minimal_repo(tmp_path)
+    (root / "scripts").mkdir(exist_ok=True)
+    lines = []
+    for skill in sorted((root / "skills").glob("*/SKILL.md")):
+        count = len(skill.read_text(encoding="utf-8").splitlines())
+        lines.append(
+            f"skills/{skill.parent.name}/SKILL.md {count} initial ceiling (0.12.4 ratchet setup)"
+        )
+    (root / "scripts" / "ceilings.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return root
+
+
+def _raise_ceiling(root, skill, delta):
+    """Raise one skill's ceiling in the fixture by delta lines."""
+    path = root / "scripts" / "ceilings.txt"
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split(None, 2)
+        if parts[0] == f"skills/{skill}/SKILL.md":
+            parts[1] = str(int(parts[1]) + delta)
+            line = " ".join(parts)
+        out.append(line)
+    path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def test_line_ceiling_at_current_counts_passes(tmp_path, monkeypatch):
+    """Ceilings set at the current line counts pass on day one."""
+    root = _ceilings_repo(tmp_path)
+    assert _run_with_root(monkeypatch, root, vr.check_line_ceilings) == []
+
+
+def test_line_ceiling_breach_fails(tmp_path, monkeypatch):
+    """One line over the ceiling fails, naming the file and ceiling."""
+    root = _ceilings_repo(tmp_path)
+    other = root / "skills" / "other" / "SKILL.md"
+    other.write_text(
+        other.read_text(encoding="utf-8") + "\nOne line over.\n",
+        encoding="utf-8",
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_line_ceilings)
+    assert len(failures) == 1
+    assert "skills/other/SKILL.md" in failures[0]
+    assert "ceiling" in failures[0]
+
+
+def test_line_ceiling_slack_over_three_fails(tmp_path, monkeypatch):
+    """A ceiling more than 3 lines above its file fails: a trim is
+    locked in, not left as headroom."""
+    root = _ceilings_repo(tmp_path)
+    _raise_ceiling(root, "other", 4)
+    failures = _run_with_root(monkeypatch, root, vr.check_line_ceilings)
+    assert len(failures) == 1
+    assert "skills/other/SKILL.md" in failures[0]
+    assert "slack" in failures[0]
+
+
+def test_line_ceiling_slack_of_three_passes(tmp_path, monkeypatch):
+    """Exactly 3 lines of slack passes: the tolerance is > 3 fails."""
+    root = _ceilings_repo(tmp_path)
+    _raise_ceiling(root, "other", 3)
+    assert _run_with_root(monkeypatch, root, vr.check_line_ceilings) == []
+
+
+def test_line_ceiling_missing_entry_fails(tmp_path, monkeypatch):
+    """A SKILL.md with no ceiling line fails instead of going ungated."""
+    root = _ceilings_repo(tmp_path)
+    path = root / "scripts" / "ceilings.txt"
+    kept = [
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.startswith("skills/other/SKILL.md ")
+    ]
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_line_ceilings)
+    assert len(failures) == 1
+    assert "skills/other/SKILL.md" in failures[0]
+
+
+def test_line_ceiling_missing_file_fails(tmp_path, monkeypatch):
+    """No ceilings file at all fails instead of switching the gate off."""
+    root = _minimal_repo(tmp_path)
+    failures = _run_with_root(monkeypatch, root, vr.check_line_ceilings)
+    assert len(failures) == 1
+    assert "ceilings.txt" in failures[0]
+
+
+def test_line_ceiling_in_real_repo_passes():
+    """The shipped ceilings file matches the real SKILL.md counts."""
+    vr.failures.clear()
+    vr.check_line_ceilings()
+    assert vr.failures == []

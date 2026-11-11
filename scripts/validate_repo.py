@@ -82,6 +82,11 @@ Checks:
      VERIFYING -> VERIFIED -> AWAITING_APPROVAL -> RELEASE_READY
      path: the state machine is only invoked when the router tells
      the agent the exact commands (round 11, FND-005).
+ 21. Line-ceiling ratchet: scripts/ceilings.txt holds one line per
+     skills/*/SKILL.md — path, ceiling in lines, one-line reason.
+     A file over its ceiling fails, and so does a ceiling more than
+     3 lines above its file, so the ceiling may only go down; a
+     SKILL.md with no ceiling line fails instead of going ungated.
 
 A check that cannot run (missing file it needs) is reported as a
 failure, never silently skipped — except where the check itself says
@@ -605,6 +610,90 @@ def check_skill_frontmatter():
                 f"{skill_dir.name}/SKILL.md: disable-model-invocation "
                 f"must not be true — the router invokes sub-skills "
                 f"itself"
+            )
+
+
+# Line-ceiling ratchet (0.12.4), adapted from the mechanism in
+# rebelytics/one-skill-to-rule-them-all (CC-BY-4.0, pattern only —
+# no code copied): scripts/ceilings.txt holds one line per file,
+# "<path> <ceiling> [<one-line reason>]". A file over its ceiling
+# fails, and so does a ceiling more than CEILING_SLACK_TOLERANCE
+# lines above its file — the ceiling may only go down, so a trim
+# is locked in instead of left as headroom. Scope is the skills'
+# SKILL.md files: scripts/*.py are code, not skill prose, and test
+# files must grow with coverage, so they carry no ceiling.
+CEILINGS_FILE = "scripts/ceilings.txt"
+CEILING_SLACK_TOLERANCE = 3
+
+
+def _parse_ceilings(text):
+    """Parse ceilings.txt into ({path: (ceiling, reason)}, [errors]).
+    Blank lines and '#' comments are allowed."""
+    ceilings = {}
+    errors = []
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 2:
+            errors.append(
+                f"{CEILINGS_FILE} line {lineno}: expected "
+                f"'<path> <ceiling> [<reason>]', got {raw!r}"
+            )
+            continue
+        try:
+            ceiling = int(parts[1])
+        except ValueError:
+            errors.append(f"{CEILINGS_FILE} line {lineno}: ceiling {parts[1]!r} is not a number")
+            continue
+        if ceiling < 0:
+            errors.append(f"{CEILINGS_FILE} line {lineno}: ceiling {ceiling} is negative")
+            continue
+        if parts[0] in ceilings:
+            errors.append(f"{CEILINGS_FILE} line {lineno}: {parts[0]} listed twice")
+            continue
+        ceilings[parts[0]] = (ceiling, parts[2] if len(parts) > 2 else "")
+    return ceilings, errors
+
+
+def check_line_ceilings():
+    ceilings_path = ROOT / CEILINGS_FILE
+    if not ceilings_path.is_file():
+        fail(f"{CEILINGS_FILE} is missing")
+        return
+    ceilings, errors = _parse_ceilings(ceilings_path.read_text(encoding="utf-8"))
+    for error in errors:
+        fail(error)
+    if errors:
+        return
+    for skill in sorted((ROOT / "skills").glob("*/SKILL.md")):
+        rel = skill.relative_to(ROOT).as_posix()
+        if rel not in ceilings:
+            fail(
+                f"{rel} has no ceiling: add `{rel} "
+                f"{len(skill.read_text(encoding='utf-8').splitlines())}` "
+                f"to {CEILINGS_FILE}"
+            )
+    for rel in sorted(ceilings):
+        ceiling, _reason = ceilings[rel]
+        target = _resolve_inside(rel)
+        if target is None or not target.is_file():
+            fail(f"{CEILINGS_FILE} names {rel}, which is not a file in the repo")
+            continue
+        lines = len(target.read_text(encoding="utf-8").splitlines())
+        if lines > ceiling:
+            fail(
+                f"{rel} {lines} lines > ceiling {ceiling}: trim it back "
+                f"to {ceiling} lines or fewer, or raise the ceiling in "
+                f"{CEILINGS_FILE} to {lines} with a one-line reason"
+            )
+        elif ceiling - lines > CEILING_SLACK_TOLERANCE:
+            fail(
+                f"{rel} {lines} lines, ceiling {ceiling}: slack "
+                f"{ceiling - lines} > tolerance {CEILING_SLACK_TOLERANCE}. "
+                f"Lower its line in {CEILINGS_FILE} to {lines} in this "
+                "commit — a trim is locked in, not left as headroom"
             )
 
 
@@ -2062,6 +2151,7 @@ def main():
     check_security_versions()
     check_hermes_bundle()
     check_router_state_commands()
+    check_line_ceilings()
     for w in warnings:
         print(f"warning: {w}")
     if failures:
