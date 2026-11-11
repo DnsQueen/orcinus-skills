@@ -1,25 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="940" height="220" viewBox="0 0 940 220" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-  <rect x="1" y="1" width="938" height="218" rx="10" fill="#ffffff" stroke="#e5e7eb"/>
+  <rect x="1" y="1" width="938" height="218" rx="10" fill="#ffffff" stroke="#e2e8f0"/>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
     </marker>
   </defs>
   <!-- row 1: the run -->
-  <g font-size="14" fill="#1f2937" text-anchor="middle">
-    <rect x="24" y="24" width="260" height="52" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+  <g font-size="14" fill="#0f172a" text-anchor="middle">
+    <rect x="24" y="24" width="260" height="52" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
     <text x="154" y="55">Failing test first</text>
-    <rect x="340" y="24" width="260" height="52" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+    <rect x="340" y="24" width="260" height="52" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
     <text x="470" y="55">Build + lint + typecheck + tests</text>
-    <rect x="656" y="24" width="260" height="52" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+    <rect x="656" y="24" width="260" height="52" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
     <text x="786" y="55">Evidence bundle</text>
   </g>
-  <g stroke="#6b7280" stroke-width="1.5">
+  <g stroke="#64748b" stroke-width="1.5">
     <line x1="284" y1="50" x2="336" y2="50" marker-end="url(#arrow)"/>
     <line x1="600" y1="50" x2="652" y2="50" marker-end="url(#arrow)"/>
   </g>
   <!-- branch: bundle down to the two outcomes -->
-  <g stroke="#6b7280" stroke-width="1.5" fill="none">
+  <g stroke="#64748b" stroke-width="1.5" fill="none">
     <path d="M 786 76 V 104 H 270 V 124" marker-end="url(#arrow)"/>
     <path d="M 786 76 V 104 H 670 V 124" marker-end="url(#arrow)"/>
   </g>
@@ -29,10 +29,10 @@
     <text x="270" y="151" font-size="13" fill="#ffffff">CI attestation</text>
     <text x="270" y="171" font-size="14" font-weight="bold" fill="#ffffff">VERIFIED</text>
     <rect x="520" y="128" width="300" height="56" rx="6" fill="#ffffff" stroke="#0f766e" stroke-width="1.5"/>
-    <text x="670" y="151" font-size="13" fill="#1f2937">Local targeted rerun</text>
+    <text x="670" y="151" font-size="13" fill="#0f172a">Local targeted rerun</text>
     <text x="670" y="171" font-size="14" font-weight="bold" fill="#0f766e">RERUN_CONFIRMED</text>
   </g>
-  <g font-size="12" fill="#6b7280" text-anchor="middle">
+  <g font-size="12" fill="#64748b" text-anchor="middle">
     <text x="270" y="206">the revision was attested in CI</text>
     <text x="670" y="206">local proof only — never VERIFIED</text>
   </g>

@@ -1,35 +1,35 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="940" height="150" viewBox="0 0 940 150" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-  <rect x="1" y="1" width="938" height="148" rx="10" fill="#ffffff" stroke="#e5e7eb"/>
+  <rect x="1" y="1" width="938" height="148" rx="10" fill="#ffffff" stroke="#e2e8f0"/>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
     </marker>
   </defs>
-  <text x="24" y="30" font-size="12" fill="#6b7280">0</text>
-  <text x="916" y="30" font-size="12" fill="#6b7280" text-anchor="end">100</text>
+  <text x="24" y="30" font-size="12" fill="#64748b">0</text>
+  <text x="916" y="30" font-size="12" fill="#64748b" text-anchor="end">100</text>
   <!-- stage boxes -->
-  <g font-size="14" fill="#1f2937" text-anchor="middle">
-    <rect x="24" y="40" width="128" height="52" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+  <g font-size="14" fill="#0f172a" text-anchor="middle">
+    <rect x="24" y="40" width="128" height="52" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
     <text x="88" y="62">Idea</text>
-    <text x="88" y="80" font-size="11" fill="#6b7280">0–9</text>
-    <rect x="176" y="40" width="128" height="52" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+    <text x="88" y="80" font-size="11" fill="#64748b">0–9</text>
+    <rect x="176" y="40" width="128" height="52" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
     <text x="240" y="62">Architecture</text>
-    <text x="240" y="80" font-size="11" fill="#6b7280">10–19</text>
-    <rect x="328" y="40" width="128" height="52" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+    <text x="240" y="80" font-size="11" fill="#64748b">10–19</text>
+    <rect x="328" y="40" width="128" height="52" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
     <text x="392" y="62">Build</text>
-    <text x="392" y="80" font-size="11" fill="#6b7280">20–39</text>
-    <rect x="480" y="40" width="128" height="52" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+    <text x="392" y="80" font-size="11" fill="#64748b">20–39</text>
+    <rect x="480" y="40" width="128" height="52" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
     <text x="544" y="62">Verify</text>
-    <text x="544" y="80" font-size="11" fill="#6b7280">40–59</text>
-    <rect x="632" y="40" width="128" height="52" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+    <text x="544" y="80" font-size="11" fill="#64748b">40–59</text>
+    <rect x="632" y="40" width="128" height="52" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
     <text x="696" y="62">Harden</text>
-    <text x="696" y="80" font-size="11" fill="#6b7280">50–79</text>
-    <rect x="784" y="40" width="128" height="52" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+    <text x="696" y="80" font-size="11" fill="#64748b">50–79</text>
+    <rect x="784" y="40" width="128" height="52" rx="6" fill="#f8fafc" stroke="#cbd5e1"/>
     <text x="848" y="62">Release</text>
-    <text x="848" y="80" font-size="11" fill="#6b7280">80–100</text>
+    <text x="848" y="80" font-size="11" fill="#64748b">80–100</text>
   </g>
   <!-- arrows between stages -->
-  <g stroke="#6b7280" stroke-width="1.5">
+  <g stroke="#64748b" stroke-width="1.5">
     <line x1="152" y1="66" x2="172" y2="66" marker-end="url(#arrow)"/>
     <line x1="304" y1="66" x2="324" y2="66" marker-end="url(#arrow)"/>
     <line x1="456" y1="66" x2="476" y2="66" marker-end="url(#arrow)"/>
