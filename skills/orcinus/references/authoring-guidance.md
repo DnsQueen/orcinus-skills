@@ -27,8 +27,8 @@ not from habit.
    output IS — its parts, in order. Never a prohibition list: under a
    competing incentive an agent argues with "don't X", and the
    unwanted content shows up more, not less. With a recipe the check
-   is mechanical: the output either matches the stated shape or it
-   does not.
+   is mechanical: either the parts are there in order, or they are
+   not.
 3. **Omitted elements** — the agent already produces the thing, but
    leaves a required element out of it. Use a REQUIRED template slot
    in the template it fills in. Prose reminders sitting next to the
@@ -42,18 +42,19 @@ not from habit.
 
 ## Micro-test the wording before full scenarios
 
-Full pressure scenarios are the final gate, but they are slow and
-expensive per iteration. Test the wording itself first, cheaply:
+Full pressure scenarios are the last gate, but each iteration
+through them is slow and expensive. Test the wording itself first,
+cheaply:
 
-1. **One fresh-context sample per call** — a raw API call, or a
-   single-shot subagent if there is no API access. The system prompt
-   is the realistic context the guidance will live in (the full skill
-   or prompt template, not the guidance on its own); the user message
-   is a task that tempts the failure.
-2. **Always include a no-guidance control.** If the control does not
-   show the failure, there is nothing to fix — stop, do not write the
-   guidance.
-3. **5+ reps per variant.** A single sample lies.
+1. **One sample per call, each from a fresh context** — a direct
+   API call, or a one-shot subagent where no API is available. Use
+   the realistic context the guidance will live in as the system
+   prompt — the full skill or prompt template, not the guidance
+   alone — and a task that tempts the failure as the user message.
+2. **Always run a no-guidance control.** If the failure never
+   appears in the control, the guidance has nothing to fix — stop
+   before writing it.
+3. **5+ reps per variant.** One sample by itself proves nothing.
 4. **Read every flagged match by hand.** Score programmatically if
    you like, but template echoes and quoted counter-examples look
    like hits; automated counts alone overstate both failure and
@@ -79,13 +80,14 @@ the wrong action unavailable. Emphasis does not change that
 asymmetry: a bolder rule is still a rule, and rewriting it again
 looks like care while the measured behaviour stays the same.
 
-What counts as a barrier: a hook or permission rule that refuses the
-call; a lint or gate check that fails the artefact; a default or path
-layout that makes the wrong action unavailable; a script that performs
-the step so it cannot be performed differently. What does not count:
-a bolder warning, the same rule moved somewhere more prominent, a
-checklist item, or a promise to be careful.
+What counts as a barrier: a permission gate or hook that blocks the
+call; a lint or gate check that rejects the artefact; defaults and
+paths arranged so the wrong action cannot be taken; a script that
+does the step itself, leaving no other way to do it. What does not
+count: a louder warning, the same rule pasted somewhere more
+visible, an item added to a checklist, or a promise to take more
+care.
 
 A barrier is real once it is switched on and proven, not once it is
-described: prove it against the real command it must refuse and a
-legitimate command from the real tool record, both run through it.
+described: prove it on two real cases — one call it must refuse and
+one call it must allow — both taken from the real tool record.
