@@ -1463,7 +1463,12 @@ def check_docs_numbers():
     if demo_tests.is_dir():
         for path in sorted(demo_tests.glob("*.test.ts")):
             demo_count += len(re.findall(r"\btest\(", path.read_text(encoding="utf-8")))
-    if demo_tests.is_dir() and demo_count == 0:
+    if not demo_tests.is_dir():
+        # Empty-scan guard (0.12.4): examples/demo/tests/ itself is
+        # known to exist — if the directory is gone, the scan below
+        # finds nothing and the hard-coded counts go unchecked.
+        fail("SCAN BROKEN — examples/demo/tests/ is missing, but the demo suite is known to exist")
+    elif demo_count == 0:
         # Empty-scan guard (0.12.4): examples/demo/tests/ is known to
         # hold the demo suite, so a scan that finds no test() call
         # there is a broken instrument — without it the hard-coded

@@ -26,8 +26,9 @@ not from habit.
    prompt bloated. Use a positive recipe or contract: state what the
    output IS — its parts, in order. Never a prohibition list: under a
    competing incentive an agent argues with "don't X", and the
-   unwanted content shows up more, not less. A recipe leaves nothing
-   to argue with — the output matches the stated shape or it does not.
+   unwanted content shows up more, not less. With a recipe the check
+   is mechanical: the output either matches the stated shape or it
+   does not.
 3. **Omitted elements** — the agent already produces the thing, but
    leaves a required element out of it. Use a REQUIRED template slot
    in the template it fills in. Prose reminders sitting next to the
@@ -58,7 +59,7 @@ expensive per iteration. Test the wording itself first, cheaply:
    like hits; automated counts alone overstate both failure and
    success.
 5. **Variance is a signal.** When guidance lands, the reps converge
-   on one shape. Five different readings across five reps means the
+   on one shape. If five reps give five different shapes, the
    wording isn't binding — tighten the form before adding more words.
 
 Micro-tests check wording only. They do not replace full pressure
@@ -75,8 +76,8 @@ re-interpreted on every run, and it competes with everything else
 pulling at the agent in that moment. A barrier at the tool boundary
 does not compete — it refuses the call, fails the artefact, or makes
 the wrong action unavailable. Emphasis does not change that
-asymmetry: a bolder rule is still a rule, and the next rewrite reads
-as diligence while changing nothing measurable.
+asymmetry: a bolder rule is still a rule, and rewriting it again
+looks like care while the measured behaviour stays the same.
 
 What counts as a barrier: a hook or permission rule that refuses the
 call; a lint or gate check that fails the artefact; a default or path
@@ -85,6 +86,6 @@ the step so it cannot be performed differently. What does not count:
 a bolder warning, the same rule moved somewhere more prominent, a
 checklist item, or a promise to be careful.
 
-A barrier counts once it is armed, not once it is written: prove it
-against the real command it must refuse and a legitimate command from
-the real tool record, both run through it.
+A barrier is real once it is switched on and proven, not once it is
+described: prove it against the real command it must refuse and a
+legitimate command from the real tool record, both run through it.

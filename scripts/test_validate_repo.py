@@ -1926,3 +1926,16 @@ def test_demo_tests_scan_empty_fails_loudly(tmp_path, monkeypatch):
     )
     failures = _run_with_root(monkeypatch, root, vr.check_docs_numbers)
     assert any("SCAN BROKEN" in f for f in failures)
+
+
+def test_demo_tests_dir_missing_fails_loudly(tmp_path, monkeypatch):
+    """examples/demo/tests/ itself is known to exist, so a missing
+    directory is a broken scan too — the hard-coded counts would go
+    unchecked, so the check must fail instead of skipping."""
+    root = _docs_numbers_repo(tmp_path)
+    tests_dir = root / "examples" / "demo" / "tests"
+    for path in tests_dir.iterdir():
+        path.unlink()
+    tests_dir.rmdir()
+    failures = _run_with_root(monkeypatch, root, vr.check_docs_numbers)
+    assert any("SCAN BROKEN" in f for f in failures)
