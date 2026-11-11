@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="940" height="348" viewBox="0 0 940 348" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>ORCINUS — done means verified</title>
+<desc>Animated banner: a failing test (208 != 209), then 7 passed, then validate_evidence.py OK. Every line is real output; see STORYBOARD.md.</desc>
+<rect x="1" y="1" width="938" height="346" rx="10" fill="#ffffff" stroke="#e5e7eb"/>
+<g opacity="0">
+<animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.03;0.9375;1" dur="16s" repeatCount="indefinite" />
+<text x="24" y="40" font-size="20" font-weight="bold" fill="#1f2937">ORCINUS</text>
+<rect x="762" y="22" width="154" height="28" rx="14" fill="none" stroke="#0f766e" stroke-width="1.5"/>
+<text x="839" y="41" font-size="12" fill="#0f766e" text-anchor="middle">Done means verified</text>
+<text x="24" y="62" font-size="13" fill="#6b7280">One integrated nervous system for building software with a coding agent, from raw idea (0) to publish (100).</text>
+</g>
+<rect x="24" y="76" width="892" height="216" rx="6" fill="#f9fafb" stroke="#d1d5db"/>
+<g opacity="0" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13" fill="#6b7280">
+<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.0625;0.0938;0.9375;1" dur="16s" repeatCount="indefinite" />
+<text x="40" y="100">$ python3 -m pytest test_money_rounding.py -v --junitxml=red-junit.xml</text>
+</g>
+<g opacity="0" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13" fill="#b91c1c">
+<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.1375;0.1688;0.9375;1" dur="16s" repeatCount="indefinite" />
+<text x="40" y="122">test_199_plus_5pct_is_209 FAILED</text>
+</g>
+<g opacity="0" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13" fill="#b91c1c">
+<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.2000;0.2313;0.9375;1" dur="16s" repeatCount="indefinite" />
+<text x="40" y="144">AssertionError: 208 != 209</text>
+</g>
+<g opacity="0" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13" fill="#b91c1c">
+<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.2625;0.2938;0.9375;1" dur="16s" repeatCount="indefinite" />
+<text x="40" y="166">3 failed in 0.06s</text>
+</g>
+<g opacity="0" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13" fill="#6b7280">
+<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.3375;0.3688;0.9375;1" dur="16s" repeatCount="indefinite" />
+<text x="40" y="188">$ python3 -m pytest test_money_rounding.py test_money_visible.py -v --junitxml=test_report.xml</text>
+</g>
+<g opacity="0" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13" fill="#0f766e">
+<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.4125;0.4437;0.9375;1" dur="16s" repeatCount="indefinite" />
+<text x="40" y="210">7 passed in 0.03s</text>
+</g>
+<g opacity="0" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13" fill="#6b7280">
+<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.4875;0.5188;0.9375;1" dur="16s" repeatCount="indefinite" />
+<text x="40" y="232">$ python3 validate_evidence.py bundle.json --repo .</text>
+</g>
+<g opacity="0" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13" fill="#0f766e">
+<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.5625;0.5938;0.9375;1" dur="16s" repeatCount="indefinite" />
+<text x="40" y="254">OK: bundle.json is a valid, consistent evidence bundle</text>
+</g>
+<g opacity="0" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace" font-size="13" fill="#0f766e">
+<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.5625;0.5938;0.9375;1" dur="16s" repeatCount="indefinite" />
+<text x="40" y="276">(provisional: structurally valid, not CI-attested — VERIFIED requires attestation)</text>
+<rect x="694" y="263" width="8" height="16" fill="#0f766e"><animate attributeName="opacity" values="1;0;1" dur="1s" begin="10s" repeatCount="indefinite" /></rect>
+</g>
+<g opacity="0">
+<animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.6750;0.7063;0.9375;1" dur="16s" repeatCount="indefinite" />
+<rect x="24" y="304" width="892" height="28" rx="6" fill="#0f766e"/>
+<text x="40" y="323" font-size="13" fill="#ffffff"><tspan font-weight="bold">verdict: PASS</tspan><tspan> — provisional: VERIFIED requires a CI attestation</tspan></text>
+</g>
+</svg>

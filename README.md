@@ -1,3 +1,6 @@
+![ORCINUS banner: a failing test (208 != 209), then 7 passed, then the evidence bundle validates](docs/images/orcinus-banner.svg#gh-light-mode-only)
+![ORCINUS banner: a failing test (208 != 209), then 7 passed, then the evidence bundle validates](docs/images/orcinus-banner-dark.svg#gh-dark-mode-only)
+
 # ORCINUS
 
 One integrated nervous system for building software with a coding agent, from raw idea (0) to publish (100).
@@ -6,7 +9,11 @@ ORCINUS is not a dump of 2,000 skills to pick from. You install one unit, inject
 
 ORCINUS is a guided workflow, not an enforcement layer: it tells the agent what to do and what to verify, and records the evidence. It cannot force the agent to follow it — the human at the gates and CI are the backstop.
 
-![The ORCINUS lifecycle, from idea (0) to publish (100), with two human gates](docs/images/lifecycle.svg)
+![The ORCINUS lifecycle, from idea (0) to publish (100), with two human gates](docs/images/lifecycle.svg#gh-light-mode-only)
+![The ORCINUS lifecycle, from idea (0) to publish (100), with two human gates](docs/images/lifecycle-dark.svg#gh-dark-mode-only)
+
+![An idea travels the ORCINUS lifecycle, fails verification once, returns to Build, then passes and ships VERIFIED](docs/images/orcinus-journey-loop.gif#gh-light-mode-only)
+![An idea travels the ORCINUS lifecycle, fails verification once, returns to Build, then passes and ships VERIFIED](docs/images/orcinus-journey-loop-dark.gif#gh-dark-mode-only)
 
 ## Quick start
 
@@ -70,7 +77,7 @@ Only the plugin install gets the plugin-root `agents/` and
 
 ### Hermes (Nous Research)
 
-Untested with a real Hermes installation: the bundle was validated by the repo's own YAML parser and check, never loaded by a real Hermes CLI — no Hermes CLI exists in this environment. The steps below are the documented procedure, not a verified run.
+Loaded by real Hermes sessions in live tests (November 2026) via `external_dirs`: 34 of 36 skills loaded in the first test, with 2 name collisions (`api-and-interface-design`, `performance-optimization`); a later run verified all 36 skills byte-identical to the release. The install steps below are the documented procedure, not a verified run.
 
 The repo is a Hermes tap already: its skills live under `skills/`, which is the tap's default path.
 
@@ -237,7 +244,8 @@ The files that hold the system together:
 
 Done is not a claim the agent makes. It is a check that ran. The work starts with a failing test, then build, lint, typecheck, and tests must all pass, and every check is recorded in an evidence bundle that orcinus-verify validates. A finding is `confirmed` (with evidence), `needs_validation` (an unvalidated candidate naming the exact unresolved fact — it forces the bundle to INCOMPLETE, never PASS and never FAIL), or `rejected` (disproved, with a reason).
 
-![How a change becomes VERIFIED — or only RERUN_CONFIRMED](docs/images/verification.svg)
+![How a change becomes VERIFIED — or only RERUN_CONFIRMED](docs/images/verification.svg#gh-light-mode-only)
+![How a change becomes VERIFIED — or only RERUN_CONFIRMED](docs/images/verification-dark.svg#gh-dark-mode-only)
 
 A bundle that validates locally is provisional: VERIFIED additionally requires a live CI attestation for the revision, checked at transition time. A targeted rerun mints only RERUN_CONFIRMED, never VERIFIED. The verifier is a separate skill invocation that reads code and evidence, not the implementer's summary — same agent session, not a separate process. Stages are recorded in `.orcinus/state.json`; see `docs/project-state.md`.
 
