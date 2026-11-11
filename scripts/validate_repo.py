@@ -519,14 +519,34 @@ def parse_yaml_file(path):
     return data, None
 
 
-def check_skill_frontmatter():
+def _skill_dirs():
+    """Skill folders under skills/ — the collection the validator scans.
+
+    Empty-scan guard (0.12.4): skills/ is known to hold the whole
+    collection, so a scan that finds no skill folder is a broken
+    instrument, not an empty repo — every check below iterates this
+    list, so without the guard an empty or unreadable skills/ would
+    pass every check silently. Adapted from
+    rebelytics/one-skill-to-rule-them-all (CC-BY-4.0, pattern only):
+    a scan over files known to exist that parses nothing exits 1
+    with SCAN COMMAND BROKEN. Records one failure and returns []
+    when no skill folder is found.
+    """
     skills_dir = ROOT / "skills"
     if not skills_dir.is_dir():
         fail("skills/ directory is missing")
-        return
-    for skill_dir in sorted(skills_dir.iterdir()):
-        if not skill_dir.is_dir():
-            continue
+        return []
+    dirs = [d for d in sorted(skills_dir.iterdir()) if d.is_dir()]
+    if not dirs:
+        fail(
+            "SCAN BROKEN — skills/ scan found no skill folders, but "
+            "the collection is known to be non-empty"
+        )
+    return dirs
+
+
+def check_skill_frontmatter():
+    for skill_dir in _skill_dirs():
         skill = skill_dir / "SKILL.md"
         if not skill.is_file():
             fail(f"{skill_dir.name}: SKILL.md is missing")
@@ -718,9 +738,7 @@ def license_from_file(path):
 
 
 def check_attribution_pairs():
-    for skill_dir in sorted((ROOT / "skills").iterdir()):
-        if not skill_dir.is_dir():
-            continue
+    for skill_dir in _skill_dirs():
         attr = skill_dir / "ATTRIBUTION.md"
         lic = skill_dir / "LICENSE.txt"
         # A LICENSE.txt without an ATTRIBUTION.md is unexplained upstream
@@ -1005,6 +1023,18 @@ def check_skill_status_implemented_in():
         return
     folders = {d.name for d in (ROOT / "skills").iterdir() if d.is_dir()}
     sections = generator.parse_map_tables(map_file.read_text(encoding="utf-8"))
+    if not sections:
+        # Empty-scan guard (0.12.4): docs/MAP.md is known to hold the
+        # A–G stage tables, so a parse that finds no section is a
+        # broken scan — without it the check below passes on zero
+        # sections. Adapted from rebelytics/one-skill-to-rule-them-all
+        # (CC-BY-4.0, pattern only): a scan over content known to
+        # exist that returns nothing must fail loudly.
+        fail(
+            "SCAN BROKEN — docs/MAP.md parsed to no sections, but it "
+            "is known to hold the A–G stage tables"
+        )
+        return
     for title, section in sections.items():
         for need, source, _licence, integration, status in section["rows"]:
             covered = generator.implemented_in(need, source, integration, status, folders)
@@ -1233,13 +1263,7 @@ def check_no_slash_invocation():
     """A sub-skill's description must not tell the user to type
     /<skill>: sub-skills are user-invocable: false, so no slash
     command can invoke them, and the instruction is a dead end."""
-    skills_dir = ROOT / "skills"
-    if not skills_dir.is_dir():
-        fail("skills/ directory is missing")
-        return
-    for skill_dir in sorted(skills_dir.iterdir()):
-        if not skill_dir.is_dir():
-            continue
+    for skill_dir in _skill_dirs():
         skill = skill_dir / "SKILL.md"
         if not skill.is_file():
             continue
@@ -1439,6 +1463,18 @@ def check_docs_numbers():
     if demo_tests.is_dir():
         for path in sorted(demo_tests.glob("*.test.ts")):
             demo_count += len(re.findall(r"\btest\(", path.read_text(encoding="utf-8")))
+    if demo_tests.is_dir() and demo_count == 0:
+        # Empty-scan guard (0.12.4): examples/demo/tests/ is known to
+        # hold the demo suite, so a scan that finds no test() call
+        # there is a broken instrument — without it the hard-coded
+        # counts below go unchecked. Adapted from
+        # rebelytics/one-skill-to-rule-them-all (CC-BY-4.0, pattern
+        # only): a scan over content known to exist that returns
+        # nothing must fail loudly.
+        fail(
+            "SCAN BROKEN — examples/demo/tests/ holds no test() calls, "
+            "but the demo suite is known to be non-empty"
+        )
     if demo_count:
         skill = ROOT / "skills" / "orcinus-verify" / "SKILL.md"
         if skill.is_file():
@@ -1782,9 +1818,7 @@ def check_skill_references():
     of the skill's own subdirectories must resolve to a file inside
     the skill folder; anything else is the user's file, not this
     check's business."""
-    for skill_dir in sorted((ROOT / "skills").iterdir()):
-        if not skill_dir.is_dir():
-            continue
+    for skill_dir in _skill_dirs():
         name = skill_dir.name
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.is_file():
@@ -1882,10 +1916,9 @@ def check_related_skills_exist():
     listed five skills that do not exist here). Only the "Related
     Skills" heading is read, so other sections that mention names in
     prose are untouched."""
-    skills = {d.name for d in (ROOT / "skills").iterdir() if d.is_dir()}
-    for skill_dir in sorted((ROOT / "skills").iterdir()):
-        if not skill_dir.is_dir():
-            continue
+    dirs = _skill_dirs()
+    skills = {d.name for d in dirs}
+    for skill_dir in dirs:
         skill_md = skill_dir / "SKILL.md"
         if not skill_md.is_file():
             continue

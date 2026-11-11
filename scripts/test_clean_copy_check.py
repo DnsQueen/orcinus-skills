@@ -457,3 +457,24 @@ def test_sigint_still_removes_temp_dir(tmp_path):
     rc, leftovers = _run_clean_copy_until_killed(tmp_path, signal.SIGINT)
     assert rc == -signal.SIGINT, f"expected death by SIGINT, got {rc}"
     assert leftovers == set(), f"SIGINT left temp dirs behind: {leftovers}"
+
+
+# Empty-scan guard (0.12.4): a scan that returns empty over content
+# known to be non-empty is a broken instrument — it must fail loudly,
+# not silently pass. Adapted from rebelytics/one-skill-to-rule-them-all
+# (CC-BY-4.0, pattern only, no code copied): its session-start scan
+# exits 1 with "SCAN COMMAND BROKEN — $n files present, 0 headers
+# parsed" when files are present but nothing parses
+# (scripts/session-start-scan.sh:331).
+
+
+@requires_tools
+def test_empty_skills_list_in_manifest_fails_the_step(tmp_path):
+    """skills/manifest.json is known to list the whole collection,
+    so a manifest that lists no skills makes the resolve step pass
+    on zero iterations — it must fail."""
+    dest = _fixture_repo(tmp_path)
+    (dest / "skills" / "manifest.json").write_text(json.dumps({"skills": {}}), encoding="utf-8")
+    failed, total = clean_copy_check._gates(dest)
+    assert failed == ["all manifest skills resolve"]
+    assert total == 7

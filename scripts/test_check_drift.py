@@ -157,3 +157,52 @@ def test_gitattributes_forces_lf_line_endings():
     assert any(parts[0] == "*" and "eol=lf" in parts[1:] for parts in rules), (
         ".gitattributes must force LF checkouts (a '*' rule with eol=lf)"
     )
+
+
+# Empty-scan guard (0.12.4): a scan that returns empty over content
+# known to be non-empty is a broken instrument — it must fail loudly,
+# not silently pass. Adapted from rebelytics/one-skill-to-rule-them-all
+# (CC-BY-4.0, pattern only, no code copied): its session-start scan
+# exits 1 with "SCAN COMMAND BROKEN — $n files present, 0 headers
+# parsed" when files are present but nothing parses
+# (scripts/session-start-scan.sh:331).
+
+
+def _empty_build_repo(tmp_path):
+    """A repo with no vendored files at all: no vendored skill
+    folder, empty agents/ and commands/ — build_manifest() is {}."""
+    root = tmp_path / "repo"
+    (root / "skills" / "other").mkdir(parents=True)
+    (root / "agents").mkdir()
+    (root / "commands").mkdir()
+    (root / "scripts").mkdir()
+    (root / "skills" / "other" / "SKILL.md").write_text("x\n", encoding="utf-8")
+    return root
+
+
+def test_empty_manifest_fails_loudly(monkeypatch, tmp_path, capsys):
+    """The manifest is known to record the vendored files, so an
+    empty manifest over an empty build is a broken instrument —
+    'OK: 0 vendored files match' must not pass."""
+    root = _empty_build_repo(tmp_path)
+    monkeypatch.setattr(cd, "ROOT", root)
+    monkeypatch.setattr(cd, "MANIFEST", root / "scripts" / "drift-manifest.json")
+    (root / "scripts" / "drift-manifest.json").write_text("{}\n", encoding="utf-8")
+    assert cd.build_manifest() == {}
+    assert cd.main([]) == 1
+    assert "SCAN BROKEN" in capsys.readouterr().err
+
+
+def test_update_refuses_empty_build(monkeypatch, tmp_path, capsys):
+    """--update with an empty build would overwrite the recorded
+    manifest with {} — a scan that finds no vendored file over a
+    tree known to hold them is broken, so the update must refuse
+    and leave the manifest untouched."""
+    root = _empty_build_repo(tmp_path)
+    monkeypatch.setattr(cd, "ROOT", root)
+    monkeypatch.setattr(cd, "MANIFEST", root / "scripts" / "drift-manifest.json")
+    before = json.dumps({"skills/other/SKILL.md": "0" * 64}, indent=2) + "\n"
+    (root / "scripts" / "drift-manifest.json").write_text(before, encoding="utf-8")
+    assert cd.main(["--update"]) == 1
+    assert (root / "scripts" / "drift-manifest.json").read_text(encoding="utf-8") == before
+    assert "SCAN BROKEN" in capsys.readouterr().err

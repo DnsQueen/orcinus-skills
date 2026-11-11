@@ -1866,3 +1866,63 @@ def test_line_ceiling_in_real_repo_passes():
     vr.failures.clear()
     vr.check_line_ceilings()
     assert vr.failures == []
+
+
+# Empty-scan guard (0.12.4): a scan that returns empty over content
+# known to be non-empty is a broken instrument — it must fail loudly,
+# not silently pass. Adapted from rebelytics/one-skill-to-rule-them-all
+# (CC-BY-4.0, pattern only, no code copied): its session-start scan
+# exits 1 with "SCAN COMMAND BROKEN — $n files present, 0 headers
+# parsed" when files are present but nothing parses
+# (scripts/session-start-scan.sh:331).
+
+
+def _empty_skills_repo(tmp_path):
+    """A repo whose skills/ exists but holds no skill folder: the
+    scan every validator check iterates finds nothing."""
+    root = tmp_path / "repo"
+    (root / "skills").mkdir(parents=True)
+    return root
+
+
+def test_empty_skills_scan_fails_loudly(tmp_path, monkeypatch):
+    """skills/ is known to hold the whole collection, so a scan that
+    finds no skill folder is broken — every check that iterates the
+    skills tree must fail instead of passing on zero iterations."""
+    root = _empty_skills_repo(tmp_path)
+    checks = (
+        vr.check_skill_frontmatter,
+        vr.check_attribution_pairs,
+        vr.check_no_slash_invocation,
+        vr.check_skill_references,
+        vr.check_related_skills_exist,
+    )
+    for check in checks:
+        failures = _run_with_root(monkeypatch, root, check)
+        assert any("SCAN BROKEN" in f for f in failures), check.__name__
+
+
+def test_map_with_no_sections_fails_loudly(tmp_path, monkeypatch):
+    """docs/MAP.md is known to hold the A–G stage tables, so a parse
+    that finds no section is a broken scan — the implemented-in
+    check must fail instead of passing on zero sections. The fixture
+    is the router-resources repo: without the generator script the
+    check fails earlier on the missing generator and never reaches
+    the parse."""
+    root = _router_resources_repo(tmp_path)
+    (root / "docs" / "MAP.md").write_text("# Map\n\nNo stage tables here.\n", encoding="utf-8")
+    failures = _run_with_root(monkeypatch, root, vr.check_skill_status_implemented_in)
+    assert any("SCAN BROKEN" in f for f in failures)
+
+
+def test_demo_tests_scan_empty_fails_loudly(tmp_path, monkeypatch):
+    """examples/demo/tests/ is known to hold the demo suite, so a
+    scan that finds no test() call there is broken — the hard-coded
+    counts would go unchecked, so the check must fail instead of
+    skipping."""
+    root = _docs_numbers_repo(tmp_path)
+    (root / "examples" / "demo" / "tests" / "demo.test.ts").write_text(
+        "// helpers only — no test cases\n", encoding="utf-8"
+    )
+    failures = _run_with_root(monkeypatch, root, vr.check_docs_numbers)
+    assert any("SCAN BROKEN" in f for f in failures)

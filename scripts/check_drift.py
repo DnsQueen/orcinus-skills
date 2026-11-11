@@ -163,6 +163,22 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.update:
         manifest = build_manifest()
+        if not manifest:
+            # Empty-scan guard (0.12.4): the collection is known to
+            # hold vendored files, so a scan that finds none is a
+            # broken instrument — writing it out would destroy the
+            # recorded checksums. Adapted from
+            # rebelytics/one-skill-to-rule-them-all (CC-BY-4.0,
+            # pattern only): a scan over content known to exist that
+            # returns nothing must fail loudly.
+            print(
+                "FAIL: SCAN BROKEN — the vendored-file scan found "
+                "nothing, but the collection is known to hold vendored "
+                "files; refusing to overwrite the manifest with an "
+                "empty one",
+                file=sys.stderr,
+            )
+            return 1
         MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
         print(f"wrote {MANIFEST} ({len(manifest)} files)")
         return 0
@@ -171,6 +187,20 @@ def main(argv=None) -> int:
         print("Run: python3 scripts/check_drift.py --update", file=sys.stderr)
         return 1
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    if not manifest:
+        # Empty-scan guard (0.12.4): the manifest is known to record
+        # the vendored files, so an empty manifest is a broken
+        # instrument, not an empty collection — without it the check
+        # below passes on zero entries. Adapted from
+        # rebelytics/one-skill-to-rule-them-all (CC-BY-4.0, pattern
+        # only): a scan over content known to exist that returns
+        # nothing must fail loudly.
+        print(
+            "FAIL: SCAN BROKEN — the drift manifest is empty, but the "
+            "collection is known to hold vendored files",
+            file=sys.stderr,
+        )
+        return 1
     problems = []
     for rel, expected in sorted(manifest.items()):
         path = ROOT / rel

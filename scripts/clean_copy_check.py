@@ -208,6 +208,22 @@ def _gates(dest):
             f"skills/manifest.json is not readable: {e}",
         )
         skills = None
+    if skills is not None and not skills:
+        # Empty-scan guard (0.12.4): the manifest is known to list
+        # the whole collection, so a manifest that lists no skills
+        # is a broken instrument — without it this step passes on
+        # zero iterations. Adapted from
+        # rebelytics/one-skill-to-rule-them-all (CC-BY-4.0, pattern
+        # only): a scan over content known to exist that returns
+        # nothing must fail loudly.
+        _step(
+            results,
+            "all manifest skills resolve",
+            False,
+            "SCAN BROKEN — skills/manifest.json lists no skills, but "
+            "the manifest is known to list the whole collection",
+        )
+        skills = None
     if skills is not None:
         missing = [n for n in skills if not (dest / "skills" / n / "SKILL.md").is_file()]
         _step(
